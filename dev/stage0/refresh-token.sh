@@ -2,8 +2,9 @@
 # Sortie hands smolvm the Claude token from its own environment, read once at
 # start, and an OAuth login's token lasts hours. So every 10 minutes
 # (ortus-stage0-token.timer): when a fresher token exists and the running one
-# expires within 90 minutes, restart Sortie, but only while no agent runs, so
-# no session is cut off. A `claude setup-token` token never needs this.
+# expires within 90 minutes, restart Sortie, and nono, which holds the same
+# token for the edge's egress flow, but only while no agent runs, so no
+# session is cut off. A `claude setup-token` token never needs this.
 set -euo pipefail
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -23,3 +24,6 @@ if (( busy > 0 )); then
 fi
 echo "restarting Sortie onto a fresher Claude token" >&2
 systemctl --user restart ortus-stage0-sortie.service
+if systemctl --user is-active -q ortus-stage0-nono.service; then
+  systemctl --user restart ortus-stage0-nono.service
+fi

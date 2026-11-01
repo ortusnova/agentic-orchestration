@@ -3,8 +3,9 @@
 Stage 0 of the Ortus Nova spec store's `agent-platform-workers` (design D13,
 D15) on one Linux host. It runs a persistent Sortie under plan control with
 co-located smolvm, the plan workbench, acp-broker and the local Huly. GitHub
-is the forge. Everything is rootless: two systemd user units and Huly's
-podman containers.
+is the forge. On p1 it also runs the stage-1 edge (design D18): the edge,
+nono and one SSH tunnel per worker host ([below](#the-stage-1-edge-p1)).
+Everything is rootless: systemd user units and Huly's podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
@@ -13,6 +14,9 @@ dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
+dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
+make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
+make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
 ```
 
 The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `stage0.sh` refuses an older one.
@@ -26,7 +30,8 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`) |
 | Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit runs `stage0.sh` again once no agent runs; a failed build goes back to the running commit. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`) |
+| Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker-tunnel@<worker>`) |
 
 ## How a story runs
 
@@ -96,6 +101,88 @@ Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
 
+## The stage-1 edge (p1)
+
+How the control plane reaches worker hosts until Pomerium and the CA in
+control-plane-images replace it (spec store `agent-platform-workers`,
+design D18; no worker change then). Only the control profile runs it.
+
+| Part | Where |
+| --- | --- |
+| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); nothing listens on the LAN, and the host gets no SSH access to p1 |
+| Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker host on p1's loopback, from `127.0.0.1:7701` up, and nothing else |
+| nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
+| Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port; `dev/stage0/worker-host.sh list` |
+
+What the edge does with a request on a worker's port:
+
+- **Identity.** The port names the worker. The edge sets
+  `X-Sortie-Worker-Identity` (Sortie's `worker.identity_header`) to that
+  worker and drops any value the request brings, so taichi's daemon that
+  says `p1` reaches Sortie as `taichi`.
+- **Worker API.** `/api/v1/workers/...` goes to Sortie. No other Sortie
+  route is reachable, not token introspection, not `/api/v1/state`.
+- **Path flows.** `/stdio/...`, `/mcp/...`, `/bundles/...` and `/usage/...`
+  go to the service of each flow (`STAGE0_EDGE_<FLOW>_URL` in `stage0.env`,
+  Sortie by default), with the flow's prefix removed. The edge first asks
+  Sortie's `POST /api/v1/tokens/introspect` (with the control token) about
+  the request's `Authorization: Bearer` job token, and admits it only when
+  the token is live and granted for that flow; anything else gets `401`
+  and never reaches the service.
+- **Egress.** A `CONNECT` is the egress flow; its job token is the
+  `Proxy-Authorization` (Bearer, or Basic as in
+  `HTTPS_PROXY=http://job:<token>@127.0.0.1:7700`). Once admitted, the
+  edge tunnels it through nono, which allows only the hosts in
+  `egress-profile.json`: the workflow's `allow_hosts` and the hosts of the
+  credentials nono holds (`edge/profile_test.go` keeps them equal to
+  `WORKFLOW.md`'s). For a credential's host nono intercepts TLS with the
+  kit's egress CA and replaces the placeholder Sortie gives the machine
+  (`sortie-credential-<name>`) with the credential. A refusal is recorded in
+  the edge's journal with the worker, job, attempt and host:
+  `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
+
+A remote-kind workflow names the flows as the worker host sees them:
+`http://127.0.0.1:7700/<flow>` for stdio, mcp, bundles and usage, and
+`http://127.0.0.1:7700` for egress.
+
+### Add a worker host
+
+On p1, once `stage0.sh` has run:
+
+```sh
+dev/stage0/worker-host.sh add brian@taichi        # the worker is named taichi
+dev/stage0/worker-host.sh add mini.lan mac-mini   # or name it yourself
+dev/stage0/worker-host.sh list
+dev/stage0/worker-host.sh remove taichi
+```
+
+`add` needs `ssh -o BatchMode=yes HOST true` to work from p1. It gives the
+host the next free edge port, writes `$STAGE0_HOME/workers/<worker>.env`,
+copies the egress CA's certificate to `~/.config/ortus-nova/egress-ca.crt`
+on the host (its machines trust nono's interception with it; the key stays
+on p1), enables and starts the host's tunnel unit, restarts the edge with the
+new port, and checks that the host reaches the edge at
+`http://127.0.0.1:7700`. The worker's name is the identity Sortie sees;
+adding the same name again keeps its port. Sortie itself is not restarted.
+
+### Where the credentials live
+
+All on p1; none is stored on a worker host, which holds only the CA's
+certificate.
+
+| What | Where |
+| --- | --- |
+| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); `ortus-stage0-token.timer` restarts nono with Sortie onto a fresher one |
+| Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
+| Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
+| The edge's credential to nono | `nono-pass` in the stage-0 home |
+| Egress CA | `egress-ca/ca.key` (mode 0600) and `egress-ca/ca.crt` in the stage-0 home |
+
+`make -C dev/stage0 test` runs every scenario against a fake Sortie, with
+a stand-in for nono; `make -C dev/stage0 test-live` runs the two nono
+scenarios on p1 against the pinned nono, the credential on p1 and
+`api.anthropic.com`, on ports of its own.
+
 ## The homelab profile (taichi)
 
 A second Sortie on a homelab dev host runs only homelab stories (spec store
@@ -142,7 +229,8 @@ and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
 ## Remove it
 
 ```sh
-systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench
+for w in $(dev/stage0/worker-host.sh list | cut -f1); do dev/stage0/worker-host.sh remove "$w"; done
+systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono
 smolvm machine ls   # delete each sortie-* VM: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.service && systemctl --user daemon-reload
 rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces and the pack
