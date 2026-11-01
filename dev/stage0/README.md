@@ -30,7 +30,7 @@ The workbench registers the spec store (`STAGE0_STORE`). About a second
 after an approval it syncs the plan on its own, and an approved story whose
 blockers are approved is released to `Todo`; the workbench then asks Sortie
 to poll at once. Sortie creates a VM from the pack and
-seeds it with the repository (`STAGE0_REPO_*`). It runs the agent behind
+seeds it with the story's repository (see below). It runs the agent behind
 acp-broker, then pushes the issue branch and opens the pull request. When
 the pull request merges, Sortie moves the story to `Done`.
 
@@ -51,8 +51,21 @@ the pull request merges, Sortie moves the story to `Done`.
 - **Parallel agents.** `STAGE0_MAX_AGENTS` in `stage0.env` (default 3) caps
   agents at once; each VM takes 4 vCPU and 8 GiB. All of them share one
   Claude subscription and its rate limits.
-- **One repository.** One Sortie serves one repository. To serve another
-  one, change `STAGE0_REPO_*` and run `stage0.sh` again.
+- **Repositories.** A story runs in the repository its plan node names
+  (plan sync keeps the Huly label `sortie-repository:<name>`), else in
+  `sortie`, the default. The workflow lists three:
+
+  | Name | Settings | Default | Dispatched here |
+  | --- | --- | --- | --- |
+  | `sortie` | `STAGE0_REPO_*` | yes | yes |
+  | `agentic-orchestration` | `STAGE0_AO_REPO_*` | no | yes |
+  | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | no: the homelab Sortie runs these stories |
+
+  `homelab` is listed only so that plan sync accepts its stories; this
+  Sortie leaves them alone. Plan sync refuses a story naming a repository
+  the workflow does not list. A `stage0.env` written before these settings
+  existed keeps working: `stage0.sh` fills in each missing one with its
+  default. To change one, set it in `stage0.env` and run `stage0.sh` again.
 
 ## Credentials
 

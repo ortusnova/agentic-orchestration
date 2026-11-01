@@ -93,11 +93,27 @@ environment:
     credentials:
       - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
     pass_env: [IS_SANDBOX]
-    repository:
-      url: ${STAGE0_REPO_URL}
-      base: ${STAGE0_REPO_BASE}
-      provider: github
-      project: ${STAGE0_REPO_PROJECT}
+    # A story runs in the repository its plan node names (the Huly label
+    # sortie-repository:<name>), else in sortie. homelab is listed so plan
+    # sync accepts homelab stories, and closed: the homelab Sortie runs them.
+    repositories:
+      - name: sortie
+        url: ${STAGE0_REPO_URL}
+        base: ${STAGE0_REPO_BASE}
+        provider: github
+        project: ${STAGE0_REPO_PROJECT}
+      - name: agentic-orchestration
+        url: ${STAGE0_AO_REPO_URL}
+        base: ${STAGE0_AO_REPO_BASE}
+        provider: github
+        project: ${STAGE0_AO_REPO_PROJECT}
+      - name: homelab
+        url: ${STAGE0_HOMELAB_REPO_URL}
+        base: ${STAGE0_HOMELAB_REPO_BASE}
+        provider: github
+        project: ${STAGE0_HOMELAB_REPO_PROJECT}
+        dispatch: false
+    default_repository: sortie
 ---
 You are working on story **{{ .issue.identifier }}**: {{ .issue.title }}
 
