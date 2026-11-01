@@ -1,4 +1,4 @@
 [submodule "sortie"]
 	path = sortie
-	url = https://github.com/briancappello/sortie.git
+	url = https://github.com/ortusnova/sortie.git
 	branch = plan-bench

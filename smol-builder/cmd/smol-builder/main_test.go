@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/build"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/build"
 )
 
 type fakeBuilder struct {

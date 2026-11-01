@@ -20,12 +20,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/config"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/cp"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/flows"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/hostinfo"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/cp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // Options configures a daemon.

@@ -10,7 +10,7 @@ from pathlib import Path
 
 DEFAULT_AGENT_MODEL = "anthropic/claude-opus-5-5"
 
-SOURCE_URL = "https://github.com/briancappello/agentic-orchestration"
+SOURCE_URL = "https://github.com/ortusnova/agentic-orchestration"
 
 PACKAGE = Path(__file__).resolve().parent
 

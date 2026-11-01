@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/transport"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/transport"
 )
 
 // endpoint reads and writes newline-delimited JSON on one side of a pipe.

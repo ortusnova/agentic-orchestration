@@ -13,9 +13,9 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/sortieclient"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry/otlp"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/sortieclient"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry/otlp"
 )
 
 // telemetryConfig is the validated telemetry configuration, nil when no

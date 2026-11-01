@@ -16,8 +16,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/registry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/registry"
 )
 
 func runList(args []string) int {

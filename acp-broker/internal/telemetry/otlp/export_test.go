@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 // collector is a fake OTLP/HTTP endpoint that answers with the scripted

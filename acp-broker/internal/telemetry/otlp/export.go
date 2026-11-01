@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 // Defaults for the exporter's limits.

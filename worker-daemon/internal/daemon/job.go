@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/cp"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/flows"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/cp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // Guest loopback ports of the forwarders.

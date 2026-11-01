@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/secrets"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/secrets"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 // The secrets below are unique to this file, so registering them in the

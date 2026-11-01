@@ -21,7 +21,7 @@ See [docs/](docs/README.md) for how the parts fit and every guide.
 ## Develop
 
 ```sh
-git clone --recurse-submodules https://github.com/briancappello/agentic-orchestration.git
+git clone --recurse-submodules https://github.com/ortusnova/agentic-orchestration.git
 make test        # every component's tests
 make lint        # linters, the license copies, and the specs
 make check-latest   # every Go component's dependencies against their latest stable releases

@@ -18,9 +18,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/runner"
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/stack"
-	"github.com/briancappello/agentic-orchestration/smol-builder/layers"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/runner"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/stack"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/layers"
 )
 
 const header = "ARG BASE\nFROM ${BASE}\n"

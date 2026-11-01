@@ -18,7 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/build"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/build"
 )
 
 const usage = "usage: smol-builder build --repo <dir> --output <file> [--layers <dir>]"

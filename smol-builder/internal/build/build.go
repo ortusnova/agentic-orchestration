@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/runner"
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/stack"
-	"github.com/briancappello/agentic-orchestration/smol-builder/layers"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/runner"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/stack"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/layers"
 )
 
 // Builder machines are named with BuilderPrefix and carry BuilderLabel, so a

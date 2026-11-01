@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/secret"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 )
 
 // A plain proxied request reaches the egress flow with the job's token

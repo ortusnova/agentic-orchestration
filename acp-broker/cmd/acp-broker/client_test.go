@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
 )
 
 func TestPrintEvents_MarksHistoryThenLive(t *testing.T) {

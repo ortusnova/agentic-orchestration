@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/runner"
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/stack"
-	"github.com/briancappello/agentic-orchestration/smol-builder/layers"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/runner"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/stack"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/layers"
 )
 
 // testMachineLabel marks the machine the integration test creates from the
