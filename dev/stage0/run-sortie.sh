@@ -55,6 +55,15 @@ CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py" "${token_args[@]}
 "$(dirname "$0")/anthropic-token.py" "${token_args[@]}" --expiry > "$STAGE0_HOME/token-expiry"
 # homelab's guest kernel: smolvm boots machines on the libkrunfw in this folder.
 if [[ -n ${STAGE0_SMOLVM_LIB_DIR:-} ]]; then export SMOLVM_LIB_DIR=$STAGE0_SMOLVM_LIB_DIR; fi
+# homelab's vm age key, a test fixture (design D3): the workflow's pass_env
+# hands it to every guest command, and after_create writes it where sops
+# looks. An environment value, not a mount, to stay under smolvm's
+# shared-folder ceiling (homelab-profile.sh).
+if [[ $STAGE0_PROFILE == homelab ]]; then
+  [[ -s $STAGE0_HOME/inputs/vm-age/keys.txt ]] || die "$STAGE0_HOME/inputs/vm-age/keys.txt is missing: run stage0.sh"
+  HOMELAB_VM_AGE_KEY=$(cat "$STAGE0_HOME/inputs/vm-age/keys.txt")
+  export HOMELAB_VM_AGE_KEY
+fi
 export IS_SANDBOX=1
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY
 
