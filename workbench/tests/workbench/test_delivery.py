@@ -14,7 +14,7 @@ from tests.conftest import breakdown, deliverable
 from tests.workbench.conftest import P, make_config, project, settle, sign_in
 from tests.workbench.fake_github import API, GITHUB_TOKEN, FakeGitHub
 from tests.workbench.fake_sortie import FakeSortie
-from tests.workbench.test_watch import validate_offline, wait_for
+from tests.workbench.test_watch import specs_on_disk, validate_offline, wait_for
 from workbench.config import Config, ConfigError
 from workbench.delivery import DeliveryWatch, GitHubClient
 from workbench.registry import Registry
@@ -34,8 +34,8 @@ def homelab(store, image_by=(PR,), taichi_by=("ortusnova/homelab#90",)):
     store.change(C, breakdown(
         deliverable("homelab-image", delivered_by=list(image_by)),
         deliverable("taichi-instance", delivered_by=list(taichi_by)),
-        deliverable("smolvm-machine-shape"),
-        deliverable("homelab-pilot", ["taichi-instance", "smolvm-machine-shape"]),
+        deliverable("smolvm-machine-shape", covers=[f"{C}#The machine's user is a workflow setting"]),
+        deliverable("homelab-pilot", ["taichi-instance", "smolvm-machine-shape"], covers=[f"{C}#A homelab story runs through Sortie"]),
     ))
 
 
@@ -311,7 +311,7 @@ def test_the_store_schema_that_predates_it_is_upgraded(store):
     assert all("unknown field delivered_by" in e.message for e in errs)
 
     assert upgrade_schemas(store.root) == ["openspec/schemas/planning/breakdown.schema.json"]
-    assert planlib.validate(store.root, show=lambda *_: None).ok
+    assert planlib.validate(store.root, show=specs_on_disk).ok
 
 
 def test_an_approved_story_whose_delivery_is_not_confirmed_holds_its_dependents():
