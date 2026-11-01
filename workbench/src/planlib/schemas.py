@@ -125,6 +125,8 @@ def _to_plan_error(err: ValidationError, doc: dict, *, file: str, change: str | 
         message = f"unknown field {names}"
     elif err.validator == "not" and err.validator_value == {"required": ["approved_digest"]}:
         message = "approved_digest is allowed only when status is approved"
+    elif err.validator == "pattern" and rest and rest[0] == "delivered_by":
+        message = f"delivered_by: '{err.instance}' is not a pull request; write owner/repo#number"
     elif err.validator == "required" and isinstance(err.instance, dict):
         missing = [r for r in err.validator_value if r not in err.instance]
         message = "missing field " + ", ".join(_join(field, m) for m in missing)

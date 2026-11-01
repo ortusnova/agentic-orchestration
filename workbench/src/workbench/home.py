@@ -207,7 +207,7 @@ class _Plan:
 def _story_reason(p: _Plan, key: str, fields: dict[str, Any], gate_tasks: list[dict[str, Any]] | None) -> str | None:
     n = p.nodes[key]
     status = fields.get("plan_status")
-    if status == "frozen":
+    if status in ("frozen", "delivered", "delivery_unconfirmed"):
         return None
     draft = status in ("draft", "needs_rereview")
     if status == "needs_spec" or (draft and n.get("deliverable_kind") == "story" and not n.get("covers")):
@@ -436,6 +436,8 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     merged graph's nodes, with tracker state and plan fields."""
     estimates = estimates or {}
     done, dropped = tracker_states(nodes, plan_states)
+    # A story its pull requests delivered is done, wherever the work was done.
+    done |= {k for k, f in fields.items() if f.get("plan_status") == "delivered"}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes if n.get("tracker")}
     stories = [n for n in nodes if n.get("kind") == "story" and n.get("status") != "orphaned"]
     running_keys = {n["plan_key"] for n in stories if n.get("runtime")}

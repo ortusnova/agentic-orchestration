@@ -38,6 +38,11 @@
       "type": "string",
       "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[a-z0-9]+(-[a-z0-9]+)*$"
     },
+    "pull_request": {
+      "description": "A GitHub pull request: owner/repo#number.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+#[1-9][0-9]*$"
+    },
     "requirement_ref": {
       "description": "<capability-path>#<requirement name>, as OpenSpec reports the change's requirements.",
       "type": "string",
@@ -79,6 +84,13 @@
         "repository": {
           "description": "The repository this deliverable lands in, by the name Sortie's workflow lists it under; overrides the breakdown's repository.",
           "$ref": "#/$defs/kebab"
+        },
+        "delivered_by": {
+          "description": "The pull requests that delivered this deliverable, however and wherever the work was done. Once every one is merged, the workbench reads the story as done, and no agent takes it.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/pull_request" }
         }
       }
     }

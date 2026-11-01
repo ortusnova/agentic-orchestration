@@ -233,6 +233,19 @@ class Registry:
                 "WHERE project_id = ? AND identifier = ? ORDER BY created_at, id", (project_id, identifier)).fetchall()
         return [dict(r) for r in rows]
 
+    # Pull requests seen merged, for every project.
+
+    def merged_pulls(self) -> dict[str, dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT ref, url, merge_commit, merged_at FROM merged_pulls").fetchall()
+        return {r["ref"]: dict(r) for r in rows}
+
+    def record_merged(self, ref: str, url: str, merge_commit: str, merged_at: str) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO merged_pulls (ref, url, merge_commit, merged_at, seen_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (ref) DO NOTHING", (ref, url, merge_commit, merged_at, int(time.time())))
+
     def delete(self, slug: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM projects WHERE slug = ?", (slug,))

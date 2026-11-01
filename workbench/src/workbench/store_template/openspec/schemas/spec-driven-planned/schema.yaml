@@ -216,6 +216,10 @@ artifacts:
       - `supersedes`: only for a replacement of a story that has already
         started: the id (or `<change>/<id>`) of the story it replaces. Its
         dependents move to the replacement.
+      - `delivered_by`: only for work already done outside an agent run:
+        the pull requests that delivered it, each `owner/repo#number`. Once
+        every one is merged, the workbench reads the story as done and no
+        agent takes it.
 
       Size deliverables so one agent session can finish one. Prefer parallel
       deliverables over a single chain when the work allows it.

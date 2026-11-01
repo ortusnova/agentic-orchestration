@@ -134,6 +134,9 @@ uv run workbench hash-password > ~/.config/plan-workbench-password-hash   # type
 | `WORKBENCH_PROMPT_FILE` | No | Planning prompt, default `prompts/planning-session.md`. |
 | `WORKBENCH_COOKIE_SECURE` | No | `1` behind HTTPS. |
 | `WORKBENCH_SYNC` | No | `0` makes the workbench read-only toward the tracker: no automatic sync, no pull-back of an edited story, and pull-back, cancel and supersede are refused. For a second workbench beside the one that owns a project, for example to check a build against live data. Default `1`. |
+| `WORKBENCH_GITHUB_TOKEN` | For private repositories | The GitHub token the workbench looks up the pull requests a story names in `delivered_by` with (see "A story built outside an agent run"). It needs read access to their pull requests; the token Sortie pushes with will do. Without one, only public repositories can be looked up. |
+| `WORKBENCH_GITHUB_API_URL` | No | GitHub's API, default `https://api.github.com`. |
+| `WORKBENCH_DELIVERY_RECHECK_SECONDS` | No | How often a named pull request that is not merged yet is looked up again, default `300`, at most `540`. A merged one is never looked up again. |
 | `WORKBENCH_RUNTIME_DIR` | No | The parent of each project's session runtime directory, `<dir>/<slug>`, which holds the running session's state, broker token, and logs. Default: `$XDG_RUNTIME_DIR/plan-workbench`, else `~/.cache/plan-workbench`. |
 
 ```sh
@@ -189,9 +192,22 @@ Each story shows its plan status on its node and in its details. The graph API n
 | Ready (`ready`) | Approved, with every direct blocker approved or merged. The next sync releases it. |
 | Released (`released`) | In the tracker's release state, so Sortie may dispatch it. |
 | Started (`frozen`) | An agent has claimed it. Its content is frozen. |
+| Delivered (`delivered`) | It names the pull requests that delivered it, and every one is merged. It reads Done, and counts as done for its epic and as approved and done for the stories that depend on it. |
+| Not confirmed (`delivery_unconfirmed`) | It names pull requests, and one is open, closed without merging, or cannot be looked up. It reads "Delivery not confirmed" with each pull request and why, and counts as not done. |
 | Re-review (`needs_rereview`) | It needs a person again: a story it depends on was cancelled (`blocker_canceled`), or an agent said the work was already done and its evidence did not check out (`unverified_no_change`). Approve it again, or cancel it. |
 
 A story's `review` field says who reviews its pull request: `human` (the default; a person merges it in the forge) or `criteria` (a separate agent checks the acceptance criteria, and the pull request merges on its own).
+
+### A story built outside an agent run
+
+When a story's work was done by hand, or anywhere else, its deliverable names the pull requests that delivered it, each `owner/repo#number`:
+
+```yaml
+- id: homelab-image
+  delivered_by: [ortusnova/homelab#85]
+```
+
+The workbench looks up each one on GitHub with `WORKBENCH_GITHUB_TOKEN`, then again every `WORKBENCH_DELIVERY_RECHECK_SECONDS` until it is merged, and never again after: the registry keeps each merge. Once every one is merged, the story reads Done, with a link to each pull request and its merge commit, and the page updates on its own. Such a story offers no Approve, and no sync creates or releases it: Sortie never runs it, and it blocks nothing in the tracker. Naming the pull request does not change what an approval covers, so it is allowed on a started story too. A store whose breakdown schema predates `delivered_by` gets the current one when the workbench opens the project.
 
 ### Change a story after it starts
 

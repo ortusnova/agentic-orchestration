@@ -12,6 +12,15 @@ STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 . "$STAGE0_HOME/stage0.env"
 
 export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:$HOME/.local/share/pnpm/bin:/usr/local/bin:/usr/bin:/bin
+# The GitHub token Sortie has (run-sortie.sh), for looking up the pull
+# requests a story names in delivered_by: no credential of its own. Exported,
+# not passed on the command line, so it stays out of the process list.
+export WORKBENCH_GITHUB_TOKEN
+if [[ -s $STAGE0_HOME/github-token ]]; then
+  WORKBENCH_GITHUB_TOKEN=$(cat "$STAGE0_HOME/github-token")
+else
+  WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-workbench.sh: gh has no token: run gh auth login" >&2; exit 1; }
+fi
 WB=$STAGE0_KIT_ROOT/workbench
 cd "$WB"
 exec env WORKBENCH_HOME="$STAGE0_HOME/home" WORKBENCH_STORE="$STAGE0_STORE" WORKBENCH_HULY_PROJECT="$STAGE0_HULY_PROJECT" \

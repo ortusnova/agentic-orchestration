@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from .autosync import SyncLoop, sync_project
 from .config import Config
+from .delivery import DeliveryWatch, GitHubClient
 from .hub import Hub
 from .plan_state import PlanState, watch
 from .registry import Project, Registry, RegistryError, check_new, suggest_slug
@@ -31,13 +32,19 @@ class ProjectRuntime:
     it closes; its planning session runs apart and survives both."""
 
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
-                 sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None):
+                 sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
+                 github: GitHubClient | None = None):
         self.project = project
         self.store = store
         self.config = config
         self.registry = registry
         self.plan = PlanState(store, inputs=self.plan_inputs, **({"validate": validate} if validate else {}))
-        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records)
+        # The pull requests the stories name in delivered_by, looked up on GitHub.
+        self.deliveries = DeliveryWatch(github or GitHubClient(config.github_api_url, config.github_token),
+                                        self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
+        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls)
+        self.deliveries.on_change = self.hub.rebuild
+        self._own_github = github is None
         self.sessions = sessions
         # The brokers of the workers Sortie runs for this project's stories.
         self.workers = WorkerRelay(sortie.bind(project.huly_project), transport=broker_transport)
@@ -62,6 +69,10 @@ class ProjectRuntime:
         if self.registry is None:
             return {}, {}
         return self.registry.approvals(self.project.id), self.registry.rereviews(self.project.id)
+
+    def delivered_by(self) -> set[str]:
+        """Every pull request a story of the plan names."""
+        return {ref for meta in self.plan.stories.values() for ref in meta.get("delivered_by") or []}
 
     def plan_inputs(self) -> tuple[dict[str, str], dict[str, str]]:
         """What the validator needs: approved digests and the frozen set."""
@@ -109,6 +120,7 @@ class ProjectRuntime:
         else:
             log.warning("project %s: store %s has no openspec/ directory; not watching it", self.slug, self.store)
         self._tasks.append(asyncio.create_task(self.hub.poll_loop(self.config.poll_seconds, self._stop)))
+        self._tasks.append(asyncio.create_task(self.deliveries.run(self._stop, self.config.poll_seconds)))
         if self.config.sync_enabled:
             self._tasks.append(asyncio.create_task(self.sync.run(self._stop)))
 
@@ -120,6 +132,8 @@ class ProjectRuntime:
         self._tasks.clear()
         await self.sessions.aclose()
         await self.workers.aclose()
+        if self._own_github:
+            await self.deliveries.github.aclose()
 
     def summary(self) -> dict[str, Any]:
         doc = self.hub.doc or {}
@@ -142,8 +156,10 @@ class ProjectManager:
     """The registry plus a runtime for every registered project."""
 
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
-                 session_factory: SessionFactory | None = None, validate=None, broker_transport=None):
+                 session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
+                 github: GitHubClient | None = None):
         self.config = config
+        self.github = github
         self.broker_transport = broker_transport
         self.registry = registry
         self.sortie = sortie
@@ -190,7 +206,7 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport)
+                            broker_transport=self.broker_transport, github=self.github)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt

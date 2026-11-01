@@ -50,9 +50,29 @@ export interface GraphNode {
   approved_at?: number | null;
   review?: "human" | "criteria";
   supersedes?: string | null;
+  /** The pull requests the story names in delivered_by, as GitHub reports them; null when it names none. */
+  delivery?: Delivery | null;
 }
 
-export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+
+/** One pull request a story names, as GitHub last reported it. */
+export interface DeliveryPull {
+  ref: string;
+  state: "merged" | "open" | "closed" | "unknown" | "pending";
+  url: string;
+  merge_commit: string | null;
+  merge_commit_url: string | null;
+  merged_at: string | null;
+  /** Why it does not confirm the delivery: "it is open", or why it could not be looked up. */
+  reason: string | null;
+}
+
+/** "delivered" once every pull request is merged. */
+export interface Delivery {
+  state: "delivered" | "unconfirmed";
+  pulls: DeliveryPull[];
+}
 
 export interface PlanError {
   code: string;

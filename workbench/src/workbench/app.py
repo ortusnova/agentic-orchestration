@@ -15,6 +15,7 @@ from planlib.requirements import requirement_details
 from .auth import PLANNER, Sessions
 from .auth_routes import auth_router, make_checks
 from .config import Config
+from .delivery import GitHubClient
 from .hub import sse
 from .oidc import OIDCClient
 from .project_routes import project_router
@@ -38,11 +39,13 @@ def create_app(config: Config, **services) -> FastAPI:
     ``validate`` replaces planlib.validate, ``sortie`` the Sortie client, and
     ``sessions`` builds each project's session manager from
     ``(project, store, runtime_dir)``, and ``broker_transport`` carries the
-    requests to workers' brokers."""
+    requests to workers' brokers, and ``github`` the GitHub client that looks up
+    the pull requests stories name."""
     sortie = services.get("sortie") or SortieClient(config.sortie_url, config.sortie_token)
+    github = services.get("github") or GitHubClient(config.github_api_url, config.github_token)
     registry = Registry(config.home / "workbench.db")
     projects = ProjectManager(config, registry, sortie, services.get("sessions"), services.get("validate"),
-                              broker_transport=services.get("broker_transport"))
+                              broker_transport=services.get("broker_transport"), github=github)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -52,6 +55,7 @@ def create_app(config: Config, **services) -> FastAPI:
         finally:
             await projects.stop()
             await sortie.aclose()
+            await github.aclose()
             if app.state.oidc is not None:
                 await app.state.oidc.aclose()
             registry.close()

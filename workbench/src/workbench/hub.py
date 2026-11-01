@@ -22,7 +22,7 @@ _UNSET = object()
 
 
 class Hub:
-    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None):
+    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None):
         self.plan = plan
         # Called, from any thread, when the approved part of the graph changes.
         self.on_approved_change = lambda: None
@@ -32,6 +32,8 @@ class Hub:
         self.sortie = sortie
         # (approvals, rereviews) of the project, by plan key.
         self.records = records or (lambda: ({}, {}))
+        # What GitHub reported of each pull request a story names, by ref.
+        self.pulls = pulls or (lambda: {})
         self.frozen: dict[str, str] = {}
         self.fields: dict[str, dict[str, Any]] = {}
         self._pulled_back: set[str] = set()
@@ -127,7 +129,7 @@ class Hub:
         snap = self.plan.snapshot()
         doc = merge(snap["graph"], self.tracker)
         approvals, rereviews = self.records()
-        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker)
+        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls())
         for n in doc["nodes"]:
             n.update(self.fields.get(n["plan_key"], {}))
             if n.get("runtime") and n.get("tracker"):

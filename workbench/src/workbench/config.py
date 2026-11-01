@@ -26,6 +26,23 @@ class ConfigError(Exception):
     """The configuration is incomplete or invalid."""
 
 
+# A pull request that is not merged yet is looked up again at least every ten
+# minutes: the recheck interval, plus at most one poll tick.
+MAX_DELIVERY_RECHECK = 540.0
+
+
+def _recheck(value: str) -> float:
+    if not value.strip():
+        return 300.0
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise ConfigError(f"WORKBENCH_DELIVERY_RECHECK_SECONDS is not a number: {value!r}") from exc
+    if not 1 <= seconds <= MAX_DELIVERY_RECHECK:
+        raise ConfigError(f"WORKBENCH_DELIVERY_RECHECK_SECONDS must be between 1 and {MAX_DELIVERY_RECHECK:g}")
+    return seconds
+
+
 @dataclass(frozen=True)
 class Config:
     """Everything the backend needs. Tokens stay server-side: no response carries them."""
@@ -59,6 +76,12 @@ class Config:
     # sync, no pull-back of edited stories, no story action that calls Sortie.
     # For a second, read-only workbench beside the one that owns the project.
     sync_enabled: bool = True
+    # GitHub, where the workbench looks up the pull requests a story names in
+    # delivered_by. Without a token it still looks up public repositories.
+    github_token: str = ""
+    github_api_url: str = "https://api.github.com"
+    # How often a pull request that is not merged yet is looked up again.
+    delivery_recheck_seconds: float = 300.0
     # OpenID Connect. With no issuer, the workbench runs in local mode.
     oidc_issuer: str = ""
     oidc_client_id: str = ""
@@ -132,6 +155,9 @@ class Config:
             runtime_dir=Path(env["WORKBENCH_RUNTIME_DIR"]).expanduser() if env.get("WORKBENCH_RUNTIME_DIR") else None,
             cookie_secure=env.get("WORKBENCH_COOKIE_SECURE", "") == "1",
             sync_enabled=env.get("WORKBENCH_SYNC", "1").strip() != "0",
+            github_token=env.get("WORKBENCH_GITHUB_TOKEN", "").strip(),
+            github_api_url=(env.get("WORKBENCH_GITHUB_API_URL", "").strip() or "https://api.github.com").rstrip("/"),
+            delivery_recheck_seconds=_recheck(env.get("WORKBENCH_DELIVERY_RECHECK_SECONDS", "")),
             oidc_issuer=issuer,
             oidc_client_id=env.get("WORKBENCH_OIDC_CLIENT_ID", "").strip(),
             oidc_client_secret=secret,

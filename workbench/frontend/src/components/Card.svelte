@@ -3,6 +3,8 @@
   import { planStatusLabel } from "../lib/sync";
   import type { GraphNode } from "../lib/types";
 
+  const PULL_STATE: Record<string, string> = { open: "open", closed: "closed unmerged", unknown: "lookup failed", pending: "checking" };
+
   let {
     node, model, x, y, selected = false, near = false, marked, onselect, onopen,
   }: {
@@ -23,6 +25,10 @@
     if (progress) return `${progress.done}/${progress.total} done`;
     if (cls === "done") return "complete";
     if (cls === "cancelled") return "cancelled";
+    if (node.plan_status === "delivery_unconfirmed") {
+      const p = node.delivery?.pulls.find((x) => x.state !== "merged");
+      return p ? `${p.ref} ${PULL_STATE[p.state] ?? p.state}` : "delivery not confirmed";
+    }
     if (node.plan_status === "needs_rereview") return "needs re-review";
     if (node.plan_status === "held") return "held for approval";
     if (node.plan_status === "needs_spec") return "needs a spec";
@@ -65,7 +71,7 @@
   <span class="t">{node.title}</span>
   <span class="pg">{#if node.kind === "epic" || pct === 100}<i style:width="{pct}%"></i>{/if}</span>
   <span class="r3">
-    <span class="meta" class:warn={node.plan_status === "needs_rereview"} data-plan-status={node.plan_status ?? null}>{meta}</span>
+    <span class="meta" class:warn={node.plan_status === "needs_rereview" || node.plan_status === "delivery_unconfirmed"} data-plan-status={node.plan_status ?? null}>{meta}</span>
     <span class="tags">
       {#if marked}<span class="tag in-ms">{marked}</span>{/if}
       {#if node.status === "draft"}<span class="tag marker draft-tag">Draft</span>{/if}
