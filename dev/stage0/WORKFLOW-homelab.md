@@ -54,16 +54,20 @@ workspace:
 # hooks run as builder (environment.smolvm.user), homelab's guest user, with
 # the host user's uid; guest-start.sh (the flight recorder and swap) needs
 # root, through builder's passwordless sudo. It runs at every
-# start, as the sandbox runs it, and is idempotent.
+# start, as the sandbox runs it, and is idempotent. Its swap file goes on the
+# storage disk at /storage, not /workspace: in a Sortie machine /workspace is
+# the story's checkout. No registry cache: the dev host's caches listen on
+# its loopback, and allow_hosts takes host names, not the host's address, so
+# images come from the registries listed below.
 hooks:
   after_create: |
     set -eu
     (umask 077; printf '%s\n' "$HOMELAB_VM_AGE_KEY" > /home/builder/.config/sops/age/keys.txt)
-    sudo /opt/homelab-sandbox/guest-start.sh "$(id -u)" --swap-gib 8
+    sudo env HOMELAB_SWAP_FILE=/storage/swapfile /opt/homelab-sandbox/guest-start.sh "$(id -u)" --swap-gib 8
     HOMELAB_CACHE_HOME=/home/builder/.cache VMHOST_CACHE=/home/builder/.cache/homelab-vmhost \
-      VMHOST_REGISTRY_CACHE='${STAGE0_HOMELAB_REGISTRY_CACHE}' scripts/vmhost/prepare.sh
+      VMHOST_REGISTRY_CACHE= scripts/vmhost/prepare.sh
   before_run: |
-    sudo /opt/homelab-sandbox/guest-start.sh "$(id -u)" --swap-gib 8
+    sudo env HOMELAB_SWAP_FILE=/storage/swapfile /opt/homelab-sandbox/guest-start.sh "$(id -u)" --swap-gib 8
   timeout_ms: 1800000
 
 # One ACP launch for both harnesses, both on the operator's Claude
@@ -130,6 +134,8 @@ environment:
       - registry-1.docker.io
       - auth.docker.io
       - production.cloudflare.docker.com
+      # Docker Hub's blob CDN redirects here too (ONS-22, 2026-11-01).
+      - production.cloudfront.docker.com
       - quay.io
       - "*.quay.io"
       - registry.k8s.io

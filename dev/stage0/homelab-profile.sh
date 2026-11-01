@@ -5,7 +5,6 @@
 # exports the values stage0.sh renders into it:
 #   STAGE0_PACK                     the homelab pack, built when its inputs change
 #   STAGE0_HOMELAB_MOUNTS           the machines' host mounts, as a YAML flow list
-#   STAGE0_HOMELAB_REGISTRY_CACHE   the dev host's registry caches, for prepare.sh
 # and writes $STAGE0_HOME/profile.env for run-sortie.sh:
 #   STAGE0_SMOLVM_LIB_DIR           homelab's guest kernel (swap, pressure stall information)
 # Needs stage0.sh's say, die, STAGE0_* settings and REBUILD_PACK.
@@ -27,11 +26,9 @@ homelab_profile() {
   say "homelab at $(git -C "$hl" rev-parse --short HEAD)"
 
   [[ -r $settings ]] || die "$settings is missing: run \`make dev-host\` in homelab"
-  local vm_key registry_cache
+  local vm_key
   vm_key=$(sed -n 's/^SANDBOX_VM_KEY=//p' "$settings")
-  registry_cache=$(sed -n 's/^SANDBOX_REGISTRY_CACHE=//p' "$settings")
   [[ -r $vm_key ]] || die "the vm age key $vm_key is missing (homelab docs/operator-runbook.md, \"Dev host: place the vm age key\")"
-  export STAGE0_HOMELAB_REGISTRY_CACHE=$registry_cache
 
   # The guest kernel make dev-host builds; without it machines get no swap.
   local krunfw
