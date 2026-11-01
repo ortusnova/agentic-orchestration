@@ -9,6 +9,8 @@ Sources, in order of preference when equally fresh:
   3. Claude Code's ~/.claude/.credentials.json.
 Prints nothing and exits 1 when no source holds an unexpired token.
 With --expiry, prints the chosen token's expiry (epoch ms, 0 if unknown) instead.
+With --setup-token-only, only source 1 counts (the homelab profile reads
+exactly that file, and falls back to no login).
 """
 import json
 import os
@@ -25,8 +27,10 @@ path = os.path.join(stage0, "claude-oauth-token")
 if os.path.isfile(path) and os.path.getsize(path):
     found.append((float("inf"), open(path).read().strip()))
 
+only_setup_token = "--setup-token-only" in sys.argv[1:]
+
 db = os.path.join(home, ".local/share/opencode/opencode.db")
-if os.path.isfile(db):
+if not only_setup_token and os.path.isfile(db):
     try:
         c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
         for (value,) in c.execute("select value from credential where integration_id = 'anthropic' and active = 1"):
@@ -37,7 +41,7 @@ if os.path.isfile(db):
         pass
 
 creds = os.path.join(home, ".claude/.credentials.json")
-if os.path.isfile(creds):
+if not only_setup_token and os.path.isfile(creds):
     try:
         o = json.load(open(creds))["claudeAiOauth"]
         found.append((float(o.get("expiresAt") or 0), o["accessToken"]))

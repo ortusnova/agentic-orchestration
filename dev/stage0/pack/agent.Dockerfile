@@ -1,9 +1,9 @@
 ARG BASE
 FROM ${BASE}
-# Claude Code behind ACP. The Agent SDK runs its own Claude Code; the token is a
-# credential binding's placeholder (CLAUDE_CODE_OAUTH_TOKEN), never in the image.
-RUN npm install -g --no-fund --no-audit @agentclientprotocol/claude-agent-acp@0.99.0 \
- && command -v claude-agent-acp
+# Claude Code behind ACP, agent-acp and both harnesses' policy files, for root
+# (install-harness.sh, shared with the homelab pack).
+COPY install-harness.sh agent-acp claude-settings.json opencode.json /opt/stage0-harness/
+RUN /opt/stage0-harness/install-harness.sh root /root
 # The linters `make lint` runs in Go repositories such as ortusnova/sortie.
 ARG GOLANGCI_LINT_VERSION=2.14.0
 ARG GOLANGCI_LINT_SHA256=ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab
@@ -13,9 +13,4 @@ RUN curl -fsSLo /tmp/gl.tgz "https://github.com/golangci/golangci-lint/releases/
  && rm /tmp/gl.tgz \
  && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends shellcheck && rm -rf /var/lib/apt/lists/* \
  && golangci-lint --version && shellcheck --version
-# Policy only: the VM is the sandbox, so neither harness asks before it acts.
 # Claude Code accepts bypassPermissions as root only with IS_SANDBOX=1 (pass_env).
-COPY claude-settings.json /root/.claude/settings.json
-COPY opencode.json /root/.config/opencode/opencode.json
-COPY agent-acp /usr/local/bin/agent-acp
-RUN chmod 0755 /usr/local/bin/agent-acp && agent-acp --which

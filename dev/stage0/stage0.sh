@@ -4,6 +4,17 @@
 # workbench, acp-broker, and the local Huly, as systemd user units. GitHub is
 # the forge. Rootless throughout: no sudo, no system unit.
 #
+# Two profiles, chosen by STAGE0_PROFILE on the first run (then kept in
+# stage0.env):
+#   control (default)  p1: Sortie, the workbench, acp-broker and the local
+#                      Huly, for the whole plan.
+#   homelab            taichi: a second Sortie, and acp-broker, that runs only
+#                      homelab stories (spec store run-homelab-through-sortie,
+#                      design D5-D12). No workbench and no Huly: it reaches
+#                      p1's Huly through the tunnel huly-tunnel.sh opens on p1.
+#                      It reads exactly two credential files, github-token and
+#                      claude-oauth-token, and falls back to nothing.
+#
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
 #   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack
 #   dev/stage0/stage0.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
@@ -12,10 +23,12 @@
 # Settings live in $STAGE0_HOME/stage0.env, written on the first run (edit it,
 # then run this again). State, tokens and workspaces live in $STAGE0_HOME.
 #
-# Needs: smolvm 1.32.4 or later, podman, Go, uv, npm, the openspec CLI, gh signed in,
+# Needs (control): smolvm 1.32.4 or later, podman, Go, uv, npm, the openspec CLI, gh signed in,
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
 # planning sessions.
+# Needs (homelab): smolvm 1.32.4 or later, Go, git, python3, homelab's dev host
+# (`make dev-host` in homelab), the two credential files, and p1's tunnel.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -36,6 +49,31 @@ secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
 mkdir -p "$STAGE0_HOME"/{bin,sortie,workspaces,home,sessions}
 chmod 700 "$STAGE0_HOME"
 ENV_FILE=$STAGE0_HOME/stage0.env
+if [[ ! -s $ENV_FILE && ${STAGE0_PROFILE:-control} == homelab ]]; then
+  say "Writing the default homelab-profile settings to $ENV_FILE"
+  (umask 077; cat > "$ENV_FILE" <<EOF
+# Stage-0 settings, homelab profile (dev/stage0/stage0.sh). Run stage0.sh again after an edit.
+STAGE0_PROFILE=homelab
+STAGE0_KIT_ROOT=$ROOT
+STAGE0_SORTIE_SRC=$HOME/dev/sortie-worktrees/stage0
+STAGE0_SORTIE_PORT=7680
+# p1's Huly, through the tunnel p1 opens to this host's loopback (huly-tunnel.sh).
+STAGE0_HULY_URL=http://127.0.0.1:8087
+STAGE0_HULY_WORKSPACE=sortie
+STAGE0_HULY_EMAIL=sortie@example.com
+STAGE0_HULY_PASSWORD=sortie-dev-pass
+STAGE0_HULY_PROJECT=ONS
+STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
+STAGE0_HOMELAB_REPO_BASE=master
+STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
+# The operator's homelab checkout: the kit adds its own detached worktree of
+# origin/master under \$STAGE0_HOME/homelab and builds the pack from it.
+STAGE0_HOMELAB_SRC=$HOME/dev/homelab
+# Agents at once; each homelab machine takes 8 vCPU and 20 GiB (design D11).
+STAGE0_MAX_AGENTS=2
+EOF
+  )
+fi
 if [[ ! -s $ENV_FILE ]]; then
   say "Writing the default settings to $ENV_FILE"
   (umask 077; cat > "$ENV_FILE" <<EOF
@@ -70,6 +108,8 @@ fi
 # shellcheck source=/dev/null
 . "$ENV_FILE"
 # A stage0.env written before a setting existed gets its default here.
+STAGE0_PROFILE=${STAGE0_PROFILE:-control}
+case $STAGE0_PROFILE in control|homelab) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or homelab" ;; esac
 STAGE0_MAX_AGENTS=${STAGE0_MAX_AGENTS:-3}
 STAGE0_AO_REPO_URL=${STAGE0_AO_REPO_URL:-https://github.com/ortusnova/agentic-orchestration.git}
 STAGE0_AO_REPO_BASE=${STAGE0_AO_REPO_BASE:-main}
@@ -78,12 +118,19 @@ STAGE0_HOMELAB_REPO_URL=${STAGE0_HOMELAB_REPO_URL:-https://github.com/ortusnova/
 STAGE0_HOMELAB_REPO_BASE=${STAGE0_HOMELAB_REPO_BASE:-master}
 STAGE0_HOMELAB_REPO_PROJECT=${STAGE0_HOMELAB_REPO_PROJECT:-ortusnova/homelab}
 [[ $STAGE0_KIT_ROOT == "$ROOT" ]] || say "Note: $ENV_FILE runs the kit from $STAGE0_KIT_ROOT, not $ROOT"
-export STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
+export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
   STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT
 
-for cmd in smolvm podman go uv npm openspec gh git openssl python3; do
+if [[ $STAGE0_PROFILE == homelab ]]; then
+  # make dev-host installs smolvm in ~/.local/bin, which a non-login shell lacks.
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH ;; esac
+  needed=(smolvm go git openssl python3 curl)
+else
+  needed=(smolvm podman go uv npm openspec gh git openssl python3)
+fi
+for cmd in "${needed[@]}"; do
   command -v "$cmd" >/dev/null || die "$cmd is not on PATH"
 done
 # shellcheck source=smolvm-version.sh
@@ -91,9 +138,19 @@ done
 # shellcheck source=huly-restart-policy.sh
 . "$KIT/huly-restart-policy.sh"
 smolvm_version_ok > /dev/null || die "Sortie needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
-gh auth token >/dev/null || die "gh has no token: run gh auth login"
-STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
-  || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
+if [[ $STAGE0_PROFILE == homelab ]]; then
+  # Exactly these two files, mode 0600, and nothing to fall back to (design D10).
+  for f in github-token claude-oauth-token; do
+    [[ -s $STAGE0_HOME/$f ]] || die "$STAGE0_HOME/$f is missing (BACKLOG.md, taichi stage 0)"
+    [[ $(stat -c %a "$STAGE0_HOME/$f") == 600 ]] || die "$STAGE0_HOME/$f must be mode 0600"
+  done
+  STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" --setup-token-only >/dev/null \
+    || die "$STAGE0_HOME/claude-oauth-token holds no token"
+else
+  gh auth token >/dev/null || die "gh has no token: run gh auth login"
+  STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
+    || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
+fi
 
 if [[ ! -d $STAGE0_SORTIE_SRC ]]; then
   say "Creating the Sortie checkout $STAGE0_SORTIE_SRC (ortusnova/sortie plan-bench)"
@@ -110,6 +167,7 @@ say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-
 (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
 export PATH=$STAGE0_HOME/bin:$PATH
 
+if [[ $STAGE0_PROFILE == control ]]; then
 say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench" && uv sync -q)
 (cd "$ROOT/workbench/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
@@ -130,8 +188,6 @@ say "Preparing Huly project $STAGE0_HULY_PROJECT"
 python3 "$ROOT/dev/huly_project.py" "$STAGE0_HULY_URL" "$STAGE0_HULY_WORKSPACE" "$STAGE0_HULY_EMAIL" \
   "$STAGE0_HULY_PASSWORD" "$STAGE0_HULY_PROJECT" >/dev/null || die "could not prepare Huly project $STAGE0_HULY_PROJECT"
 
-secret "$STAGE0_HOME/sortie-token"
-secret "$STAGE0_HOME/viewer-token"
 secret "$STAGE0_HOME/workbench-secret"
 if [[ ! -s $STAGE0_HOME/workbench-password-hash ]]; then
   secret "$STAGE0_HOME/workbench-password"
@@ -139,23 +195,45 @@ if [[ ! -s $STAGE0_HOME/workbench-password-hash ]]; then
 from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
+else
+  curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" \
+    || die "p1's Huly does not answer at $STAGE0_HULY_URL: on p1, run dev/stage0/huly-tunnel.sh $(hostname)"
+  # shellcheck source=homelab-profile.sh
+  . "$KIT/homelab-profile.sh"
+  homelab_profile
+fi
+secret "$STAGE0_HOME/sortie-token"
+secret "$STAGE0_HOME/viewer-token"
 
-if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
+if [[ $STAGE0_PROFILE == control ]] && [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
   say "Building the pack $STAGE0_PACK"
   smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
 fi
 
 say "Rendering Sortie's workflow"
-python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
+workflow=$KIT/WORKFLOW.md
+[[ $STAGE0_PROFILE == homelab ]] && workflow=$KIT/WORKFLOW-homelab.md
+python3 "$ROOT/dev/forge/render.py" "$workflow" "$STAGE0_HOME/sortie/WORKFLOW.md"
 "$KIT/run-sortie.sh" validate >/dev/null || die "Sortie refused the workflow: $KIT/run-sortie.sh validate"
 
 say "Installing the user units"
 UNITS=$HOME/.config/systemd/user
 mkdir -p "$UNITS"
-for unit in ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer; do
+units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer)
+# A setup-token token never expires, so the homelab profile needs no token timer.
+[[ $STAGE0_PROFILE == homelab ]] && units=(ortus-stage0-sortie.service)
+for unit in "${units[@]}"; do
   sed -e "s|@KIT@|$KIT|g" -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$unit" > "$UNITS/$unit"
 done
 systemctl --user daemon-reload
+if [[ $STAGE0_PROFILE == homelab ]]; then
+  systemctl --user enable -q ortus-stage0-sortie.service
+  systemctl --user restart ortus-stage0-sortie.service
+  for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
+  curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" || die "Sortie did not start: journalctl --user -u ortus-stage0-sortie"
+  say "Ready: Sortie 127.0.0.1:$STAGE0_SORTIE_PORT runs homelab stories from $STAGE0_HULY_URL (project $STAGE0_HULY_PROJECT)"
+  exit 0
+fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 systemctl --user restart ortus-stage0-sortie.service

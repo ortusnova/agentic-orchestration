@@ -1,0 +1,8 @@
+# The homelab pack of the taichi stage-0 profile (spec store
+# run-homelab-through-sortie, design D12): homelab's sandbox image plus the
+# stage-0 agent harness. stage0.sh stages this file and Dockerfile with
+# homelab's image scripts (homelab/) and the harness (harness/), then builds
+# the pack with smol-builder --repo <staged dir>. homelab installs its own Go
+# and uv (scripts/vmhost/install-tools.sh); Node is for Claude Code.
+layers = ["node"]
+project_layer = "Dockerfile"
