@@ -249,3 +249,27 @@ def test_example_store_file_is_valid_against_the_schema():
     schema = json.loads((STORE_SCHEMAS / "milestones.schema.json").read_text())
     doc = yaml.safe_load((STORE_SCHEMAS / "examples" / "milestones.yaml").read_text())
     assert list(Draft202012Validator(schema).iter_errors(doc)) == []
+
+
+def route_store(store):
+    """The pilot proves the route; two later changes wait on its change in
+    plan.yaml, not on its stories; the gate comes after them."""
+    store.plan([("route", []), ("later", ["route"]), ("other", ["route"]), ("gate", ["later", "other"])])
+    store.change("route", breakdown(deliverable("image"), deliverable("pilot", ["image"]), deliverable("after-pilot", ["pilot"])))
+    store.change("later", breakdown(deliverable("l1"), deliverable("l2", ["l1"])))
+    store.change("other", breakdown(deliverable("o1")))
+    store.change("gate", breakdown(deliverable("g", ["later/l2", "other/o1"])))
+    store.milestones([milestone("m1", [{"change": "route"}, {"change": "later"}, {"change": "other"}, {"change": "gate"}],
+                                gate="gate/g")])
+    return check(store)
+
+
+def test_the_order_between_changes_is_a_dependency_of_their_stories(store):
+    r = route_store(store)
+    blocks = set(ms.story_blocks(r.graph))
+    # A later change starts after the change before it ends.
+    assert ("route/after-pilot", "later/l1") in blocks and ("route/after-pilot", "other/o1") in blocks
+    # Only the ends meet the starts: no edge from a story the change still continues.
+    assert ("route/pilot", "later/l1") not in blocks and ("route/after-pilot", "later/l2") not in blocks
+    out = ms.progress(r.milestones, r.graph, r.tasks, done={"route/image"})
+    assert out["critical_path"] == ["route/pilot", "route/after-pilot", "later/l1", "later/l2", "gate/g"]
