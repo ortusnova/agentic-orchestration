@@ -219,8 +219,10 @@ python3 "$ROOT/dev/forge/render.py" "$workflow" "$STAGE0_HOME/sortie/WORKFLOW.md
 say "Installing the user units"
 UNITS=$HOME/.config/systemd/user
 mkdir -p "$UNITS"
-units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer)
-# A setup-token token never expires, so the homelab profile needs no token timer.
+units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
+  ortus-stage0-store.service ortus-stage0-store.timer)
+# A setup-token token never expires, so the homelab profile needs no token
+# timer; it has no workbench, so no store to keep current either.
 [[ $STAGE0_PROFILE == homelab ]] && units=(ortus-stage0-sortie.service)
 for unit in "${units[@]}"; do
   sed -e "s|@KIT@|$KIT|g" -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$unit" > "$UNITS/$unit"
@@ -236,6 +238,8 @@ if [[ $STAGE0_PROFILE == homelab ]]; then
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service
 systemctl --user enable -q --now ortus-stage0-token.timer
+# The store follows its upstream from now on; no person pulls it.
+systemctl --user enable -q --now ortus-stage0-store.timer
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 systemctl --user restart ortus-stage0-workbench.service

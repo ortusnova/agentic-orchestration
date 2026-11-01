@@ -11,6 +11,7 @@ dev/stage0/stage0.sh                  # set up or update, then (re)start the uni
 dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
+dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 ```
 
 The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `stage0.sh` refuses an older one.
@@ -22,12 +23,14 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Workbench | unit `ortus-stage0-workbench`, `http://127.0.0.1:8793`, local mode; the password is in `workbench-password` |
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`; `podman-restart.service` brings it back after a reboot |
 | Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`) |
+| Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`) |
 
 ## How a story runs
 
-The workbench registers the spec store (`STAGE0_STORE`). About a second
-after an approval it syncs the plan on its own, and an approved story whose
+The workbench registers the spec store (`STAGE0_STORE`), which follows its
+upstream on its own, so a merged plan change reaches it within a minute. About a second
+after a change or an approval it syncs the plan on its own, and an approved story whose
 blockers are approved is released to `Todo`; the workbench then asks Sortie
 to poll at once. Sortie creates a VM from the pack and
 seeds it with the story's repository (see below). It runs the agent behind
