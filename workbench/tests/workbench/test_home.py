@@ -54,7 +54,16 @@ def test_a_run_out_of_budget_or_parked_is_stuck():
     h = health(state=state(budget_exhausted=[{"issue_identifier": "T-2", "reason": "token_budget"}],
                            parked=[{"issue_identifier": "T-3", "reason": ""}]))
     assert h["verdict"] == "stuck"
-    assert [r["text"] for r in h["reasons"]] == ["T-2 is held: token budget", "T-3 is held: waiting on a person"]
+    assert [r["text"] for r in h["reasons"]] == ["T-2 is held: token budget", "T-3 stopped for a person without saying why"]
+
+
+def test_a_parked_story_names_its_question_never_only_stuck():
+    s = state(parked=[{"issue_identifier": "T-3", "reason": "agent_blocked", "statement": "Which repo…"}])
+    h = health(state=s, key_of={"T-3": "apw/worker-daemon"})
+    assert h["reasons"] == [{"code": "question", "text": "apw/worker-daemon asks: Which repo…", "key": "apw/worker-daemon"}]
+    # The whole statement, when the hub read it from the issue.
+    h = health(state=s, key_of={"T-3": "apw/worker-daemon"}, statements={"T-3": "Which repository should the daemon live in?"})
+    assert h["reasons"][0]["text"] == "apw/worker-daemon asks: Which repository should the daemon live in?"
 
 
 def test_healthy_when_the_runway_covers_the_slots():

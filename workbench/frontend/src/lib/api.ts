@@ -51,6 +51,7 @@ export function projectApi(slug: string) {
     pullBack: (key: string) => request<unknown>("POST", `${p}/stories/pull-back`, { key }),
     cancel: (key: string) => request<{ cancelled: string; rereview: string[] }>("POST", `${p}/stories/cancel`, { key }),
     supersede: (key: string) => request<{ superseded: string; by: string }>("POST", `${p}/stories/supersede`, { key }),
+    answer: (key: string, text: string) => request<{ answered: string; identifier: string }>("POST", `${p}/stories/answer`, { key, text }),
     session: () => request<SessionStatus>("GET", `${p}/session`),
     startSession: (message: string) => request<SessionStatus>("POST", `${p}/session`, { message }),
     stopSession: () => request<SessionStatus>("DELETE", `${p}/session`),

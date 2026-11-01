@@ -16,6 +16,16 @@ export interface Runtime {
   watchable?: boolean;
 }
 
+/** The question an agent asked when it stopped, while Sortie keeps its story parked. */
+export interface Question {
+  identifier: string;
+  /** The agent's stop statement, whole. */
+  statement: string;
+  /** When the story stopped, in Unix seconds, if Sortie says. */
+  parked_at: number | null;
+  reason: string | null;
+}
+
 export interface TrackerView {
   id: string;
   identifier: string;
@@ -41,6 +51,8 @@ export interface GraphNode {
   status: NodeStatus;
   tracker: TrackerView | null;
   runtime: Runtime | null;
+  /** Stories only: the open question of a parked story. */
+  question?: Question | null;
   // Stories only: the plan status the workbench derives from approvals and Sortie.
   plan_status?: PlanStatus | null;
   held_by?: string[];

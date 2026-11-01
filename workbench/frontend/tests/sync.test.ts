@@ -19,6 +19,7 @@ class FakeSync implements SyncClient {
   async pullBack(k: string) { this.calls.push(`pull-back ${k}`); return {}; }
   async cancel(k: string) { this.calls.push(`cancel ${k}`); return {}; }
   async supersede(k: string) { this.calls.push(`supersede ${k}`); return {}; }
+  async answer(k: string, text: string) { this.calls.push(`answer ${k} ${text}`); return {}; }
 }
 
 function status(extra: Partial<SyncStatusT> = {}): SyncStatusT {

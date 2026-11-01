@@ -94,6 +94,12 @@ class SortieClient:
         """The address and viewer token of the broker of the issue's run."""
         return await self._request("GET", f"/api/v1/{quote(identifier, safe='')}/broker")
 
+    async def answer(self, identifier: str, text: str, author: str) -> dict[str, Any]:
+        """Answer a parked issue: Sortie posts the text as the author's comment
+        and releases the park. Sortie answers 409 for an issue not parked."""
+        return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/answer",
+                                   json={"text": text, "author": author})
+
     def bind(self, project: str) -> "ProjectSortie":
         return ProjectSortie(self, project)
 
@@ -135,3 +141,6 @@ class ProjectSortie:
 
     async def broker(self, identifier: str) -> dict[str, Any]:
         return await self.client.broker(identifier)
+
+    async def answer(self, identifier: str, text: str, author: str) -> dict[str, Any]:
+        return await self.client.answer(identifier, text, author)

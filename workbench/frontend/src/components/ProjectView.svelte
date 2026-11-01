@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { api, ApiError, projectApi, subscribeGraph } from "../lib/api";
   import { changedStories } from "../lib/home";
+  import { openQuestions, pageTitle } from "../lib/questions";
   import { graphHref, homeHref, type ProjectPage } from "../lib/router";
   import { httpSpecs } from "../lib/spec";
   import { httpSession } from "../lib/session";
@@ -11,6 +12,7 @@
   import ChatPane from "./ChatPane.svelte";
   import GraphPane from "./GraphPane.svelte";
   import HomePage from "./HomePage.svelte";
+  import QuestionCount from "./QuestionCount.svelte";
   import Shell from "./Shell.svelte";
   import SyncStatus from "./SyncStatus.svelte";
 
@@ -60,6 +62,20 @@
     }
   }
 
+  // The open questions, in the bar and the title of every view, live.
+  const questions = $derived(openQuestions(doc));
+
+  async function answer(key: string, text: string): Promise<string | null> {
+    try {
+      await projectApi(slug).answer(key, text);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return "Answering needs the approver role.";
+      if (err instanceof ApiError && err.status === 409 && err.code === "sync_disabled") return "This workbench is read-only: answer from the one that owns the project.";
+      return err instanceof Error ? err.message : "The answer did not go through.";
+    }
+  }
+
   /** Select a node from outside the graph, moving to the level that shows it. */
   function selectAnywhere(key: string | null) {
     const n = key ? doc.nodes.find((x) => x.plan_key === key) : undefined;
@@ -82,12 +98,13 @@
   onDestroy(() => unsubscribe?.());
 </script>
 
-<svelte:head><title>{name ? `${name} · Plan workbench` : "Plan workbench"}</title></svelte:head>
+<svelte:head><title>{pageTitle(name, questions)}</title></svelte:head>
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer}>
       {#snippet actions()}
+        <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
       {/snippet}
     </HomePage>
@@ -115,6 +132,7 @@
         {/if}
       {/snippet}
       {#snippet actions()}
+        <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
       {/snippet}
     </GraphPane>

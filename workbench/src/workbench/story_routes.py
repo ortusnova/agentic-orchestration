@@ -26,6 +26,11 @@ class StoryBody(BaseModel):
     key: str
 
 
+class AnswerBody(BaseModel):
+    key: str
+    text: str
+
+
 def story_router(projects: ProjectManager, require_role) -> APIRouter:
     router = APIRouter(prefix="/api/projects/{slug}")
     approver = require_role(APPROVER)
@@ -151,5 +156,34 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         await rt.hub.poll_once()
         rt.sync.trigger("supersede")
         return {"superseded": replaced, "by": body.key}
+
+    @router.post("/stories/answer")
+    async def answer(slug: str, body: AnswerBody, who: Identity = Depends(approver)) -> dict:
+        """Answer the question a parked story's agent asked, through Sortie's
+        answer API: Sortie posts it on the issue, in the person's name, and
+        releases the park. The workbench writes nothing to the tracker."""
+        rt = projects.get(slug)
+        text = body.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail={"code": "empty_answer", "message": "write an answer first"})
+        n = node(rt, body.key)
+        ident = ((n or {}).get("tracker") or {}).get("identifier")
+        if not n or n.get("kind") != "story" or not ident:
+            raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
+        writable(rt)
+        try:
+            await rt.hub.sortie.answer(ident, text, who.name or who.email or who.key)
+        except SortieError as exc:
+            if exc.status == 409:
+                await rt.hub.poll_once()
+                raise HTTPException(status_code=409, detail={"code": exc.code or "not_parked",
+                                                             "message": f"{body.key} no longer waits on an answer"}) from exc
+            raise sortie_failure(exc) from exc
+        if rt.registry is not None:
+            await asyncio.to_thread(rt.registry.record_command, rt.project.id, ident, None, "answer", text, who.key, who.name)
+        log.info("project %s: %s answered %s (%s)", slug, who.key, body.key, ident)
+        # The park is released: the question leaves the list now, not at the next poll.
+        await rt.hub.poll_once()
+        return {"answered": body.key, "identifier": ident, "by": who.public(), "node": node(rt, body.key)}
 
     return router

@@ -25,6 +25,7 @@
     if (progress) return `${progress.done}/${progress.total} done`;
     if (cls === "done") return "complete";
     if (cls === "cancelled") return "cancelled";
+    if (node.question) return "waits on an answer";
     if (node.plan_status === "delivery_unconfirmed") {
       const p = node.delivery?.pulls.find((x) => x.state !== "merged");
       return p ? `${p.ref} ${PULL_STATE[p.state] ?? p.state}` : "delivery not confirmed";
@@ -42,7 +43,8 @@
       (unplanned ? ", no spec" : "") +
       (node.plan_status && node.plan_status !== "draft" ? `, ${planStatusLabel(node.plan_status).toLowerCase()}` : "") +
       (node.status === "draft" ? ", draft" : node.status === "orphaned" ? ", orphaned" : "") +
-      (marked ? `, in ${marked}` : ""),
+      (marked ? `, in ${marked}` : "") +
+      (node.question ? ", asks a question" : ""),
   );
 </script>
 
@@ -129,4 +131,6 @@
   .badge.retry { background: #fff; color: var(--ink); border: 1px solid var(--amber); }
   .badge.budget { background: #fff; color: var(--alert); border: 1px solid var(--alert); }
   .badge.budget i { background: var(--alert); }
+  .badge.ask { background: var(--amber); color: var(--ink); }
+  .badge.ask i { background: var(--ink); }
 </style>

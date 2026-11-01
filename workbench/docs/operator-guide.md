@@ -177,7 +177,7 @@ A project opens on its home; the **Graph** tab beside it opens the graph. Everyo
 - **The timeline**: the milestones from `openspec/milestones.yaml` (format: `openspec/schemas/planning/milestones.schema.json`), the goal's tick drawn double, "we are here" at the share of the work that is done, and a red cross for each upcoming blocker that needs a person. Without the file the whole plan is one milestone. Each milestone counts its stories (done when their tracker issue is Done), and the `tasks.md` items its `tasks` setting selects; a line ending in `[metal]` is hardware work and `[operator]` is attended work or a decision, and any other line is agent work. A milestone may set `done: true` when it was finished outside the tracker.
 - **Execution health**: whether the agents will stay busy (stuck, done, idle now, will idle, healthy) and why, the agent slots (Sortie's `agent.max_concurrent_agents`), and the runway of released stories not yet started. Their history covers the hours since the workbench started.
 - **The critical path** to the next milestone's gate.
-- **Needs a person**: every unit of planned work that cannot run yet and needs someone, in three columns (Approve, Write a spec, Operator tasks), ranked by how soon it holds agents up. **Approve** keeps the approver role check; every other action opens the graph at the item, selected and attached to the planning chat.
+- **Needs a person**: first, in its own **Answer** column, each question an agent asked when it stopped (see [Answer an agent](#answer-an-agent)); then every unit of planned work that cannot run yet and needs someone, in three columns (Approve, Write a spec, Operator tasks), ranked by how soon it holds agents up. **Approve** keeps the approver role check; every other action opens the graph at the item, selected and attached to the planning chat.
 - **Milestones**: each one's stories, agent tasks and person tasks, counted apart.
 
 ### Story status
@@ -220,6 +220,12 @@ A started story is frozen: the validator refuses an edit to it or its removal, a
 **Pull back** (on a released story that has not started) returns it to `backlog_state`, so no agent takes it until the next sync releases it again.
 
 Each action needs the `approver` role, and the workbench records who did it. The routes, under `/api/projects/<slug>/`, are `POST approve` (`{"keys": [...]}` or `{"epic": "<change>"}`), `POST stories/pull-back`, `POST stories/cancel`, and `POST stories/supersede` (each `{"key": "<change>/<id>"}`).
+
+### Answer an agent
+
+An agent that cannot go on without a person stops and states why, and Sortie parks its story. The workbench reads each park from Sortie's state at every poll, and the stop statement whole from Sortie's per-issue response. Each one is listed first on the home, under **Answer**: the story, the whole statement, when it stopped, and an answer box. The story's details in the graph show the same, its card reads "asks a question", and the execution verdict names the question (`<story> asks: …`). While a question is open, the project bar and the page title of the home and the graph show the count ("1 question"), live.
+
+An `approver` answers in the box. The workbench sends the text through Sortie's answer API (`POST /api/v1/<identifier>/answer`, with the person's name as the author); Sortie posts it on the issue and releases the park, and the story's next run resumes with the statement and the answer. The workbench writes nothing to the tracker itself, and records who answered in the story's worker history. A question leaves the list as soon as Sortie no longer reports the park, whether it was answered here or released in the tracker. A planner sees the question but no answer box, and a read-only workbench (`WORKBENCH_SYNC=0`) refuses answers. The route is `POST /api/projects/<slug>/stories/answer` (`{"key": "<change>/<id>", "text": "…"}`); Sortie's `409` for an issue that is not parked comes back as `409`.
 
 ### Watch and steer workers
 
@@ -264,7 +270,7 @@ The workbench validates the whole plan at every approval, every edit, and every 
 
 ## Check the UI without Huly
 
-`scripts/check/ui.sh planner|approver|local` starts the workbench on `http://127.0.0.1:8799` against a fake Sortie with fake worker brokers (`scripts/check/fake_sortie.py`), with a small seeded plan whose story `billing/b1` runs as `HLAB-1`. `planner` and `approver` sign in through Dex (`scripts/check/dex.yaml`, in a container), as one person with the planner role, or with both roles; `local` uses local mode with the password `check`. Each run starts from a blank state in `~/.cache/plan-workbench-check`, and Ctrl-C stops everything. Drive the worker with `curl -X POST 127.0.0.1:7690/admin/next` (its next run) and `/admin/end` (no more runs). With it running, `scripts/check/roles_api.sh planner|approver` checks, through the API, what that role may and may not do.
+`scripts/check/ui.sh planner|approver|local` starts the workbench on `http://127.0.0.1:8799` against a fake Sortie with fake worker brokers (`scripts/check/fake_sortie.py`), with a small seeded plan whose story `billing/b1` runs as `HLAB-1`. `planner` and `approver` sign in through Dex (`scripts/check/dex.yaml`, in a container), as one person with the planner role, or with both roles; `local` uses local mode with the password `check`. Each run starts from a blank state in `~/.cache/plan-workbench-check`, and Ctrl-C stops everything. Drive the worker with `curl -X POST 127.0.0.1:7690/admin/next` (its next run) and `/admin/end` (no more runs); `/admin/park` stops `billing/b2` with a question to answer. With it running, `scripts/check/roles_api.sh planner|approver` checks, through the API, what that role may and may not do.
 
 ## Run everything live
 
