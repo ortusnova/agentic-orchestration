@@ -21,7 +21,8 @@ class ValidationResult:
     store: LoadedStore
     graph: dict[str, Any] | None = None
     names: dict[str, dict[str, set[str]]] = field(default_factory=dict)
-    # Each story's digest, review gate, and superseded story, by plan key.
+    # Each story's digest, review gate, superseded story, and the pull
+    # requests that delivered it, by plan key.
     stories: dict[str, dict[str, Any]] = field(default_factory=dict)
     # The store's milestones with defaults filled in (one implicit milestone
     # without a milestones file), and each planned change's tasks.md items.

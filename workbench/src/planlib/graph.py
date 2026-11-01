@@ -35,8 +35,9 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
     """Return the graph document, or the errors that prevent building it.
 
     ``stories``, when given, is filled with each story's digest, review
-    gate, and the story it supersedes: what the workbench needs beside the
-    graph, which the graph schema does not carry.
+    gate, the story it supersedes, and the pull requests that delivered it:
+    what the workbench needs beside the graph, which the graph schema does
+    not carry.
 
     ``approvals`` maps plan keys to the digest each story's approval
     covers; a story is approved while its digest matches. Without
@@ -138,6 +139,7 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
                 "digest": story_digest(resolved(bd.doc, d)),
                 "review": d.get("review", "human"),
                 "supersedes": resolve_ref(change, d["supersedes"]) if d.get("supersedes") else None,
+                "delivered_by": list(d.get("delivered_by") or []),
             }
             parents.append({"child": key, "parent": change})
 

@@ -25,7 +25,11 @@ def story_digest(deliverable: dict) -> str:
 def resolved(doc: dict, deliverable: dict) -> dict:
     """The deliverable as an approval covers it: with the breakdown's default
     repository filled in when it names none, so changing that default
-    returns the story to draft."""
+    returns the story to draft. ``delivered_by`` records how the work was
+    done, not what it is, so naming the pull request that delivered a story
+    neither returns it to draft nor counts as an edit to a started one."""
+    if "delivered_by" in deliverable:
+        deliverable = {k: v for k, v in deliverable.items() if k != "delivered_by"}
     if doc.get("repository") and not deliverable.get("repository"):
         return {**deliverable, "repository": doc["repository"]}
     return deliverable

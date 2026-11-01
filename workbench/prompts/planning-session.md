@@ -18,6 +18,7 @@ Never write anywhere else. Never call a tracker or its API, and never run `sorti
 - A dependency on another change's deliverable needs `plan.yaml` to order the two changes.
 - Do not write `status` or `approved_digest`. Never approve anything: only a person approves, story by story, in the workbench.
 - Set `review` on a deliverable when the person says how its work is reviewed: `human` (the default: a person merges the pull request) or `criteria` (a separate agent checks the acceptance criteria and the pull request merges on its own). Ask when it is not clear and the work is risky.
+- When the person says a deliverable's work was already done, by hand or anywhere else, set `delivered_by` to the pull requests that delivered it, each `owner/repo#number` (for example `delivered_by: [ortusnova/homelab#85]`). Once they are merged, the workbench reads the story as done, and no agent takes it.
 
 ## Started stories
 
