@@ -2,7 +2,7 @@
 # Installs the stage-0 agent harness in a pack build, for the user the
 # pack's agent runs as: Claude Code behind ACP, the agent-acp launcher, and
 # both harnesses' policy files. Shared by the stage-0 pack (agent.Dockerfile,
-# as root) and the homelab pack (homelab-pack/Dockerfile, as brian), so the
+# as root) and the homelab pack (homelab-pack/Dockerfile, as builder), so the
 # harness and its pin live in one place.
 #
 #   install-harness.sh USER HOME
