@@ -118,6 +118,16 @@ environment:
 You are working on story **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}
+{{- if .park }}
+
+A person released this story ({{ .park.gesture }}). You stopped earlier{{ if .park.statement }}: {{ .park.statement }}{{ else }}.{{ end }}
+Comments posted since you stopped, oldest first; answer them before you go on:
+{{ range .park.comments }}
+- {{ .author }} ({{ .created_at }}): {{ .body }}
+{{- else }}
+(none)
+{{- end }}
+{{- end }}
 
 The repository is checked out in the current directory, on the story's
 branch. Read its `AGENTS.md` first and follow it. Change the code to meet the

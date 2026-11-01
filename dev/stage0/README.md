@@ -48,6 +48,12 @@ the pull request merges, Sortie moves the story to `Done`.
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
+- **What the agent reads.** The VM has no copy of the spec store and no
+  network beyond the workflow's hosts, so the prompt carries everything:
+  the story's Huly description holds its notes, its acceptance criteria,
+  and the text and scenarios of each requirement it covers. When a person
+  releases a parked story, the first turn of the next run also holds the
+  agent's stop statement and every comment posted since the park.
 - **Parallel agents.** `STAGE0_MAX_AGENTS` in `stage0.env` (default 3) caps
   agents at once; each VM takes 4 vCPU and 8 GiB. All of them share one
   Claude subscription and its rate limits.
