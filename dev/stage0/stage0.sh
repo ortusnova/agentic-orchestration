@@ -53,6 +53,14 @@ STAGE0_HULY_PROJECT=ONS
 STAGE0_REPO_URL=https://github.com/ortusnova/sortie.git
 STAGE0_REPO_BASE=plan-bench
 STAGE0_REPO_PROJECT=ortusnova/sortie
+# Other repositories (WORKFLOW.md): agentic-orchestration runs here; homelab
+# is listed closed to dispatch, for the homelab Sortie.
+STAGE0_AO_REPO_URL=https://github.com/ortusnova/agentic-orchestration.git
+STAGE0_AO_REPO_BASE=main
+STAGE0_AO_REPO_PROJECT=ortusnova/agentic-orchestration
+STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
+STAGE0_HOMELAB_REPO_BASE=master
+STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
 STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
 # Agents at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
 STAGE0_MAX_AGENTS=3
@@ -61,10 +69,19 @@ EOF
 fi
 # shellcheck source=/dev/null
 . "$ENV_FILE"
+# A stage0.env written before a setting existed gets its default here.
 STAGE0_MAX_AGENTS=${STAGE0_MAX_AGENTS:-3}
+STAGE0_AO_REPO_URL=${STAGE0_AO_REPO_URL:-https://github.com/ortusnova/agentic-orchestration.git}
+STAGE0_AO_REPO_BASE=${STAGE0_AO_REPO_BASE:-main}
+STAGE0_AO_REPO_PROJECT=${STAGE0_AO_REPO_PROJECT:-ortusnova/agentic-orchestration}
+STAGE0_HOMELAB_REPO_URL=${STAGE0_HOMELAB_REPO_URL:-https://github.com/ortusnova/homelab.git}
+STAGE0_HOMELAB_REPO_BASE=${STAGE0_HOMELAB_REPO_BASE:-master}
+STAGE0_HOMELAB_REPO_PROJECT=${STAGE0_HOMELAB_REPO_PROJECT:-ortusnova/homelab}
 [[ $STAGE0_KIT_ROOT == "$ROOT" ]] || say "Note: $ENV_FILE runs the kit from $STAGE0_KIT_ROOT, not $ROOT"
 export STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
-  STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT
+  STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
+  STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
+  STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT
 
 for cmd in smolvm podman go uv npm openspec gh git openssl python3; do
   command -v "$cmd" >/dev/null || die "$cmd is not on PATH"
