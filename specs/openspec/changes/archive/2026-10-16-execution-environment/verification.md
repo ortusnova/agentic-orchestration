@@ -95,8 +95,8 @@ NODE_EXTRA_CA_CERTS=/run/smol/credentials/ca.pem
 SSL_CERT_FILE=/run/smolvm/ca-bundle.pem
 REQUESTS_CA_BUNDLE=/run/smolvm/ca-bundle.pem
 DENO_CERT=/run/smol/credentials/ca.pem
-ANTHROPIC_AUTH_TOKEN=SMOL_PLACEHOLDER_...
-OPENAI_API_KEY=SMOL_PLACEHOLDER_...
+ANTHROPIC_AUTH_TOKEN=<smolvm placeholder>...
+OPENAI_API_KEY=<smolvm placeholder>...
 ```
 
 **claude-agent-acp 0.89.1.** It was installed in the guest with `npm i -g @agentclientprotocol/claude-agent-acp@0.89.1`. That pulls `@anthropic-ai/claude-agent-sdk-linux-x64`, the native Claude Code binary. The ACP driver (`/tmp/opencode/ee/acp_drive.py`) ran it over `machine exec -i`:
@@ -488,7 +488,7 @@ message="creating instance" directory=/tmp/opencode/ee/e2e/ws/CALC-1
 [11:22:23] guest environ contains the OpenRouter key: False
 [11:22:23] guest environ contains the session token value: False
 [11:22:23] guest environ mentions SORTIE_SESSION_TOKEN: False | SORTIE_API_URL: False
-[11:22:23] agent env: HOME=/root NODE_EXTRA_CA_CERTS=/run/smol/credentials/ca.pem OPENROUTER_API_KEY=SMOL_PLACEHOLDER_... (len 60) SORTIE_ATTEMPT SORTIE_CHAIN_ID SORTIE_DISPATCH_ID SORTIE_ENVIRONMENT=smolvm SORTIE_ISSUE_ID SORTIE_ISSUE_IDENTIFIER=CALC-1 SORTIE_RULE SORTIE_SESSION_PURPOSE SORTIE_STACK_LAYERS SORTIE_WORKSPACE=/workspace SSL_CERT_FILE=/run/smolvm/ca-bundle.pem
+[11:22:23] agent env: HOME=/root NODE_EXTRA_CA_CERTS=/run/smol/credentials/ca.pem OPENROUTER_API_KEY=<smolvm placeholder>... (len 60) SORTIE_ATTEMPT SORTIE_CHAIN_ID SORTIE_DISPATCH_ID SORTIE_ENVIRONMENT=smolvm SORTIE_ISSUE_ID SORTIE_ISSUE_IDENTIFIER=CALC-1 SORTIE_RULE SORTIE_SESSION_PURPOSE SORTIE_STACK_LAYERS SORTIE_WORKSPACE=/workspace SSL_CERT_FILE=/run/smolvm/ca-bundle.pem
 [11:22:23] key-shaped strings in guest environs (sha256 prefixes): none
 [11:22:23] ls --json during the run: {"name": "sortie-CALC-1", "state": "running", "network": true, "mounts": 2, "labels": {"sortie.managed": "1", "sortie.pack": "183813ef...edd93e", "sortie.workflow": "3ae3b5b25b17", "sortie.workspace": "CALC-1"}, "cpus": 2, "memory_mib": 4096}
 [11:23:01] run ended
@@ -547,7 +547,7 @@ ls: cannot access '/root/.config/gh': No such file or directory
 none
 -- SORTIE_* names in the hook
 SORTIE_ATTEMPT SORTIE_ENVIRONMENT SORTIE_ISSUE_ID SORTIE_ISSUE_IDENTIFIER SORTIE_SELF_REVIEW_STATUS SORTIE_STACK_LAYERS SORTIE_WORKSPACE
--- OPENROUTER_API_KEY prefix: SMOL_PLACEHOLDER_
+-- OPENROUTER_API_KEY prefix: <smolvm placeholder>
 -- key-shaped strings (sha256 prefixes)
 procdone
 filesdone
@@ -725,7 +725,7 @@ The failed `after_create` removed the probe's host workspace and left the stoppe
 - **`sortie_status` from the VM.** In both runs the agent called `sortie-tools_sortie_status`, through `/opt/sortie/sortie mcp-relay /run/sortie/tools.sock`. It got `{"turn_number":1,"max_turns":1,"turns_remaining":0,...}` and quoted the result in its final message. After the Sortie restart before run 2, the log shows `tool sockets listening again workspaces=["CALC-1"]`.
 - **Handoff evidence sees the commit.** Both runs passed the evidence check under the default `observed` policy. Both were recorded `succeeded` and moved to `Review`, with `sortie_handoff_transitions_total{result="success"}`. A run with no work would have been withheld and recorded `failed`. Here the verdict is work observed, because the trusted record names the pushed commit. That record is checked before the guest-side commit comparison, and Sortie logs no verdict when work is observed. Run history records `exported_commit` `b6403758…` and `95c2ca43…`, and `environment_image_sha256` equal to the pack's `pack_sha256`.
 - **No secret in the guest.**
-  - *The API key.* The guest saw only `OPENROUTER_API_KEY=SMOL_PLACEHOLDER_…` (60 characters). No guest process environment held the key's bytes. No `sk-or-v1-` string was in any guest environment, or in any file under `/root`, `/workspace`, `/tmp`, `/etc`, `/opt` and `/run` (`procdone` and `filesdone` with no prefix before them; the host key's prefix is `f8b504d480920a41`).
+  - *The API key.* The guest saw only `OPENROUTER_API_KEY=<smolvm placeholder>…` (60 characters). No guest process environment held the key's bytes. No `sk-or-v1-` string was in any guest environment, or in any file under `/root`, `/workspace`, `/tmp`, `/etc`, `/opt` and `/run` (`procdone` and `filesdone` with no prefix before them; the host key's prefix is `f8b504d480920a41`).
   - *The session token.* The broker on the host had `SORTIE_SESSION_TOKEN` (44 bytes) and `SORTIE_API_URL`. No guest process environment held the token's value or either name, and neither did the hooks.
   - *Git credentials.* The guest has none:
     - no `credential.*`, `url.*` or `http.*` git configuration;
