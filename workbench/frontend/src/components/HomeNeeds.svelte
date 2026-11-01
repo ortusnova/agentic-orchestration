@@ -35,7 +35,8 @@
 
   function note(i: NotReadyItem): string {
     if (i.kind === "task") return [i.task?.change, i.task?.number ? `task ${i.task.number}` : null].filter(Boolean).join(" · ");
-    if (i.kind === "change" && i.stories) return `${i.stories.length} stories with specs, reviewed together`;
+    // A grouped row names its stories, so each one can be found in the list.
+    if (i.kind === "change" && i.stories) return `${i.stories.map((k) => k.split("/").pop()).join(", ")} · reviewed together`;
     const parts = [i.change ?? i.key];
     if (i.reason === "waits_on_person" && i.task) parts.push(`waits on ${i.task.change} ${i.task.number ?? ""}`.trim());
     else if (i.after?.length) parts.push(`after ${i.after.map((k) => k.split("/").pop()).join(" and ")}`);

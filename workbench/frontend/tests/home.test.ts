@@ -187,6 +187,7 @@ describe("home: the focal points", () => {
     expect(text("[data-key='p3#3.7'] .sl")).toBe("blocks after M1, ~39 stories");
     expect(text("[data-key='p3#3.7'] .name")).toBe("Enroll the YubiKey, declare p1 a mgmt peer.");
     expect(text("[data-key='trust'] .btn")).toBe("Review 3");
+    expect(text("[data-key='trust'] .note")).toBe("a, b, c · reviewed together");
     expect(text("[data-waits-on-work]")).toContain("1 more story waits on work only");
   });
 
