@@ -13,9 +13,8 @@ RUN /opt/homelab-sandbox/install-tools.sh \
 # machine runs its commands as root unless it is created with `--user brian`
 # (measured on smolvm 1.32.4). With that, every command runs as brian, with
 # HOME=/home/brian, and /workspace, the machine's own disk (mode 1777), takes
-# Sortie's seeding as brian. Sortie gains the setting in the spec store's
-# smolvm-machine-shape story (design D12, amended 2026-10-31); until then a
-# machine from this pack runs as root, so no homelab story runs on it.
+# Sortie's seeding as brian. WORKFLOW-homelab.md sets `user: brian`
+# (Sortie's environment.smolvm.user; design D12, amended 2026-10-31).
 COPY harness/ /opt/stage0-harness/
 RUN /opt/stage0-harness/install-harness.sh brian /home/brian
 WORKDIR /workspace
