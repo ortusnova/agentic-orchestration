@@ -1,0 +1,200 @@
+// Package protocol holds the wire types of worker API protocol 1
+// (agent-platform/worker-api), as Sortie serves it under
+// environment.kind remote, and the paths the daemon uses on each
+// data-plane flow.
+package protocol
+
+import (
+	"net/url"
+	"strconv"
+	"time"
+
+	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/secret"
+)
+
+// Version is the worker API protocol this daemon speaks.
+const Version = 1
+
+// Versions lists every worker API protocol version this daemon speaks.
+var Versions = []int{Version}
+
+// Header names.
+const (
+	// ProtocolHeader carries the protocol version on every request.
+	ProtocolHeader = "X-Sortie-Worker-Protocol"
+	// DefaultIdentityHeader names the worker when the configuration
+	// names no other header.
+	DefaultIdentityHeader = "X-Sortie-Worker-Identity"
+)
+
+// Routes of the control plane, under its URL.
+const (
+	CheckInPath = "/api/v1/workers/checkin"
+	PollPath    = "/api/v1/workers/poll"
+)
+
+// AttemptPath returns the path of an attempt's heartbeat or report
+// route; action is "heartbeat" or "report".
+func AttemptPath(job string, attempt int, action string) string {
+	return "/api/v1/workers/jobs/" + url.PathEscape(job) + "/attempts/" + strconv.Itoa(attempt) + "/" + action
+}
+
+// Free is what the worker has free after its reserve and floor.
+type Free struct {
+	CPU     float64 `json:"cpu"`
+	MemGiB  float64 `json:"mem_gib"`
+	DiskGiB float64 `json:"disk_gib"`
+}
+
+// Declaration is the check-in body. Every field is required.
+type Declaration struct {
+	OS       string   `json:"os"`
+	Arch     string   `json:"arch"`
+	KVM      bool     `json:"kvm"`
+	Nested   bool     `json:"nested"`
+	Backends []string `json:"backends"`
+	RunSlots int      `json:"run_slots"`
+	Running  int      `json:"running"`
+	Free     Free     `json:"free"`
+}
+
+// Timings is the check-in answer.
+type Timings struct {
+	HeartbeatMS int64 `json:"heartbeat_ms"`
+	LeaseMS     int64 `json:"lease_ms"`
+}
+
+// Requires is what a job needs of a worker.
+type Requires struct {
+	Capabilities []string `json:"capabilities"`
+	CPU          float64  `json:"cpu"`
+	MemGiB       float64  `json:"mem_gib"`
+	DiskGiB      float64  `json:"disk_gib"`
+}
+
+// Issue names the issue a job runs.
+type Issue struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+}
+
+// Job is the job of an offer.
+type Job struct {
+	ID       string   `json:"id"`
+	Attempt  int      `json:"attempt"`
+	Priority *int     `json:"priority"`
+	Issue    Issue    `json:"issue"`
+	Requires Requires `json:"requires"`
+}
+
+// RunCredential names a placeholder the egress flow replaces. It never
+// holds a value.
+type RunCredential struct {
+	Name        string   `json:"name"`
+	Env         string   `json:"env"`
+	Placeholder string   `json:"placeholder"`
+	Hosts       []string `json:"hosts"`
+	Header      string   `json:"header,omitempty"`
+}
+
+// Run is the run descriptor: what to start, never a credential.
+type Run struct {
+	Backend        string            `json:"backend"`
+	Image          string            `json:"image"`
+	Command        string            `json:"command"`
+	Args           []string          `json:"args"`
+	Env            map[string]string `json:"env"`
+	StallTimeoutMS int               `json:"stall_timeout_ms"`
+	SeedPath       string            `json:"seed_path"`
+	Credentials    []RunCredential   `json:"credentials"`
+}
+
+// FlowAccess is where a job reaches one flow, and the job token that
+// admits it.
+type FlowAccess struct {
+	URL   string       `json:"url"`
+	Token secret.Token `json:"token"`
+}
+
+// Lease is when an offer's lease ends unless renewed.
+type Lease struct {
+	Expires time.Time `json:"expires"`
+}
+
+// Offer is a poll's answer.
+type Offer struct {
+	Job   Job                   `json:"job"`
+	Lease Lease                 `json:"lease"`
+	Run   Run                   `json:"run"`
+	Flows map[string]FlowAccess `json:"flows"`
+}
+
+// Flow names.
+const (
+	FlowStdio   = "stdio"
+	FlowEgress  = "egress"
+	FlowMCP     = "mcp"
+	FlowBundles = "bundles"
+	FlowUsage   = "usage"
+)
+
+// Flows lists every flow an offer carries.
+var Flows = []string{FlowStdio, FlowEgress, FlowMCP, FlowBundles, FlowUsage}
+
+// Report outcomes and machine states.
+const (
+	OutcomeSucceeded = "succeeded"
+	OutcomeFailed    = "failed"
+
+	MachineRunning = "running"
+	MachineStopped = "stopped"
+	MachineDeleted = "deleted"
+)
+
+// Report is the report body.
+type Report struct {
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	Machine string `json:"machine"`
+}
+
+// ErrorBody is the control plane's error answer.
+type ErrorBody struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Supported []int `json:"supported,omitempty"`
+}
+
+// AttemptSuffix is the path, under a flow's URL, that names one
+// attempt: the stdio stream, the usage report, and the root of the MCP
+// endpoint use it.
+func AttemptSuffix(job string, attempt int) string {
+	return "/jobs/" + url.PathEscape(job) + "/attempts/" + strconv.Itoa(attempt)
+}
+
+// ResultPath is where, on the bundles flow, the daemon uploads the
+// bundle of the run's commits.
+func ResultPath(job string, attempt int) string {
+	return AttemptSuffix(job, attempt) + "/result"
+}
+
+// Usage is the body the daemon posts on the usage flow after a run.
+//
+// SpendOccurred and AmountKnown keep "spend occurred, amount unknown"
+// apart from a run that spent nothing: when AmountKnown is false the
+// token fields are null, never zero.
+type Usage struct {
+	Job              string `json:"job"`
+	Attempt          int    `json:"attempt"`
+	SpendOccurred    bool   `json:"spend_occurred"`
+	AmountKnown      bool   `json:"amount_known"`
+	InputTokens      *int64 `json:"input_tokens"`
+	OutputTokens     *int64 `json:"output_tokens"`
+	CacheReadTokens  *int64 `json:"cache_read_tokens"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens"`
+	ModelRequests    int64  `json:"model_requests"`
+	Reason           string `json:"reason,omitempty"`
+}
