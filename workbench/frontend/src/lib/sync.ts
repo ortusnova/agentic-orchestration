@@ -25,7 +25,7 @@ export function httpSync(slug: string): SyncClient {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  draft: "Draft", held: "Held", ready: "Ready", released: "Released", frozen: "Started", needs_rereview: "Re-review",
+  needs_spec: "Needs a spec", draft: "Draft", held: "Held", ready: "Ready", released: "Released", frozen: "Started", needs_rereview: "Re-review",
 };
 
 /** The short label of a plan status. */

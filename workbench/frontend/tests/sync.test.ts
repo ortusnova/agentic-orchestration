@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import SyncHarness from "./SyncHarness.svelte";
 import GraphHarness from "./GraphHarness.svelte";
 import ChatHarness from "./ChatHarness.svelte";
-import { planDoc } from "./fixtures";
+import { graph, node, planDoc } from "./fixtures";
 import type { SyncClient } from "../src/lib/sync";
 import { errorTarget } from "../src/lib/sync";
 import { GraphModel } from "../src/lib/model";
@@ -272,7 +272,7 @@ describe("approver actions", () => {
     const s = doc.nodes.find((n) => n.plan_key === "billing/invoice")!;
     const model = new GraphModel(doc);
     expect(model.isReady(s)).toBe(true);
-    for (const st of ["draft", "held", "needs_rereview"] as const) {
+    for (const st of ["needs_spec", "draft", "held", "needs_rereview"] as const) {
       s.plan_status = st;
       expect(new GraphModel(doc).isReady(s), st).toBe(false);
     }
@@ -284,6 +284,69 @@ describe("approver actions", () => {
     (app as unknown as { getView: () => { epic: string | null } }).getView().epic = "billing";
     await settle();
     expect($("[data-key='billing/invoice'] .meta")!.textContent).toBe("not approved");
+  });
+
+  /** homelab-m1-gate, never approved: two stories with a spec, and m1-gate, which covers no requirement. */
+  function gateEpic(withSpecs = 2) {
+    const draft = { approval: "draft" as const, plan_status: "draft" as const };
+    const specced = ["homelab-m1-gate/a", "homelab-m1-gate/b"].slice(0, withSpecs).map((k) => node(k, draft));
+    return graph([
+      node("homelab-m1-gate", { approval: "draft" }),
+      ...specced,
+      node("homelab-m1-gate/m1-gate", { approval: "draft", plan_status: "needs_spec", has_spec: false, covers: [] }),
+    ]);
+  }
+
+  it("reads Needs a spec, with no Approve, for a story that covers no requirement", async () => {
+    approver();
+    const h = chat(gateEpic(), new FakeSync());
+    await settle();
+    h.select("homelab-m1-gate/m1-gate");
+    await settle();
+    expect($("[data-plan-status='needs_spec']")!.textContent).toBe("Needs a spec");
+    expect($("[data-why='needs-spec']")).not.toBeNull();
+    expect($("[data-act='approve']")).toBeNull();
+    // A story with a spec beside it still offers Approve.
+    h.select("homelab-m1-gate/a");
+    await settle();
+    expect($("[data-act='approve']")).not.toBeNull();
+  });
+
+  it("shows Needs a spec on the story's card", async () => {
+    app = mount(GraphHarness, { target: document.body, props: { initial: gateEpic() } });
+    await settle();
+    (app as unknown as { getView: () => { epic: string | null } }).getView().epic = "homelab-m1-gate";
+    await settle();
+    expect($("[data-key='homelab-m1-gate/m1-gate'] .meta")!.textContent).toBe("needs a spec");
+    expect($("[data-key='homelab-m1-gate/a'] .meta")!.textContent).toBe("not approved");
+  });
+
+  it("approves an epic with one unplanned story, counting only the other two", async () => {
+    approver();
+    const sync = new FakeSync();
+    const h = chat(gateEpic(), sync);
+    await settle();
+    h.setEpic("homelab-m1-gate");
+    await settle();
+    const batch = $<HTMLButtonElement>(".acts [data-act='approve-epic']")!;
+    expect(batch.textContent).toBe("Approve the epic (2 stories)");
+    batch.click();
+    await settle();
+    expect(sync.approved).toEqual([{ epic: "homelab-m1-gate" }]);
+  });
+
+  it("offers no epic approval when every story of it needs a spec", async () => {
+    approver();
+    const h = chat(gateEpic(0), new FakeSync());
+    await settle();
+    h.select("homelab-m1-gate");
+    await settle();
+    expect($("[data-act='approve-epic']")).toBeNull();
+    h.select(null);
+    h.setEpic("homelab-m1-gate");
+    await settle();
+    expect($("[data-act='approve-epic']")).toBeNull();
+    expect($("[data-act='approve-drafts']")).toBeNull();
   });
 
   it("hides every action from a planner", async () => {

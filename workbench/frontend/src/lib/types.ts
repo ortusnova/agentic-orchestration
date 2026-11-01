@@ -52,7 +52,7 @@ export interface GraphNode {
   supersedes?: string | null;
 }
 
-export type PlanStatus = "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview";
 
 export interface PlanError {
   code: string;

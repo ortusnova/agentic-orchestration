@@ -18,7 +18,7 @@ FAST = {"sync_backoff_first": 0.05, "sync_backoff_max": 0.2}
 
 def setup(store, fake, **cfg):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("invoice"), deliverable("tax", ["invoice"])))
+    store.change("billing", breakdown(deliverable("invoice", kind="enabler"), deliverable("tax", ["invoice"], kind="enabler")))
     return create_app(make_config(store.root, **{**FAST, **cfg}), validate=validate_offline, sortie=fake.client())
 
 
@@ -110,7 +110,7 @@ def test_a_missing_capability_stops_before_apply(store):
 def test_an_invalid_plan_is_not_synced(store):
     fake = FakeSortie()
     app = setup(store, fake)
-    store.change("billing", breakdown(deliverable("a", ["a"])))
+    store.change("billing", breakdown(deliverable("a", ["a"], kind="enabler")))
     with TestClient(app) as client:
         sign_in(client)
         assert wait_for(lambda: sync_status(app)["state"] == "failed")
@@ -118,7 +118,7 @@ def test_an_invalid_plan_is_not_synced(store):
         assert previews(fake) == []
         assert project(app).hub.doc["sync"]["reason"]["code"] == "plan_invalid"
 
-        store.change("billing", breakdown(deliverable("a")))
+        store.change("billing", breakdown(deliverable("a", kind="enabler")))
         settle(client)
         assert wait_for(lambda: sync_status(app)["state"] == "synced", timeout=3)
 
@@ -135,7 +135,7 @@ def test_a_draft_edit_does_not_sync_but_an_approved_story_edit_does(store):
         n = len(previews(fake))
 
         doc = planlib.load_store(store.root).breakdowns["billing"].doc
-        doc["deliverables"].append(deliverable("vat"))
+        doc["deliverables"].append(deliverable("vat", kind="enabler"))
         store.change("billing", doc)
         settle(client)
         time.sleep(0.4)
@@ -151,8 +151,8 @@ def test_story_actions_trigger_a_sync(store):
     fake = FakeSortie()
     fake.plan_states = {"release": "Todo", "backlog": "Backlog", "cancel": "Canceled", "done": "Done"}
     app = setup(store, fake)
-    store.change("billing", breakdown(deliverable("invoice"), deliverable("tax", ["invoice"]),
-                                      deliverable("tax2", supersedes="tax")))
+    store.change("billing", breakdown(deliverable("invoice", kind="enabler"), deliverable("tax", ["invoice"], kind="enabler"),
+                                      deliverable("tax2", supersedes="tax", kind="enabler")))
     fake.issue("billing/invoice")
     fake.issue("billing/tax")
     with TestClient(app) as client:

@@ -21,8 +21,8 @@ STATES = {"release": "Todo", "backlog": "Backlog", "cancel": "Canceled", "done":
 
 def billing(store, *extra):
     store.plan([("accounts", []), ("billing", ["accounts"])])
-    store.change("accounts", breakdown(deliverable("a3")))
-    store.change("billing", breakdown(deliverable("b1", ["accounts/a3"]), deliverable("b2"), *extra))
+    store.change("accounts", breakdown(deliverable("a3", kind="enabler")))
+    store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", kind="enabler"), *extra))
 
 
 def app_for(store, fake, **cfg):
@@ -76,7 +76,7 @@ def test_frozen_story_edit_is_refused(store):
         project(app).hub.frozen = {}
         settle(client)
         assert status(app, "billing/b2")["plan_status"] == "frozen"
-        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"]), deliverable("b2", title="Changed")))
+        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", title="Changed", kind="enabler")))
         settle(client)
         assert any(e["code"] == "frozen" for e in project(app).plan.errors)
 
@@ -92,7 +92,7 @@ def test_an_edit_to_a_released_story_pulls_it_back(store):
         settle(client)
         client.post(f"{P}/approve", json={"epic": "billing"})
         assert status(app, "billing/b2")["plan_status"] == "released"
-        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"]), deliverable("b2", title="Edited")))
+        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", title="Edited", kind="enabler")))
         settle(client)
         assert fake.pulled_back == ["billing/b2"]
         # The next poll sees the story back in the backlog.
@@ -102,7 +102,7 @@ def test_an_edit_to_a_released_story_pulls_it_back(store):
 
 def test_cancel_sends_dependents_to_rereview(store):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("a3"), deliverable("b1", ["a3"]), deliverable("c1", ["b1"])))
+    store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler"), deliverable("c1", ["b1"], kind="enabler")))
     fake = FakeSortie()
     fake.plan_states = STATES
     fake.issue("billing/a3", state="In Progress", runtime={"status": "running"})
@@ -121,14 +121,14 @@ def test_cancel_sends_dependents_to_rereview(store):
 
 def test_supersede_cancels_the_replaced_story_and_keeps_dependents(store):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("a3"), deliverable("b1", ["a3"])))
+    store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler")))
     fake = FakeSortie()
     fake.plan_states = STATES
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
         client.post(f"{P}/approve", json={"epic": "billing"})
-        store.change("billing", breakdown(deliverable("a3"), deliverable("a3b", supersedes="a3"), deliverable("b1", ["a3"])))
+        store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("a3b", supersedes="a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler")))
         settle(client)
         assert "billing/a3b" in project(app).plan.stories
         assert client.post(f"{P}/stories/supersede", json={"key": "billing/a3b"}).json()["error"]["code"] == "replacement_draft"
@@ -195,3 +195,131 @@ def test_old_approvals_are_imported_once(store):
         rows = project(app).registry.approvals(project(app).project.id)
         assert set(rows) == {"billing/a", "billing/b"} and rows["billing/a"]["approver_id"] == "migration|billing"
         assert status(app, "billing/a")["approval"] == "approved"
+        # Neither covers a requirement, but the imported approval stands.
+        assert status(app, "billing/a")["plan_status"] == "ready"
+
+
+# A person approves a spec ---------------------------------------------------------
+
+GATE = "homelab-m1-gate/m1-gate"
+
+
+def with_spec(store, change, *names):
+    """Give a change a delta spec, ``<change>/spec.md``, with one requirement per name."""
+    d = store.change(change) / "specs" / change
+    d.mkdir(parents=True, exist_ok=True)
+    body = "## ADDED Requirements\n\n"
+    for n in names:
+        body += f"### Requirement: {n}\nIt SHALL {n}.\n\n#### Scenario: s\n- **WHEN** a\n- **THEN** b\n\n"
+    (d / "spec.md").write_text(body)
+
+
+def show_specs(root, change):
+    """A fake `openspec show`: what with_spec wrote, as OpenSpec reports it."""
+    specs = root / "openspec" / "changes" / change / "specs"
+    deltas = []
+    for f in sorted(specs.rglob("spec.md")):
+        for line in f.read_text().splitlines():
+            if line.startswith("### Requirement: "):
+                name = line.removeprefix("### Requirement: ")
+                deltas.append({"spec": f.parent.relative_to(specs).as_posix(), "operation": "ADDED",
+                               "requirement": {"text": f"It SHALL {name}."}})
+    return {"deltas": deltas}
+
+
+def validate_specs(root, **kw):
+    return planlib.validate(root, show=show_specs, **kw)
+
+
+def not_ready(app):
+    return {i["key"]: i for i in project(app).hub.home["not_ready"] if i["kind"] == "story"}
+
+
+def test_a_story_that_covers_no_requirement_cannot_be_approved(store):
+    store.plan([("homelab-m1-gate", [])])
+    store.change("homelab-m1-gate", breakdown(deliverable("m1-gate")))
+    fake = FakeSortie()
+    fake.plan_states = STATES
+    app = app_for(store, fake)
+    with TestClient(app) as client:
+        sign_in(client)
+        rt = project(app)
+        assert status(app, GATE)["plan_status"] == "needs_spec"
+        assert not_ready(app)[GATE]["reason"] == "no_spec" and not_ready(app)[GATE]["action"]["kind"] == "plan"
+
+        r = client.post(f"{P}/approve", json={"keys": [GATE]})
+        assert r.status_code == 409
+        err = r.json()["error"]
+        assert err["code"] == "no_spec" and err["plan_key"] == GATE and err["keys"] == [GATE]
+        # An epic whose every story lacks a spec has nothing to approve.
+        r = client.post(f"{P}/approve", json={"epic": "homelab-m1-gate"})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "no_spec"
+
+        assert rt.registry.approvals(rt.project.id) == {}
+        assert status(app, GATE)["plan_status"] == "needs_spec" and status(app, GATE)["approval"] == "draft"
+
+
+def test_a_story_with_a_spec_or_delivered_needs_none(store):
+    store.plan([("homelab-m1-gate", [])])
+    with_spec(store, "homelab-m1-gate", "Gate")
+    store.change("homelab-m1-gate", breakdown(deliverable("m1-gate", covers=["homelab-m1-gate#Gate"]),
+                                              deliverable("done-before"), deliverable("prep", kind="enabler")))
+    fake = FakeSortie()
+    fake.plan_states = STATES
+    fake.issue("homelab-m1-gate/done-before", state="Done", terminal=True)
+    app = create_app(make_config(store.root), validate=validate_specs, sortie=fake.client())
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        assert status(app, GATE)["plan_status"] == "draft"
+        assert status(app, "homelab-m1-gate/prep")["plan_status"] == "draft"
+        assert status(app, "homelab-m1-gate/done-before")["plan_status"] != "needs_spec"
+        r = client.post(f"{P}/approve", json={"keys": [GATE, "homelab-m1-gate/prep"]})
+        assert r.status_code == 200 and r.json()["approved"] == [GATE, "homelab-m1-gate/prep"]
+
+
+def test_an_epic_with_one_unplanned_story(store):
+    store.plan([("billing", [])])
+    with_spec(store, "billing", "Monthly invoice", "Tax")
+    store.change("billing", breakdown(deliverable("b1", covers=["billing#Monthly invoice"]),
+                                      deliverable("b2", covers=["billing#Tax"]), deliverable("b3")))
+    fake = FakeSortie()
+    fake.plan_states = STATES
+    app = create_app(make_config(store.root), validate=validate_specs, sortie=fake.client())
+    with TestClient(app) as client:
+        sign_in(client)
+        assert project(app).plan.errors == []
+        assert status(app, "billing/b3")["plan_status"] == "needs_spec"
+
+        r = client.post(f"{P}/approve", json={"epic": "billing"})
+        assert r.status_code == 200 and r.json()["approved"] == ["billing/b1", "billing/b2"]
+        assert status(app, "billing/b1")["plan_status"] == "ready" and status(app, "billing/b2")["plan_status"] == "ready"
+        assert status(app, "billing/b3")["plan_status"] == "needs_spec" and status(app, "billing/b3")["approval"] == "draft"
+        rt = project(app)
+        assert set(rt.registry.approvals(rt.project.id)) == {"billing/b1", "billing/b2"}
+
+        # Approving it by name, alongside a story that has a spec, records nothing.
+        r = client.post(f"{P}/approve", json={"keys": ["billing/b1", "billing/b3"]})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "no_spec" and r.json()["error"]["plan_key"] == "billing/b3"
+        assert set(rt.registry.approvals(rt.project.id)) == {"billing/b1", "billing/b2"}
+
+
+def test_an_approval_from_before_a_spec_was_required_stands(store):
+    store.plan([("homelab-m1-gate", [])])
+    store.change("homelab-m1-gate", breakdown(deliverable("m1-gate")))
+    fake = FakeSortie()
+    fake.plan_states = STATES
+    app = app_for(store, fake)
+    with TestClient(app) as client:
+        sign_in(client)
+        rt = project(app)
+        # Recorded by a workbench that let a story without a spec be approved.
+        rt.registry.approve(rt.project.id, {GATE: rt.plan.stories[GATE]["digest"]}, "local|operator", "Local operator")
+        settle(client)
+        gate = status(app, GATE)
+        assert gate["approval"] == "approved" and gate["plan_status"] == "ready"
+        assert gate["approved_by"]["name"] == "Local operator"
+        assert GATE not in not_ready(app)
+        assert set(rt.registry.approvals(rt.project.id)) == {GATE}
+        # Approving it again is no change, not a refusal.
+        assert client.post(f"{P}/approve", json={"keys": [GATE]}).status_code == 200

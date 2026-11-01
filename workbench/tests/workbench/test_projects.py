@@ -120,7 +120,7 @@ def test_two_projects_plan_and_sync_apart(store):
         change = other.store / "openspec" / "changes" / "welcome"
         change.mkdir()
         (change / "proposal.md").write_text("## Why\n\nwelcome\n")
-        (change / "breakdown.yaml").write_text(yaml.safe_dump(breakdown(deliverable("greet"))))
+        (change / "breakdown.yaml").write_text(yaml.safe_dump(breakdown(deliverable("greet", kind="enabler"))))
         settle(client, "onboarding")
         settle(client)
 
