@@ -79,7 +79,7 @@ export class GraphModel {
 
   statusLabel(n: GraphNode): string {
     if (n.tracker) return n.tracker.state;
-    return n.status === "draft" ? "Not synced" : "To do";
+    return n.status === "draft" ? "Not approved" : "To do";
   }
 
   progress(epic: GraphNode): { done: number; total: number } {
