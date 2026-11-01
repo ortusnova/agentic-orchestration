@@ -71,6 +71,8 @@ for cmd in smolvm podman go uv npm openspec gh git openssl python3; do
 done
 # shellcheck source=smolvm-version.sh
 . "$KIT/smolvm-version.sh"
+# shellcheck source=huly-restart-policy.sh
+. "$KIT/huly-restart-policy.sh"
 smolvm_version_ok > /dev/null || die "Sortie needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
 STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
@@ -95,14 +97,17 @@ say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench" && uv sync -q)
 (cd "$ROOT/workbench/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
 
+HULY_DIR=${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost}
 if ! curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json"; then
-  [[ -d ${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost} ]] || die "Huly is not running and HULY_COMPOSE_DIR is not set"
+  [[ -d $HULY_DIR ]] || die "Huly is not running and HULY_COMPOSE_DIR is not set"
   say "Starting Huly"
-  (cd "${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost}" && podman compose up -d >/dev/null)
+  (cd "$HULY_DIR" && podman compose up -d >/dev/null)
   for _ in $(seq 60); do curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" && break; sleep 2; done
 fi
-# Huly's containers carry restart: unless-stopped; podman honors it after a
-# reboot only through this user unit.
+# Every Huly container must restart unless stopped, and podman honors that
+# after a reboot only through this user unit. huly-selfhost leaves redpanda
+# without a policy (huly-restart-policy.sh).
+for name in $(huly_restart_policies "$HULY_DIR"); do say "Huly container $name now restarts unless stopped"; done
 systemctl --user is-enabled -q podman-restart.service || { say "Enabling podman-restart.service"; systemctl --user enable -q podman-restart.service; }
 say "Preparing Huly project $STAGE0_HULY_PROJECT"
 python3 "$ROOT/dev/huly_project.py" "$STAGE0_HULY_URL" "$STAGE0_HULY_WORKSPACE" "$STAGE0_HULY_EMAIL" \
