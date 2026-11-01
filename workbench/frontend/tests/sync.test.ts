@@ -65,6 +65,23 @@ describe("the tracker notice", () => {
     expect(sync.calls).toEqual(["retry"]);
   });
 
+  it("drops the notice once a sync succeeds", async () => {
+    show(status({ state: "failed", failed_at: 1_800_000_100, retry_at: 1_800_000_160,
+      reason: { code: "sortie_unreachable", message: "cannot reach Sortie: connection refused" } }));
+    await settle();
+    $<HTMLButtonElement>("[data-sync]")!.click();
+    await settle();
+    expect($("[role='alert']")!.textContent).toContain("Sortie is unreachable");
+    (app as unknown as { update: (s: SyncStatusT) => void }).update(status({ state: "syncing" }));
+    await settle();
+    expect($("[data-sync]")).toBeNull();
+    (app as unknown as { update: (s: SyncStatusT) => void }).update(status({ synced_at: 1_800_000_200, runs: 2 }));
+    await settle();
+    expect($("[data-sync]")).toBeNull();
+    expect($("[data-sync-result]")).toBeNull();
+    expect(document.body.textContent!.toLowerCase()).not.toContain("tracker not updated");
+  });
+
   it("names a failed write, what it updated first, and a missing capability", async () => {
     show(status({ state: "failed", reason: { code: "tracker_unsupported_operation", message: "the tracker lacks link_dependency" },
       result: { created: [{ plan_key: "billing/b1", identifier: "T-1" }], failed: { op: "create", plan_key: "billing/b2", error: "boom" } } }));
