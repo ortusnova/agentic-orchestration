@@ -364,7 +364,7 @@ def test_sync_is_on_unless_workbench_sync_is_0(tmp_path):
 
 def test_with_sync_off_nothing_is_written_to_the_tracker(store):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("b1"), deliverable("b2")))
+    store.change("billing", breakdown(deliverable("b1", covers=["billing#Do b1"]), deliverable("b2", covers=["billing#Do b2"])))
     fake = FakeSortie()
     fake.plan_states = STATES
     fake.issue("billing/b2", state="Todo")
@@ -374,7 +374,7 @@ def test_with_sync_off_nothing_is_written_to_the_tracker(store):
         settle(client)
         assert client.post(f"{P}/approve", json={"epic": "billing"}).status_code == 200
         # An approved story released, then edited: a writing workbench pulls it back.
-        store.change("billing", breakdown(deliverable("b1"), deliverable("b2", title="Changed")))
+        store.change("billing", breakdown(deliverable("b1", covers=["billing#Do b1"]), deliverable("b2", title="Changed", covers=["billing#Do b2"])))
         settle(client)
         settle(client)
         for path in ("stories/pull-back", "stories/cancel"):

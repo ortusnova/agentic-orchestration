@@ -16,8 +16,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class StoreBuilder:
     """Builds a throwaway spec store under a temp dir."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, specs_for_covers: bool = False):
         self.root = root
+        # Workbench tests turn this on: a breakdown's covers then get the
+        # delta spec they name, so a story can be approved offline.
+        self.specs_for_covers = specs_for_covers
         schema_dir = root / "openspec" / "schemas" / "planning"
         schema_dir.mkdir(parents=True)
         for f in (FIXTURES / "schemas").glob("*.schema.json"):
@@ -38,7 +41,28 @@ class StoreBuilder:
         (d / "proposal.md").write_text(f"## Why\n\n{name}\n")
         if breakdown is not None:
             self._write(d / "breakdown.yaml", breakdown)
+            if self.specs_for_covers and isinstance(breakdown, dict):
+                self._spec_for_covers(d, breakdown)
         return d
+
+    @staticmethod
+    def _spec_for_covers(change_dir: Path, breakdown: dict) -> None:
+        """Write the delta spec a breakdown's ``covers`` names, adding only
+        the requirements a spec file there does not have yet."""
+        wanted: dict[str, list[str]] = {}
+        for d in breakdown.get("deliverables", []):
+            for ref in d.get("covers") or []:
+                cap, _, name = ref.partition("#")
+                if name and name not in wanted.setdefault(cap, []):
+                    wanted[cap].append(name)
+        for cap, names in wanted.items():
+            f = change_dir / "specs" / cap / "spec.md"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            body = f.read_text() if f.exists() else "## ADDED Requirements\n\n"
+            for n in names:
+                if f"### Requirement: {n}\n" not in body:
+                    body += f"### Requirement: {n}\nIt SHALL {n}.\n\n#### Scenario: s\n- **WHEN** a\n- **THEN** b\n\n"
+            f.write_text(body)
 
     def milestones(self, milestones: list[dict] | dict | str) -> Path:
         if isinstance(milestones, list):
