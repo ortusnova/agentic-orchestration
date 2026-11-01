@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from fastapi.testclient import TestClient
 
 from workbench.auth import hash_password
 from workbench.config import Config
+from tests.conftest import StoreBuilder
 
 PASSWORD = "correct horse"
 SORTIE_TOKEN = "sortie-control-token-0123456789"
@@ -78,3 +80,16 @@ def settle(client: TestClient, slug: str = SLUG) -> None:
         await rt.hub.poll_once()
 
     client.portal.call(run)
+
+
+@pytest.fixture
+def store(tmp_path: Path) -> StoreBuilder:
+    """A throwaway store whose breakdowns' covers get the specs they name."""
+    return StoreBuilder(tmp_path / "store", specs_for_covers=True)
+
+
+@pytest.fixture
+def make_store(tmp_path: Path) -> Callable[[str], StoreBuilder]:
+    def make(name: str) -> StoreBuilder:
+        return StoreBuilder(tmp_path / name, specs_for_covers=True)
+    return make

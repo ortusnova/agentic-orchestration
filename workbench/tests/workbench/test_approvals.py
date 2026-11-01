@@ -21,8 +21,8 @@ STATES = {"release": "Todo", "backlog": "Backlog", "cancel": "Canceled", "done":
 
 def billing(store, *extra):
     store.plan([("accounts", []), ("billing", ["accounts"])])
-    store.change("accounts", breakdown(deliverable("a3", kind="enabler")))
-    store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", kind="enabler"), *extra))
+    store.change("accounts", breakdown(deliverable("a3", covers=["accounts#Do a3"])))
+    store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], covers=["billing#Do b1"]), deliverable("b2", covers=["billing#Do b2"]), *extra))
 
 
 def app_for(store, fake, **cfg):
@@ -76,7 +76,7 @@ def test_frozen_story_edit_is_refused(store):
         project(app).hub.frozen = {}
         settle(client)
         assert status(app, "billing/b2")["plan_status"] == "frozen"
-        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", title="Changed", kind="enabler")))
+        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], covers=["billing#Do b1"]), deliverable("b2", title="Changed", covers=["billing#Do b2"])))
         settle(client)
         assert any(e["code"] == "frozen" for e in project(app).plan.errors)
 
@@ -92,7 +92,7 @@ def test_an_edit_to_a_released_story_pulls_it_back(store):
         settle(client)
         client.post(f"{P}/approve", json={"epic": "billing"})
         assert status(app, "billing/b2")["plan_status"] == "released"
-        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], kind="enabler"), deliverable("b2", title="Edited", kind="enabler")))
+        store.change("billing", breakdown(deliverable("b1", ["accounts/a3"], covers=["billing#Do b1"]), deliverable("b2", title="Edited", covers=["billing#Do b2"])))
         settle(client)
         assert fake.pulled_back == ["billing/b2"]
         # The next poll sees the story back in the backlog.
@@ -102,7 +102,7 @@ def test_an_edit_to_a_released_story_pulls_it_back(store):
 
 def test_cancel_sends_dependents_to_rereview(store):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler"), deliverable("c1", ["b1"], kind="enabler")))
+    store.change("billing", breakdown(deliverable("a3", covers=["billing#Do a3"]), deliverable("b1", ["a3"], covers=["billing#Do b1"]), deliverable("c1", ["b1"], covers=["billing#Do c1"])))
     fake = FakeSortie()
     fake.plan_states = STATES
     fake.issue("billing/a3", state="In Progress", runtime={"status": "running"})
@@ -121,14 +121,14 @@ def test_cancel_sends_dependents_to_rereview(store):
 
 def test_supersede_cancels_the_replaced_story_and_keeps_dependents(store):
     store.plan([("billing", [])])
-    store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler")))
+    store.change("billing", breakdown(deliverable("a3", covers=["billing#Do a3"]), deliverable("b1", ["a3"], covers=["billing#Do b1"])))
     fake = FakeSortie()
     fake.plan_states = STATES
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
         client.post(f"{P}/approve", json={"epic": "billing"})
-        store.change("billing", breakdown(deliverable("a3", kind="enabler"), deliverable("a3b", supersedes="a3", kind="enabler"), deliverable("b1", ["a3"], kind="enabler")))
+        store.change("billing", breakdown(deliverable("a3", covers=["billing#Do a3"]), deliverable("a3b", supersedes="a3", covers=["billing#Do a3b"]), deliverable("b1", ["a3"], covers=["billing#Do b1"])))
         settle(client)
         assert "billing/a3b" in project(app).plan.stories
         assert client.post(f"{P}/stories/supersede", json={"key": "billing/a3b"}).json()["error"]["code"] == "replacement_draft"
@@ -259,7 +259,7 @@ def test_a_story_that_covers_no_requirement_cannot_be_approved(store):
         assert status(app, GATE)["plan_status"] == "needs_spec" and status(app, GATE)["approval"] == "draft"
 
 
-def test_a_story_with_a_spec_or_delivered_needs_none(store):
+def test_a_story_with_a_spec_or_delivered_needs_none_and_an_enabler_needs_one(store):
     store.plan([("homelab-m1-gate", [])])
     with_spec(store, "homelab-m1-gate", "Gate")
     store.change("homelab-m1-gate", breakdown(deliverable("m1-gate", covers=["homelab-m1-gate#Gate"]),
@@ -272,10 +272,13 @@ def test_a_story_with_a_spec_or_delivered_needs_none(store):
         sign_in(client)
         settle(client)
         assert status(app, GATE)["plan_status"] == "draft"
-        assert status(app, "homelab-m1-gate/prep")["plan_status"] == "draft"
+        # An enabler is approved as a spec too: without one, it cannot be.
+        assert status(app, "homelab-m1-gate/prep")["plan_status"] == "needs_spec"
         assert status(app, "homelab-m1-gate/done-before")["plan_status"] != "needs_spec"
-        r = client.post(f"{P}/approve", json={"keys": [GATE, "homelab-m1-gate/prep"]})
-        assert r.status_code == 200 and r.json()["approved"] == [GATE, "homelab-m1-gate/prep"]
+        r = client.post(f"{P}/approve", json={"keys": ["homelab-m1-gate/prep"]})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "no_spec"
+        r = client.post(f"{P}/approve", json={"keys": [GATE]})
+        assert r.status_code == 200 and r.json()["approved"] == [GATE]
 
 
 def test_an_epic_with_one_unplanned_story(store):

@@ -183,7 +183,7 @@ Each story shows its plan status on its node and in its details. The graph API n
 
 | Status | Meaning |
 | --- | --- |
-| Needs a spec (`needs_spec`) | Not approved, covers no requirement (`covers` is empty), and not done. It cannot be approved: the workbench offers no **Approve**, the epic's approval leaves it out, and `POST approve` naming it fails with `no_spec`. An enabler needs no spec, and an approval recorded before this rule stands. |
+| Needs a spec (`needs_spec`) | Not approved, covers no requirement (`covers` is empty), and not done. It cannot be approved: the workbench offers no **Approve**, the epic's approval leaves it out, and `POST approve` naming it fails with `no_spec`. This holds for an enabler too. An approval recorded before this rule stands. |
 | Draft (`draft`) | Not approved, or edited since its approval. |
 | Held (`held`) | Approved, but a story it depends on is not approved yet. The details name those stories. Shown as "held for approval" on the node. |
 | Ready (`ready`) | Approved, with every direct blocker approved or merged. The next sync releases it. |

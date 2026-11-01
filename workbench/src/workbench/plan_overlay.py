@@ -47,10 +47,10 @@ def is_delivered(t: dict[str, Any] | None, plan_states: dict[str, str] | None) -
 
 
 def needs_spec(node: dict[str, Any], t: dict[str, Any] | None, plan_states: dict[str, str] | None) -> bool:
-    """Whether a story cannot be approved for want of a spec: it covers no
-    requirement and is not delivered. An enabler needs no spec."""
-    return (node.get("kind") == "story" and node.get("deliverable_kind") == "story" and not node.get("covers")
-            and not is_delivered(t, plan_states))
+    """Whether a deliverable cannot be approved for want of a spec: it
+    covers no requirement and is not delivered. A person approves a spec,
+    so an enabler needs one too."""
+    return node.get("kind") == "story" and not node.get("covers") and not is_delivered(t, plan_states)
 
 
 def frozen_set(stories: dict[str, dict], approvals: dict[str, dict], tracker: dict[str, Any] | None) -> dict[str, str]:
