@@ -10,9 +10,10 @@ choice.
 - A breakdown may name a `repository` for all its deliverables, and a
   deliverable may name its own, which overrides it. A name is kebab-case:
   the name Sortie's workflow lists the repository under.
-- The plan graph does not carry it yet. Its schema is the contract with
-  Sortie, which publishes its own copy; Sortie's `story-repository` adds the
-  node field, and planlib emits it after that.
+- Each story node of a version 2 plan graph carries its resolved
+  repository, and none when none is named. The graph schema is the contract
+  with Sortie, copied from Sortie's own, which gained the field in
+  `story-repository`.
 - A story's approval digest covers its resolved repository, so changing the
   breakdown's default returns its stories to draft.
 
@@ -21,9 +22,11 @@ choice.
 ### Modified Capabilities
 
 - `planning/breakdown-artifact`: "Published schema" gains `repository`.
+- `planning/plan-validator`: "The validated graph is the exchange format"
+  gains each story's resolved repository.
 
 ## Impact
 
-- `workbench/src/planlib` (approval, frozen check), the breakdown schema the
+- `workbench/src/planlib` (approval, frozen check, graph), the breakdown schema the
   workbench ships, and its test fixture.
 - Sortie reads the field in the spec store's `agent-platform/story-repository`.

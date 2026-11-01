@@ -154,14 +154,32 @@ def test_graph_version_follows_the_store_schema(store):
     assert r.errors == [] and r.graph["schema_version"] == 1
 
 
-def test_the_graph_leaves_repository_out_until_sortie_reads_it(store):
-    # The plan graph schema is Sortie's contract (test_load); Sortie's
-    # story-repository adds the node field, and planlib emits it after.
-    store.plan([("workers", [])])
+def test_each_story_carries_its_resolved_repository(store):
+    store.plan([("workers", []), ("plain", [])])
     store.change("workers", breakdown(deliverable("wiring"), deliverable("daemon", repository="agentic-orchestration"),
                                       repository="sortie"))
+    store.change("plain", breakdown(deliverable("docs")))
     r = validate(store.root, show=no_openspec)
     assert r.errors == []
+    assert Schemas.load(store.root).check("plan-graph", r.graph, file="g") == []
+    nodes = by_key(r.graph)
+    assert nodes["workers/wiring"]["repository"] == "sortie"
+    assert nodes["workers/daemon"]["repository"] == "agentic-orchestration"
+    assert "repository" not in nodes["plain/docs"]
+    assert "repository" not in nodes["workers"]
+
+
+def test_a_version_1_graph_carries_no_repository(store):
+    store.plan([("workers", [])])
+    store.change("workers", breakdown(deliverable("wiring"), repository="sortie"))
+    schema = store.root / "openspec/schemas/planning/plan-graph.schema.json"
+    doc = json.loads(schema.read_text())
+    doc["properties"]["schema_version"] = {"const": 1}
+    for field in ("release", "review", "approved_by", "approved_at", "repository"):
+        doc["$defs"]["node"]["properties"].pop(field)
+    schema.write_text(json.dumps(doc))
+    r = validate(store.root, show=no_openspec)
+    assert r.errors == [] and r.graph["schema_version"] == 1
     assert all("repository" not in n for n in r.graph["nodes"])
 
 
