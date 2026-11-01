@@ -86,7 +86,7 @@ VMs see only smolvm placeholders.
 
 | Credential | Source |
 | --- | --- |
-| GitHub | `github-token` in the stage-0 home, else `gh auth token` |
+| GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. A login token lasts hours, so `ortus-stage0-token.timer` restarts Sortie onto a fresher one while no agent runs |
 | Huly | a login with the dev account in `stage0.env` |
 
