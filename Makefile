@@ -10,15 +10,15 @@ help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
 
 test: ## Run every component's tests, and the stage-0 kit's
-	@set -e; for c in $(COMPONENTS); do echo "== $c: test"; $(MAKE) -s -C $c test; done
+	@set -e; for c in $(COMPONENTS); do echo "== $$c: test"; $(MAKE) -s -C $$c test; done
 	@echo "== dev/stage0: test"; $(MAKE) -s -C dev/stage0 test
 
 lint: licenses no-placeholder specs ## Lint every component, check the license copies and placeholders, and validate the specs
-	@set -e; for c in $(COMPONENTS); do echo "== $c: lint"; $(MAKE) -s -C $c lint; done
+	@set -e; for c in $(COMPONENTS); do echo "== $$c: lint"; $(MAKE) -s -C $$c lint; done
 	@echo "== dev/stage0: lint"; $(MAKE) -s -C dev/stage0 lint
 
 check-latest: ## Fail when a Go component's dependency, or the kit's nono, is behind its latest stable release (network)
-	@set -e; for m in $(GO_MODULES); do echo "== $m: check-latest"; $(MAKE) -s -C $m check-latest; done
+	@set -e; for m in $(GO_MODULES); do echo "== $$m: check-latest"; $(MAKE) -s -C $$m check-latest; done
 	@echo "== dev/stage0: check-latest"; $(MAKE) -s -C dev/stage0 check-latest
 
 # smolvm rejects every request that carries its credential-placeholder prefix,
