@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/secrets"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry/otlp"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/secrets"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry/otlp"
 )
 
 // spanLog collects the spans a recorder emits.

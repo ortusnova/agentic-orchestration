@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/transport"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/transport"
 )
 
 const viewerToken = "viewer-token-for-tests-123"

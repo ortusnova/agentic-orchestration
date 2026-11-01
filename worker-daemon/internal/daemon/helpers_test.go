@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/config"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/daemon"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/fakecp"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/hostinfo"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine/fakemachine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/daemon"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine/fakemachine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // The test binary is also the fake agent and its usage command: the

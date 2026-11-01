@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 // Config wires a broker to its three parties.

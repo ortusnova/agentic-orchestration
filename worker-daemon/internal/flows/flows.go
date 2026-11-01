@@ -21,9 +21,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/secret"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/ws"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/ws"
 )
 
 // Access is where one flow is and the token that admits a job to it.

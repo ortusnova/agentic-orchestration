@@ -17,8 +17,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/config"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // Errors the worker API answers with 409.

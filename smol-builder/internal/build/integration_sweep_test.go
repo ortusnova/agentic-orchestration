@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/stack"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/stack"
 )
 
 // TestIntegrationSweepsKilledBuild kills a build, with every program it

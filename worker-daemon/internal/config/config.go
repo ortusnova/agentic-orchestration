@@ -14,7 +14,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // Config is the daemon's configuration.

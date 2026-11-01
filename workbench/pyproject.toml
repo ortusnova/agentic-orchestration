@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.urls]
-Source = "https://github.com/briancappello/agentic-orchestration"
+Source = "https://github.com/ortusnova/agentic-orchestration"
 
 [project.scripts]
 planlib = "planlib.cli:main"

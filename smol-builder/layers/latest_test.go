@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/internal/latest"
-	"github.com/briancappello/agentic-orchestration/smol-builder/layers"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/internal/latest"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/layers"
 )
 
 // dockerfile is the pins one layer's Dockerfile declares.

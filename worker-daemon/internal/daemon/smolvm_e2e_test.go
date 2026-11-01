@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/fakecp"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // e2eAgent is the agent of the smolvm end-to-end run, a shell script so

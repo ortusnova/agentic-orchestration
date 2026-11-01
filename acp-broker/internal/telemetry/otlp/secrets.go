@@ -3,7 +3,7 @@ package otlp
 import (
 	"net/http"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/secrets"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/secrets"
 )
 
 // RegisterSecrets tells the masking which values must never leave as

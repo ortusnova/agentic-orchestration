@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/secret"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 )
 
 // Egress is the guest's HTTP proxy. It carries each CONNECT tunnel and

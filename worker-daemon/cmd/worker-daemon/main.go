@@ -21,11 +21,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/config"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/daemon"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/hostinfo"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/machine"
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/daemon"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".

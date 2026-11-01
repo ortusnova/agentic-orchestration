@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/briancappello/agentic-orchestration/smol-builder/layers"
+	"github.com/ortusnova/agentic-orchestration/smol-builder/layers"
 )
 
 const goodHeader = "ARG BASE\nFROM ${BASE}\nRUN true\n"

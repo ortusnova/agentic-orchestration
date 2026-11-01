@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")

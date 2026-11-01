@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/broker"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/broker"
 )
 
 // Defaults for the HTTP transport.
@@ -56,7 +56,7 @@ type HTTPConfig struct {
 
 // DefaultSourceURL is where the source of this broker is published.
 // Whoever runs a modified broker points SourceURL at theirs.
-const DefaultSourceURL = "https://github.com/briancappello/agentic-orchestration"
+const DefaultSourceURL = "https://github.com/ortusnova/agentic-orchestration"
 
 // About is the answer to GET /source.
 type About struct {

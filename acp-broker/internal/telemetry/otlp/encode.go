@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/secrets"
-	"github.com/briancappello/agentic-orchestration/acp-broker/internal/telemetry"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/secrets"
+	"github.com/ortusnova/agentic-orchestration/acp-broker/internal/telemetry"
 )
 
 // ServiceName names the broker in every export's resource.

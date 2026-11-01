@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/briancappello/agentic-orchestration/worker-daemon/internal/secret"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 )
 
 // Version is the worker API protocol this daemon speaks.
