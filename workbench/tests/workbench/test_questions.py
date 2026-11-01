@@ -96,6 +96,23 @@ def test_a_new_park_shows_at_the_next_refresh(store):
         assert [q["statement"] for q in home(app)["questions"]] == ["Which repository should the daemon live in?"]
 
 
+def test_a_question_names_the_story_that_replaces_its_story():
+    """A story the plan replaces is closed by confirming the replacement, so
+    its question names the replacement; any other question names none."""
+    nodes = [
+        {"plan_key": "apw/worker-daemon", "kind": "story", "change": "apw", "title": "Daemon",
+         "tracker": {"identifier": "ONS-25", "url": None}},
+        {"plan_key": "apw/worker-daemon-in-ao", "kind": "story", "change": "apw", "title": "Daemon in AO",
+         "supersedes": "apw/worker-daemon", "tracker": {"identifier": "ONS-31", "url": None}},
+        {"plan_key": "apw/other", "kind": "story", "change": "apw", "title": "Other", "tracker": {"identifier": "ONS-40", "url": None}},
+    ]
+    qs = {"ONS-25": {"identifier": "ONS-25", "statement": "s", "parked_at": 2.0, "reason": None},
+          "ONS-40": {"identifier": "ONS-40", "statement": "t", "parked_at": 1.0, "reason": None}}
+    by_key = {q["key"]: q for q in home_questions(qs, nodes)}
+    assert by_key["apw/worker-daemon"]["replaced_by"] == {"key": "apw/worker-daemon-in-ao", "label": "worker-daemon-in-ao", "title": "Daemon in AO"}
+    assert by_key["apw/other"]["replaced_by"] is None
+
+
 def test_a_park_on_another_projects_issue_is_not_this_projects_question(store):
     fake = parked_story(store)
     fake.park("T-99", "Not ours")

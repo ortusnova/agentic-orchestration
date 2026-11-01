@@ -76,6 +76,16 @@
     }
   }
 
+  async function replace(replacement: string): Promise<string | null> {
+    try {
+      await sync.supersede(replacement);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return "Closing a story needs the approver role.";
+      return err instanceof Error ? err.message : "The story was not closed.";
+    }
+  }
+
   /** Select a node from outside the graph, moving to the level that shows it. */
   function selectAnywhere(key: string | null) {
     const n = key ? doc.nodes.find((x) => x.plan_key === key) : undefined;
@@ -102,7 +112,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />

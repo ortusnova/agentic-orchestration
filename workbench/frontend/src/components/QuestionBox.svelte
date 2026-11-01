@@ -4,7 +4,7 @@
   import type { Question } from "../lib/types";
 
   let {
-    question, story, canAnswer, onanswer,
+    question, story, canAnswer, onanswer, replacedBy = null, onreplace,
   }: {
     question: Question;
     /** The story's plan key, which names the form. */
@@ -13,7 +13,28 @@
     canAnswer: boolean;
     /** Send the answer; resolves to an error message, or null. */
     onanswer: (text: string) => Promise<string | null>;
+    /** The story the plan replaces this one with, when there is one. */
+    replacedBy?: { key: string; label: string; title: string } | null;
+    /** Close this story as replaced (confirm the supersede); resolves to an error message, or null. */
+    onreplace?: () => Promise<string | null>;
   } = $props();
+
+  let confirming = $state(false);
+  let closed = $state(false);
+
+  async function replace() {
+    if (!onreplace || busy) return;
+    busy = true;
+    error = "";
+    const err = await onreplace();
+    busy = false;
+    confirming = false;
+    if (err) {
+      error = err;
+      return;
+    }
+    closed = true;
+  }
 
   let text = $state("");
   let busy = $state(false);
@@ -44,7 +65,23 @@
   <p class="when">
     Stopped {#if when}<time datetime={when.iso}>{when.text}</time>{:else}at a time Sortie does not report{/if}{#if question.reason} · {question.reason}{/if}
   </p>
-  {#if sent}
+  {#if replacedBy && !closed}
+    <div class="replaced" data-replaced-by={replacedBy.key}>
+      <p>The plan replaces this story with <b>{replacedBy.label}</b> ({replacedBy.title}). Closing it as replaced cancels it and moves the stories that depend on it there; no answer is needed.</p>
+      {#if canAnswer && onreplace}
+        {#if confirming}
+          <p class="confirm">Cancel {story} and move the stories that depend on it to {replacedBy.key}?</p>
+          <button type="button" class="send" data-act="confirm-replace" disabled={busy} onclick={replace}>{busy ? "Closing…" : "Close as replaced"}</button>
+          <button type="button" class="keep" data-act="keep" disabled={busy} onclick={() => (confirming = false)}>Keep it</button>
+        {:else}
+          <button type="button" class="send" data-act="replace" onclick={() => (confirming = true)}>Close as replaced by {replacedBy.label}</button>
+        {/if}
+      {/if}
+    </div>
+  {/if}
+  {#if closed}
+    <p class="sent" role="status">Closed as replaced by {replacedBy?.label}. The question leaves once Sortie cancels the story.</p>
+  {:else if sent}
     <p class="sent" role="status">Answer sent. The story resumes once Sortie releases it.</p>
   {:else if canAnswer}
     <form onsubmit={send}>
@@ -75,4 +112,8 @@
   .none { font-size: 12px; color: var(--mute); }
   .sent { font-size: 12px; color: var(--done); }
   .err { font-size: 11.5px; color: #8f241d; }
+  .replaced { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--strip); font-size: 12.5px; }
+  .replaced p { flex-basis: 100%; }
+  .confirm { font-weight: 600; }
+  .keep { height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; font-weight: 600; }
 </style>

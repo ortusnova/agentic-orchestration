@@ -131,6 +131,41 @@ describe("Scenario: A question on the home page", () => {
   });
 });
 
+describe("a story the plan replaces", () => {
+  const replaced = (): MergedGraph => {
+    const d = doc(true);
+    d.home!.questions = [{ ...homeQuestion(), replaced_by: { key: "apw/worker-daemon-in-ao", label: "worker-daemon-in-ao", title: "The worker daemon, in agentic-orchestration" } }];
+    return d;
+  };
+
+  it("says which story replaces it, and closes it as replaced after a confirmation", async () => {
+    approver();
+    const closed: string[] = [];
+    app = mount(HomeHarness, { target: document.body, props: { initial: replaced(), onreplace: async (k: string) => { closed.push(k); return null; } } });
+    await settle();
+    expect(text(`[data-question='${KEY}'] [data-replaced-by]`)).toContain("worker-daemon-in-ao");
+    $<HTMLButtonElement>(`[data-question='${KEY}'] [data-act='replace']`)!.click();
+    await settle();
+    expect(closed).toEqual([]);
+    expect(text(`[data-question='${KEY}'] .confirm`)).toContain("Cancel apw/worker-daemon");
+    $<HTMLButtonElement>(`[data-question='${KEY}'] [data-act='confirm-replace']`)!.click();
+    await settle();
+    expect(closed).toEqual(["apw/worker-daemon-in-ao"]);
+    expect(text(`[data-question='${KEY}'] [role=status]`)).toContain("Closed as replaced by worker-daemon-in-ao");
+  });
+
+  it("offers no close to a planner, and none when nothing replaces the story", async () => {
+    planner();
+    app = mount(HomeHarness, { target: document.body, props: { initial: replaced(), onreplace: async () => null } });
+    await settle();
+    expect($(`[data-question='${KEY}'] [data-act='replace']`)).toBeNull();
+    unmount(app); app = undefined; document.body.innerHTML = "";
+    approver();
+    await home(doc(true));
+    expect($(`[data-question='${KEY}'] [data-replaced-by]`)).toBeNull();
+  });
+});
+
 describe("Scenario: Answered", () => {
   it("sends an approver's answer, and says it went", async () => {
     approver();

@@ -74,6 +74,9 @@ def home_questions(questions: dict[str, dict[str, Any]], nodes: list[dict[str, A
     its story. A park on an issue that is not a story of this project is not
     this project's question."""
     by_ident = {n["tracker"]["identifier"]: n for n in nodes if n.get("kind") == "story" and n.get("tracker")}
+    # A story the plan replaces is closed by confirming its replacement, not
+    # by an answer: name the replacement, so the question can offer that.
+    replacement = {n["supersedes"]: n for n in nodes if n.get("kind") == "story" and n.get("supersedes")}
     out = []
     for ident, q in questions.items():
         n = by_ident.get(ident)
@@ -81,7 +84,9 @@ def home_questions(questions: dict[str, dict[str, Any]], nodes: list[dict[str, A
             continue
         key = n["plan_key"]
         out.append({**q, "key": key, "label": key.split("/", 1)[-1], "change": n.get("change") or key.split("/", 1)[0],
-                    "title": n.get("title") or key, "url": (n.get("tracker") or {}).get("url")})
+                    "title": n.get("title") or key, "url": (n.get("tracker") or {}).get("url"),
+                    "replaced_by": ({"key": r["plan_key"], "label": r["plan_key"].split("/", 1)[-1], "title": r.get("title") or r["plan_key"]}
+                                    if (r := replacement.get(key)) else None)})
     out.sort(key=lambda q: (q["parked_at"] is None, q["parked_at"] or 0.0, q["key"]))
     for i, q in enumerate(out, 1):
         q["rank"] = i
