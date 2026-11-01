@@ -1,5 +1,6 @@
 # Publish a Go module's release archives when its tag is pushed:
-# acp-broker/v0.1.0 releases acp-broker, smol-builder/v0.1.0 smol-builder.
+# acp-broker/v0.1.0 releases acp-broker, smol-builder/v0.1.0 smol-builder,
+# worker-daemon/v0.1.0 worker-daemon.
 
 name: Release
 
@@ -8,6 +9,7 @@ on:
     tags:
       - "acp-broker/v*"
       - "smol-builder/v*"
+      - "worker-daemon/v*"
 
 permissions:
   contents: read

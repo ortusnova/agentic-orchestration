@@ -1,0 +1,225 @@
+package machine
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"net"
+	"os/exec"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Smolvm drives the smolvm CLI. A machine gets no network flag, no
+// allowlist and no credential binding, so smolvm gives it no network:
+// its only way out is each forward, a host socket mounted with
+// --mount-socket and served on guest loopback by socat.
+type Smolvm struct {
+	// Binary is the smolvm program.
+	Binary string
+	// ReadyTries and ReadyWait bound the wait for the guest to run
+	// commands after a start.
+	ReadyTries int
+	ReadyWait  time.Duration
+}
+
+// Name implements [Backend].
+func (s *Smolvm) Name() string { return "smolvm" }
+
+// Available implements [Backend]: the binary runs.
+func (s *Smolvm) Available(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, s.Binary, "--version").CombinedOutput() // #nosec G204 -- the operator names the binary
+	if err != nil {
+		return fmt.Errorf("smolvm: %s --version: %w: %s", s.Binary, err, bytes.TrimSpace(out))
+	}
+	return nil
+}
+
+func machineArgs(sub string, rest ...string) []string {
+	return append([]string{"machine", sub, "--error-format", "json"}, rest...)
+}
+
+// guestSocket is where a forward's host socket is mounted.
+func guestSocket(name string) string { return "/run/worker-" + name + ".sock" }
+
+// CreateArgs returns the smolvm arguments that create spec's machine.
+func CreateArgs(spec Spec) ([]string, error) {
+	if spec.Name == "" || spec.Pack == "" {
+		return nil, errors.New("smolvm: a machine needs a name and a pack")
+	}
+	args := machineArgs("create", "--name", spec.Name, "--from", spec.Pack)
+	for _, sz := range []struct {
+		flag string
+		v    int
+	}{{"--cpus", spec.CPUs}, {"--mem", spec.MemMiB}, {"--storage", spec.DiskGiB}} {
+		if sz.v > 0 {
+			args = append(args, sz.flag, strconv.Itoa(sz.v))
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(spec.Labels)) {
+		args = append(args, "--label", k+"="+spec.Labels[k])
+	}
+	if spec.User != "" {
+		args = append(args, "--user", spec.User, "--init", "chown "+spec.User+" "+GuestWorkspace)
+	}
+	var paths []string
+	if spec.Share != "" {
+		paths = append(paths, spec.Share)
+	}
+	for _, f := range spec.Forwards {
+		paths = append(paths, f.HostSocket)
+	}
+	for _, p := range paths {
+		if p == "" || strings.Contains(p, ":") {
+			return nil, fmt.Errorf("smolvm: mount path %q is empty or contains ':'", p)
+		}
+	}
+	if spec.Share != "" {
+		args = append(args, "-v", spec.Share+":"+GuestShare)
+	}
+	for _, f := range spec.Forwards {
+		args = append(args, "--mount-socket", f.HostSocket+":"+guestSocket(f.Name))
+	}
+	return args, nil
+}
+
+// ExecArgs returns the smolvm arguments that run e in machine name.
+func ExecArgs(name string, e Exec) []string {
+	args := machineArgs("exec", "--name", name)
+	if e.Stdin != nil {
+		args = append(args, "-i")
+	} else {
+		args = append(args, "--stream")
+	}
+	if e.Workdir != "" {
+		args = append(args, "-w", e.Workdir)
+	}
+	for _, kv := range e.Env {
+		args = append(args, "-e", kv)
+	}
+	return append(append(args, "--"), e.Argv...)
+}
+
+// ForwardArgv is the guest command that serves a forward on loopback.
+func ForwardArgv(f Forward) []string {
+	return []string{"socat", "TCP-LISTEN:" + strconv.Itoa(f.GuestPort) + ",bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:" + guestSocket(f.Name)}
+}
+
+func (s *Smolvm) run(ctx context.Context, args []string) error {
+	cmd := exec.CommandContext(ctx, s.Binary, args...) // #nosec G204 -- argv, no shell
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("smolvm %s %s: %w: %s", args[0], args[1], err, tail(stderr.String()))
+	}
+	return nil
+}
+
+func tail(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 2048 {
+		s = s[len(s)-2048:]
+	}
+	return s
+}
+
+// Create implements [Backend]. A machine that fails to come up is
+// deleted.
+func (s *Smolvm) Create(ctx context.Context, spec Spec) (Machine, error) {
+	args, err := CreateArgs(spec)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.run(ctx, args); err != nil {
+		return nil, err
+	}
+	m := &smolvmMachine{s: s, name: spec.Name, addrs: map[string]string{}}
+	fail := func(err error) (Machine, error) {
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer cancel()
+		_ = m.Delete(dctx)
+		return nil, err
+	}
+	if err := s.run(ctx, machineArgs("start", "--name", spec.Name)); err != nil {
+		return fail(err)
+	}
+	if err := s.waitReady(ctx, m); err != nil {
+		return fail(err)
+	}
+	for _, f := range spec.Forwards {
+		if err := s.run(ctx, append(append(machineArgs("exec", "--name", spec.Name, "-d"), "--"), ForwardArgv(f)...)); err != nil {
+			return fail(err)
+		}
+		m.addrs[f.Name] = net.JoinHostPort("127.0.0.1", strconv.Itoa(f.GuestPort))
+	}
+	return m, nil
+}
+
+// waitReady waits until the guest runs socat: right after a start,
+// smolvm can run a command before the pack's root file system is in
+// place.
+func (s *Smolvm) waitReady(ctx context.Context, m *smolvmMachine) error {
+	tries, wait := s.ReadyTries, s.ReadyWait
+	if tries <= 0 {
+		tries = 20
+	}
+	if wait <= 0 {
+		wait = 250 * time.Millisecond
+	}
+	var last error
+	for range tries {
+		code, err := m.Exec(ctx, Exec{Argv: []string{"socat", "-V"}})
+		if err == nil && code == 0 {
+			return nil
+		}
+		last = fmt.Errorf("exit %d: %v", code, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return fmt.Errorf("smolvm: machine %s does not run socat, which its pack needs: %v", m.name, last)
+}
+
+type smolvmMachine struct {
+	s     *Smolvm
+	name  string
+	addrs map[string]string
+}
+
+func (m *smolvmMachine) Name() string { return m.name }
+
+func (m *smolvmMachine) GuestAddr(forward string) string { return m.addrs[forward] }
+
+func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
+	cmd := exec.CommandContext(ctx, m.s.Binary, ExecArgs(m.name, e)...) // #nosec G204 -- argv, no shell
+	cmd.Stdout, cmd.Stderr = e.Stdout, e.Stderr
+	cmd.WaitDelay = 5 * time.Second
+	if err := StartStdin(cmd, e.Stdin); err != nil {
+		return -1, err
+	}
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && ctx.Err() == nil {
+		return exitErr.ExitCode(), nil
+	}
+	if err != nil {
+		return -1, err
+	}
+	return 0, nil
+}
+
+func (m *smolvmMachine) Stop(ctx context.Context) error {
+	return m.s.run(ctx, machineArgs("stop", "--name", m.name))
+}
+
+func (m *smolvmMachine) Delete(ctx context.Context) error {
+	return m.s.run(ctx, machineArgs("delete", "-f", "--name", m.name))
+}

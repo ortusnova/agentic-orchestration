@@ -1,7 +1,7 @@
 # Build, test, and lint every component of this repository. Each component
 # also has its own Makefile, with build and release targets.
 
-GO_MODULES := acp-broker smol-builder
+GO_MODULES := acp-broker smol-builder worker-daemon
 COMPONENTS := workbench $(GO_MODULES)
 
 .PHONY: help test lint check-latest licenses no-placeholder specs dist
