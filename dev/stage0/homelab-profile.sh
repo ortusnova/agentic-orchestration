@@ -53,17 +53,33 @@ homelab_profile() {
   local mounts ns hosts guests i
   mounts="{host: \"$sources\", guest: \"/home/builder/.cache/homelab-sources\", read_only: true}"
   mounts+=", {host: \"$vmhost\", guest: \"/home/builder/.cache/homelab-vmhost\"}"
+  # One mount per cache namespace: Go's two caches (mod, build) share a
+  # parent, and a machine on taichi starts with at most 7 shared folders
+  # (smolvm 1.32.4, nested, virtio-net: 8 fail with "no more IRQs are
+  # available"), one of which Sortie adds for its control directory.
+  local count=2
   for ns in uv go; do
     mapfile -t hosts < <(cd "$hl" && python3 -m homelab.cache path --all "$ns")
     mapfile -t guests < <(cd "$hl" && env -u HOMELAB_CACHE_HOME HOME=/home/builder python3 -m homelab.cache path --all "$ns")
     (( ${#hosts[@]} == ${#guests[@]} && ${#hosts[@]} > 0 )) || die "homelab.cache gave no $ns paths"
-    for i in "${!hosts[@]}"; do
-      mkdir -p "${hosts[i]}"
-      mounts+=", {host: \"${hosts[i]}\", guest: \"${guests[i]}\"}"
-    done
+    for i in "${!hosts[@]}"; do mkdir -p "${hosts[i]}"; done
+    local pair
+    pair=$(python3 - "${#hosts[@]}" "${hosts[@]}" "${guests[@]}" <<'PY'
+import os, sys
+n = int(sys.argv[1]); hosts, guests = sys.argv[2:2 + n], sys.argv[2 + n:]
+h, g = (os.path.commonpath(hosts), os.path.commonpath(guests)) if n > 1 else (hosts[0], guests[0])
+if [os.path.relpath(x, h) for x in hosts] != [os.path.relpath(x, g) for x in guests]:
+    sys.exit(f"the host and guest {n} paths are laid out differently under {h} and {g}")
+print(h); print(g)
+PY
+    ) || die "homelab.cache's $ns paths cannot share one mount"
+    mounts+=", {host: \"${pair%%$'\n'*}\", guest: \"${pair#*$'\n'}\"}"
+    count=$((count + 1))
   done
   mounts+=", {host: \"$STAGE0_HOME/inputs/vm-age\", guest: \"/opt/homelab-inputs/vm-age\", read_only: true}"
   mounts+=", {host: \"$recorders/{workspace}\", guest: \"/var/log/homelab-recorder\"}"
+  count=$((count + 2))
+  (( count <= 6 )) || die "the homelab workflow would mount $count folders; a machine starts with at most 6 besides Sortie's own"
   export STAGE0_HOMELAB_MOUNTS="[$mounts]"
 
   (umask 077; printf 'STAGE0_SMOLVM_LIB_DIR=%s\n' "$krunfw" > "$STAGE0_HOME/profile.env")
