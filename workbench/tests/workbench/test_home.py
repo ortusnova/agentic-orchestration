@@ -383,3 +383,20 @@ def test_with_sync_off_nothing_is_written_to_the_tracker(store):
         assert client.get(f"{P}/graph").json()["sync"]["state"] == "disabled"
     writes = [(m, p) for m, p, _ in fake.requests if m == "POST"]
     assert writes == []
+
+
+def test_the_order_between_changes_ranks_the_change_that_comes_first(store):
+    """The pilot proves the route that two later changes wait on in
+    plan.yaml: its approval ranks first, and theirs wait on it."""
+    store.plan([("route", []), ("later", ["route"]), ("other", ["route"]), ("gate", ["later", "other"])])
+    store.change("route", breakdown(deliverable("image", kind="enabler"), deliverable("pilot", ["image"], kind="enabler")))
+    store.change("later", breakdown(deliverable("l1", kind="enabler"), deliverable("l2", ["l1"], kind="enabler")))
+    store.change("other", breakdown(deliverable("o1", kind="enabler")))
+    store.change("gate", breakdown(deliverable("g", ["later/l2", "other/o1"], kind="enabler")))
+    store.milestones([milestone("m1", [{"change": c} for c in ("route", "later", "other", "gate")], gate="gate/g")])
+    items = items_by_key(home_of(store, done={"route/image"}))
+    # later's two drafts are reviewed together, as one row.
+    pilot, later, o1 = items["route/pilot"], items["later"], items["other/o1"]
+    assert pilot["rank"] == 1 and pilot["slack"] == 0 and pilot["critical"]
+    assert pilot["dependents"] == 4
+    assert later["slack"] == 1 and o1["slack"] == 1 and later["rank"] > 1 and o1["rank"] > 1

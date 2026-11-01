@@ -202,10 +202,31 @@ def stories_by_change(graph: dict[str, Any] | None) -> dict[str, list[str]]:
 
 
 def story_blocks(graph: dict[str, Any] | None) -> list[tuple[str, str]]:
-    """(blocker, blocked) between stories."""
-    stories = {n["plan_key"] for n in (graph or {}).get("nodes") or [] if n.get("kind") == "story"}
-    return [(b["blocker"], b["blocked"]) for b in (graph or {}).get("blocks") or []
-            if b["blocker"] in stories and b["blocked"] in stories]
+    """(blocker, blocked) between stories: the stories' own dependencies, and
+    the plan's order between changes. When change B comes after change A, the
+    stories B starts with wait for the stories A ends with, so whatever is
+    counted along story dependencies (slack, dependents, the critical path)
+    also follows plan.yaml."""
+    nodes = (graph or {}).get("nodes") or []
+    stories = {n["plan_key"] for n in nodes if n.get("kind") == "story"}
+    epics = {n["plan_key"] for n in nodes if n.get("kind") != "story"}
+    blocks = (graph or {}).get("blocks") or []
+    out = [(b["blocker"], b["blocked"]) for b in blocks if b["blocker"] in stories and b["blocked"] in stories]
+    by_change = stories_by_change(graph)
+    inner = {(a, b) for a, b in out if a.split("/", 1)[0] == b.split("/", 1)[0]}
+    def ends(change: str) -> list[str]:  # stories no other story of the change waits on
+        return [s for s in by_change.get(change, []) if not any(a == s for a, _ in inner)]
+    def starts(change: str) -> list[str]:  # stories that wait on no other story of the change
+        return [s for s in by_change.get(change, []) if not any(b == s for _, b in inner)]
+    seen = set(out)
+    for b in blocks:
+        if b["blocker"] in epics and b["blocked"] in epics:
+            for a in ends(b["blocker"]):
+                for c in starts(b["blocked"]):
+                    if (a, c) not in seen:
+                        seen.add((a, c))
+                        out.append((a, c))
+    return out
 
 
 def members(m: dict[str, Any], by_change: dict[str, list[str]], tasks: dict[str, list[dict[str, Any]]]

@@ -180,10 +180,11 @@ class _Plan:
             (self.stories if n.get("kind") == "story" else self.epics).add_node(k)
         for b in graph.get("blocks") or []:
             a, c = b["blocker"], b["blocked"]
-            if a in self.stories and c in self.stories:
-                self.stories.add_edge(a, c)
-            elif a in self.epics and c in self.epics:
+            if a in self.epics and c in self.epics:
                 self.epics.add_edge(a, c)
+        # Story dependencies and the plan's order between changes, as the
+        # critical path counts them (planlib.milestones.story_blocks).
+        self.stories.add_edges_from(ms.story_blocks(graph))
         self.done = done
         self.dropped = dropped
         self.estimates = estimates
