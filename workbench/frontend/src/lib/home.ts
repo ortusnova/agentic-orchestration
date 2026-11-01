@@ -79,6 +79,8 @@ export interface HomeQuestion extends Question {
   title: string;
   url: string | null;
   rank: number;
+  /** The story the plan replaces this one with; closing it as replaced, not an answer, resolves the question. */
+  replaced_by?: { key: string; label: string; title: string } | null;
 }
 
 export interface Span {

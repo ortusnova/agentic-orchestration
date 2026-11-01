@@ -5,7 +5,7 @@
   import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, questions = [], slug, marks, onapprove, onanswer,
+    items, questions = [], slug, marks, onapprove, onanswer, onreplace,
   }: {
     items: NotReadyItem[];
     /** The open questions of parked stories, ranked first. */
@@ -16,6 +16,8 @@
     onapprove: (keys: string[]) => Promise<string | null>;
     /** Answer a parked story's question; resolves to an error message, or null. */
     onanswer: (key: string, text: string) => Promise<string | null>;
+    /** Confirm a replacement's supersede; resolves to an error message, or null. */
+    onreplace?: (replacement: string) => Promise<string | null>;
   } = $props();
 
   // A column shows this many items until a person asks for all of them.
@@ -87,7 +89,8 @@
             <div class="body">
               <a class="name" href={graphHref(slug, { epic: q.change, selected: q.key })} title="{q.key}: {q.title}">{q.label}</a>
               <span class="note">{[q.identifier, q.title].join(" · ")}</span>
-              <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)} />
+              <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)}
+                replacedBy={q.replaced_by ?? null} onreplace={onreplace && q.replaced_by ? () => onreplace(q.replaced_by!.key) : undefined} />
             </div>
           </li>
         {/each}
