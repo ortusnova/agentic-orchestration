@@ -5,14 +5,14 @@
 # To move to a new release, change NONO_VERSION and both sums together;
 # `make -C dev/stage0 check-latest` says when a newer one is out.
 # Sourced by stage0.sh.
-NONO_VERSION=0.80.0
+NONO_VERSION=0.81.0
 NONO_RELEASES=${NONO_RELEASES:-https://github.com/nolabs-ai/nono/releases/download}
 
 # nono_sha256 ARCH: the pinned sum of the archive for ARCH (uname -m).
 nono_sha256() {
   case $1 in
-    x86_64) echo 6da665b61999570c10dffc7da78828fe1fb7f3cac53319e505cebecaef17037f ;;
-    aarch64) echo d2a24c8c37714f85c829b5586ffd81fc2acf336c95372d881ba62140884f22cb ;;
+    x86_64) echo 7ecc33ff9c349bdfa84b4496e7a7555f67bcc33f1e125c7df9efb653c6c4e569 ;;
+    aarch64) echo a4d87ddb0917ef96224bcc41a2587318d7d0e92441e7ff454696e5980c9f7924 ;;
     *) return 1 ;;
   esac
 }
