@@ -20,6 +20,7 @@
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
 #   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack
 #   dev/stage0/stage0.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
+#                                         (deploy.sh does this once plan-bench moves)
 #
 # Every step checks first, so a second run changes nothing but a restart.
 # Settings live in $STAGE0_HOME/stage0.env, written on the first run (edit it,
@@ -47,6 +48,19 @@ done
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'stage0.sh: %s\n' "$*" >&2; exit 1; }
 secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
+
+# One run at a time: a second stage0.sh, or deploy.sh moving the live kit,
+# waits for this one. deploy.sh takes the lock itself and runs this under it
+# (STAGE0_LOCKED=1); the lock goes with the exec below.
+if [[ ${STAGE0_LOCKED:-} != 1 ]]; then
+  mkdir -p "$STAGE0_HOME"
+  exec 9> "$STAGE0_HOME/stage0.lock"
+  if ! flock -n 9; then
+    say "Waiting for another stage0.sh or a deploy to finish ($STAGE0_HOME/stage0.lock)"
+    flock 9
+  fi
+  export STAGE0_LOCKED=1
+fi
 
 # The live kit is the kit's own detached worktree of origin/main, never the
 # checkout this runs from: what runs is what merged, whatever a developer
@@ -212,7 +226,8 @@ HULY_DIR=${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost}
 if ! curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json"; then
   [[ -d $HULY_DIR ]] || die "Huly is not running and HULY_COMPOSE_DIR is not set"
   say "Starting Huly"
-  (cd "$HULY_DIR" && podman compose up -d >/dev/null)
+  # The containers outlive this run; they must not hold its lock.
+  (cd "$HULY_DIR" && podman compose up -d >/dev/null 9>&-)
   for _ in $(seq 60); do curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" && break; sleep 2; done
 fi
 # Every Huly container must restart unless stopped, and podman honors that
