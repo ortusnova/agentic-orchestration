@@ -15,6 +15,8 @@
 #                            login). Its expiry goes to $STAGE0_HOME/token-expiry,
 #                            which ortus-stage0-token.timer watches.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
+# The homelab profile reads exactly $STAGE0_HOME/github-token and
+# $STAGE0_HOME/claude-oauth-token, and falls back to neither gh nor a login.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
 # Git reaches GitHub over HTTPS with that same token, through a credential
 # helper in a kit-owned global config (GIT_CONFIG_GLOBAL): no SSH agent and
@@ -24,6 +26,10 @@ set -euo pipefail
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
+STAGE0_PROFILE=${STAGE0_PROFILE:-control}
+# Values stage0.sh derives for the homelab profile (homelab-profile.sh).
+# shellcheck source=/dev/null
+[[ -s $STAGE0_HOME/profile.env ]] && . "$STAGE0_HOME/profile.env"
 die() { printf 'run-sortie.sh: %s\n' "$*" >&2; exit 1; }
 
 export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -33,6 +39,8 @@ STAGE0_HULY_TOKEN=$(python3 "$STAGE0_KIT_ROOT/dev/huly_project.py" "$STAGE0_HULY
 export STAGE0_GITHUB_TOKEN
 if [[ -s $STAGE0_HOME/github-token ]]; then
   STAGE0_GITHUB_TOKEN=$(cat "$STAGE0_HOME/github-token")
+elif [[ $STAGE0_PROFILE == homelab ]]; then
+  die "$STAGE0_HOME/github-token is missing; the homelab profile uses no other GitHub token"
 else
   STAGE0_GITHUB_TOKEN=$(gh auth token) || die "gh has no token: run gh auth login"
 fi
@@ -40,9 +48,13 @@ export STAGE0_SORTIE_TOKEN
 STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
 
 export CLAUDE_CODE_OAUTH_TOKEN
-CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py") \
+token_args=()
+[[ $STAGE0_PROFILE == homelab ]] && token_args=(--setup-token-only)
+CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py" "${token_args[@]}") \
   || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
-"$(dirname "$0")/anthropic-token.py" --expiry > "$STAGE0_HOME/token-expiry"
+"$(dirname "$0")/anthropic-token.py" "${token_args[@]}" --expiry > "$STAGE0_HOME/token-expiry"
+# homelab's guest kernel: smolvm boots machines on the libkrunfw in this folder.
+if [[ -n ${STAGE0_SMOLVM_LIB_DIR:-} ]]; then export SMOLVM_LIB_DIR=$STAGE0_SMOLVM_LIB_DIR; fi
 export IS_SANDBOX=1
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY
 

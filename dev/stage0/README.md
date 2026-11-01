@@ -82,6 +82,49 @@ Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
 
+## The homelab profile (taichi)
+
+A second Sortie on a homelab dev host runs only homelab stories (spec store
+`run-homelab-through-sortie`, design D5-D12). It polls the same Huly project
+as p1's Sortie. p1's Sortie lists `homelab` closed to dispatch; this one
+lists only `homelab`, with no default, so every other story stays p1's.
+
+```sh
+# On p1, once: Huly on the homelab host's loopback, through a remote SSH forward.
+dev/stage0/huly-tunnel.sh taichi
+# On taichi, once homelab's `make dev-host` has run there:
+STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
+dev/stage0/stage0.sh                          # later runs read it from stage0.env
+```
+
+| Part | Where |
+| --- | --- |
+| Sortie | unit `ortus-stage0-sortie` on taichi, `127.0.0.1:7680`, workflow rendered from `WORKFLOW-homelab.md` |
+| Huly | p1's, at `http://127.0.0.1:8087` on taichi through unit `ortus-stage0-huly-tunnel@taichi` on p1. Nothing listens on the LAN, and taichi gets no SSH access to p1. While p1 sleeps, taichi's Sortie cannot reach the tracker and retries |
+| homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC` (default `~/dev/homelab`); every `stage0.sh` run moves it to the latest `origin/master` |
+| Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), running as `brian`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. A pack no Sortie machine was created from is deleted |
+| Machines | 8 vCPU, 20 GiB, a 200 GiB disk at `/workspace`, nested KVM, `virtio-net`, homelab's guest kernel (`SMOLVM_LIB_DIR`), at most `STAGE0_MAX_AGENTS` (2) at once |
+| Host inputs | read-only: `~/.cache/homelab-sources`, and the vm age key copied alone into `$STAGE0_HOME/inputs/vm-age`; read-write: `~/.cache/homelab-vmhost` and homelab's uv and Go caches; per workspace: `~/.local/state/homelab/sortie-recorder/<issue>`, the flight recorder's folder, which Sortie keeps after the machine is gone |
+
+Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
+and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without
+them.
+
+| File | What |
+| --- | --- |
+| `github-token` | a fine-grained token limited to `ortusnova/homelab`: Contents and Pull requests, read and write |
+| `claude-oauth-token` | a `claude setup-token` token; `anthropic-token.py --setup-token-only` reads only it |
+
+The recorder folders stay until you delete them:
+`rm -rf ~/.local/state/homelab/sortie-recorder/<issue>` once an issue's
+evidence is no longer needed.
+
+To remove the profile: on taichi, `systemctl --user disable --now
+ortus-stage0-sortie`, delete each `sortie-*` machine, then
+`git -C ~/dev/homelab worktree remove ~/.local/share/ortus-nova/stage0/homelab`
+and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
+`dev/stage0/huly-tunnel.sh --remove taichi`.
+
 ## Remove it
 
 ```sh
