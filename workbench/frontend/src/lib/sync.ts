@@ -1,6 +1,6 @@
 /** Sync and approval as the UI uses them; tests substitute a fake. */
 import { projectApi } from "./api";
-import type { SyncStatus } from "./types";
+import type { Delivery, SyncStatus } from "./types";
 
 /** The plan syncs on its own; a planner can only retry a failed sync. */
 export interface SyncClient extends StoryActions {
@@ -26,6 +26,7 @@ export function httpSync(slug: string): SyncClient {
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft", held: "Held", ready: "Ready", released: "Released", frozen: "Started", needs_rereview: "Re-review",
+  delivered: "Delivered", delivery_unconfirmed: "Not confirmed",
 };
 
 /** The short label of a plan status. */
@@ -39,6 +40,13 @@ export function rereviewText(r: { reason: string; ref: string } | null | undefin
   if (r.reason === "blocker_canceled") return `Its blocker ${r.ref} was cancelled. Approve it again if it still makes sense, or cancel it.`;
   if (r.reason === "unverified_no_change") return `The agent said the work was already done, but its evidence could not be confirmed (${r.ref || "no citation"}). Supersede or cancel it.`;
   return r.ref ? `${r.reason}: ${r.ref}` : r.reason;
+}
+
+/** Why a story's pull requests do not confirm its delivery, in a sentence. */
+export function deliveryText(d: Delivery | null | undefined): string {
+  if (!d || d.state === "delivered") return "";
+  const open = d.pulls.filter((p) => p.state !== "merged");
+  return "Delivery not confirmed: " + open.map((p) => `${p.ref}: ${p.reason ?? p.state}`).join("; ") + ".";
 }
 
 /** The plan key an error points at, when the graph holds it. */

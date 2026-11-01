@@ -66,6 +66,8 @@ export class GraphModel {
       if (stories.some((s) => this.statusClass(s) !== "todo") || (n.tracker && ACTIVE_STATE.test(n.tracker.state))) return "prog";
       return "todo";
     }
+    // Its pull requests delivered it: done, wherever the work was done.
+    if (n.plan_status === "delivered") return "done";
     if (this.isCancelled(n)) return "cancelled";
     if (n.tracker?.terminal) return "done";
     if (n.runtime && n.runtime.status !== "budget_held") return "prog";
@@ -78,6 +80,8 @@ export class GraphModel {
   }
 
   statusLabel(n: GraphNode): string {
+    if (n.plan_status === "delivered") return "Done";
+    if (n.plan_status === "delivery_unconfirmed") return "Delivery not confirmed";
     if (n.tracker) return n.tracker.state;
     return n.status === "draft" ? "Not approved" : "To do";
   }

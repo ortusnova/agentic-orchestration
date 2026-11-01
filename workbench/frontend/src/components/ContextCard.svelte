@@ -1,7 +1,7 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import type { GraphModel } from "../lib/model";
-  import { planStatusLabel, rereviewText, type StoryActions } from "../lib/sync";
+  import { deliveryText, planStatusLabel, rereviewText, type StoryActions } from "../lib/sync";
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
   import { workersOf, workerStatus } from "../lib/worker";
@@ -165,6 +165,8 @@
           <p class="why" data-why="held">Waits for the approval of {#each node.held_by as k, i (k)}{i ? ", " : ""}<button type="button" class="link" onclick={() => onselect(k)}>{k}</button>{/each}.</p>
         {:else if node.plan_status === "needs_rereview"}
           <p class="why warn" data-why="rereview">{rereviewText(node.rereview)}</p>
+        {:else if node.plan_status === "delivery_unconfirmed"}
+          <p class="why warn" data-why="delivery">{deliveryText(node.delivery)}</p>
         {:else if node.plan_status === "frozen"}
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
@@ -190,6 +192,21 @@
               <button type="button" class="link" onclick={() => onselect(k)}>{k}</button>
             {:else}<span class="none">Nothing</span>{/each}
           </dd>
+          {#if node.delivery}
+            <dt>Delivered by</dt>
+            <dd class="pulls">
+              {#each node.delivery.pulls as p (p.ref)}
+                <span class="pull" data-pull={p.ref} data-state={p.state}>
+                  {#if p.url}<a class="ext-link" href={p.url} target="_blank" rel="noopener">{p.ref} <Icon name="external" size={13} /></a>{:else}<span class="mono">{p.ref}</span>{/if}
+                  {#if p.state === "merged"}
+                    <span class="none">merged{#if p.merge_commit} as {#if p.merge_commit_url}<a class="mono" data-commit={p.merge_commit} href={p.merge_commit_url} target="_blank" rel="noopener">{p.merge_commit.slice(0, 7)}</a>{:else}<span class="mono">{p.merge_commit.slice(0, 7)}</span>{/if}{/if}</span>
+                  {:else}
+                    <span class="none warn">{p.reason ?? p.state}</span>
+                  {/if}
+                </span>
+              {/each}
+            </dd>
+          {/if}
           {#if node.tracker}
             <dt>Tracker</dt>
             <dd>{#if node.tracker.url}<a class="ext-link" href={node.tracker.url} target="_blank" rel="noopener">{node.tracker.identifier} <Icon name="external" size={13} /></a>{:else}{node.tracker.identifier}{/if}</dd>
@@ -300,7 +317,11 @@
   .why.warn { color: var(--amber-ink); }
   .approver { font-size: 12px; color: var(--mute); }
   .chip.plan.ready, .chip.plan.released { color: var(--done); }
-  .chip.plan.needs_rereview { color: var(--amber-ink); }
+  .chip.plan.needs_rereview, .chip.plan.delivery_unconfirmed { color: var(--amber-ink); }
+  .chip.plan.delivered { color: var(--done); }
+  dd.pulls { flex-direction: column; gap: 4px; }
+  .pull { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+  .none.warn { color: var(--amber-ink); }
   .danger { color: var(--alert); }
   .confirm { display: flex; flex-direction: column; gap: 8px; margin-top: var(--s-md); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); font-size: 12.5px; }
   .confirm div { display: flex; gap: 6px; }

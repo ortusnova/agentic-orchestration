@@ -54,7 +54,8 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         approvals, _ = rt.records()
         if body.epic:
             # Batch 0: every story of an epic none of whose stories is approved yet.
-            keys = [k for k in stories if k.split("/", 1)[0] == body.epic]
+            # A story its pull requests deliver is no one's to approve.
+            keys = [k for k in stories if k.split("/", 1)[0] == body.epic and not stories[k].get("delivered_by")]
             if not keys:
                 raise HTTPException(status_code=404, detail={"code": "no_stories", "message": f"epic {body.epic} has no stories"})
             if any(k in approvals and approvals[k]["digest"] == stories[k]["digest"] for k in keys):
@@ -65,6 +66,10 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             unknown = [k for k in keys if k not in stories]
             if not keys or unknown:
                 raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no such story: {', '.join(unknown) or '(none)'}"})
+            delivered = [k for k in keys if stories[k].get("delivered_by")]
+            if delivered:
+                raise HTTPException(status_code=409, detail={"code": "delivered_by", "message":
+                                    f"{', '.join(delivered)} names the pull requests that deliver it, so no agent takes it: nothing to approve"})
         await asyncio.to_thread(rt.registry.approve, rt.project.id, {k: stories[k]["digest"] for k in keys}, who.key, who.name)
         log.info("project %s: %s approved %s", slug, who.key, ", ".join(keys))
         await refreshed(rt)
