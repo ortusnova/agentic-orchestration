@@ -46,6 +46,15 @@ setup; merge workbench/app; run
 check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
 setup; merge dev/stage0/units; BUSY=1 run; check "a kit change waits while an agent runs" main~1 ""
 setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh when idle" main "stage0.sh;"
+# stage0.sh runs with the PATH the last stage0.sh recorded, not the unit's.
+setup; mkdir -p "$tmp/tools"; echo "$tmp/tools:$PATH" > "$STAGE0_HOME/path"
+# shellcheck disable=SC2016 # the stub expands $PATH, not this script
+printf '#!/bin/sh\necho "stage0.sh $PATH" >> "%s/calls"\n' "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
+g -C "$tmp/up" commit -qam path; g -C "$tmp/up" push -q origin main
+g -C "$STAGE0_LIVE_KIT" pull -q
+merge dev/stage0/units; run
+if grep -q "^stage0.sh $tmp/tools:" "$tmp/calls"; then echo "ok: stage0.sh gets the recorded PATH"; else echo "FAIL: stage0.sh PATH: $(cat "$tmp/calls")"; failed=1; fi
+rm -f "$STAGE0_HOME/path"
 setup; merge workbench/app; FAIL_BUILD=1 run; check "a failed build puts the previous commit back" main~1 "uv sync -q;npx vite build --logLevel warn;"
 rm -f "$tmp/calls"; FAIL_BUILD=1 run; check "and does not try that commit again" main~1 ""
 merge workbench/app; run; check "until another one merges" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"

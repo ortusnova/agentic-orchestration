@@ -15,6 +15,12 @@ STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 LIVE=${STAGE0_LIVE_KIT:-$STAGE0_HOME/kit}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
+# The PATH stage0.sh last ran with (it records it): a systemd unit gets a
+# shorter one, without the tools stage0.sh needs (openspec, under pnpm).
+if [[ -s $STAGE0_HOME/path ]]; then
+  PATH=$(cat "$STAGE0_HOME/path")
+  export PATH
+fi
 failed=$STAGE0_HOME/deploy.failed
 say() { echo "deploy: $*" >&2; }
 
