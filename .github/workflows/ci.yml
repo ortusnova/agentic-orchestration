@@ -94,4 +94,4 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: npm install -g @fission-ai/openspec@${{ env.OPENSPEC_VERSION }}
-      - run: make licenses specs
+      - run: make licenses no-placeholder specs
