@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any
+from typing import Any, Callable
 
 import networkx as nx
 
 from .approval import resolved, story_digest
 from .checks import NamesFor, resolve_ref
 from .errors import PlanError
-from .requirements import RequirementsError
+from .requirements import RequirementsError, main_requirement_details, renamed_from, requirement_details
 from .schemas import Schemas
 from .store import CHANGES_DIR, PLAN_FILE, LoadedStore
 
@@ -113,6 +113,7 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
                 if blocker.split("/", 1)[0] == change:
                     story_graph.add_edge(blocker, key)
         story_depth = _depths(story_graph)
+        requirement = requirement_lookup(store, change)
         for d in bd.doc["deliverables"]:
             key = f"{change}/{d['id']}"
             repository = resolved(bd.doc, d).get("repository")
@@ -122,7 +123,7 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
                     "kind": "story",
                     "change": change,
                     "title": d["title"],
-                    "body": _story_body(d),
+                    "body": _story_body(d, requirement),
                     "approval": story_approval[key],
                     "has_spec": bool(d["covers"]),
                     "depth": story_depth[key],
@@ -172,11 +173,55 @@ def _epic_body(store: LoadedStore, change: str) -> str:
     return body
 
 
-def _story_body(d: dict) -> str:
+def _story_body(d: dict, requirement: Callable[[str], dict[str, Any] | None]) -> str:
+    """The issue description: the notes, the acceptance criteria, and the
+    full text of each covered requirement. The agent works from this alone,
+    without the store. Only the deliverable's fields count toward its
+    approval digest, so the spec text here never changes an approval."""
     parts = []
     if d.get("notes"):
         parts.append(d["notes"].strip())
     parts.append("## Acceptance criteria\n\n" + "\n".join(f"- {c}" for c in d["acceptance_criteria"]))
     if d["covers"]:
         parts.append("## Covers\n\n" + "\n".join(f"- `{c}`" for c in d["covers"]))
+        parts.append("## Requirements\n\n" + "\n\n".join(_requirement_text(ref, requirement(ref)) for ref in d["covers"]))
     return "\n\n".join(parts)
+
+
+def _requirement_text(ref: str, req: dict[str, Any] | None) -> str:
+    capability, _, name = ref.partition("#")
+    head = f"### {name}\n\n`{capability}`"
+    if req is None:
+        return head + "\n\nNo spec file in the store holds this requirement's text."
+    out = [head, req["text"]] if req["text"] else [head]
+    for s in req["scenarios"]:
+        steps = "\n".join(f"- **{st['keyword']}** {st['text']}" for st in s["steps"])
+        out.append(f"#### Scenario: {s['name']}" + (f"\n\n{steps}" if steps else ""))
+    return "\n\n".join(out)
+
+
+def requirement_lookup(store: LoadedStore, change: str) -> Callable[[str], dict[str, Any] | None]:
+    """Find a ``covers`` ref's requirement: in the change's delta specs, or,
+    for one the change only renames, in the main specs under its old name."""
+    delta: dict[str, list[dict[str, Any]]] | None = None
+    renames: dict[tuple[str, str], str] = {}
+    main: dict[str, list[dict[str, Any]]] = {}
+
+    def find(ref: str) -> dict[str, Any] | None:
+        nonlocal delta, renames
+        capability, _, name = ref.partition("#")
+        if delta is None:
+            delta = requirement_details(store.root, change)
+            renames = renamed_from(store.root, change)
+        for req in delta.get(capability, []):
+            if req["name"] == name:
+                return req
+        if capability not in main:
+            main[capability] = main_requirement_details(store.root, capability)
+        for wanted in (name, renames.get((capability, name))):
+            for req in main[capability]:
+                if wanted and req["name"] == wanted:
+                    return req
+        return None
+
+    return find
