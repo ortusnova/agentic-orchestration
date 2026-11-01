@@ -75,6 +75,10 @@ agent:
   max_concurrent_agents: ${STAGE0_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
+  # A fresh VM's agent can take over 15 s to answer at session start; the
+  # default 5 s fails every first attempt. Running turns are bounded by the
+  # stall and turn timeouts above, not by this.
+  read_timeout_ms: 60000
 
 dispatch:
   rules:

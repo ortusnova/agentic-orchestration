@@ -54,6 +54,9 @@ the pull request merges, Sortie moves the story to `Done`.
   and the text and scenarios of each requirement it covers. When a person
   releases a parked story, the first turn of the next run also holds the
   agent's stop statement and every comment posted since the park.
+- **Session start.** `agent.read_timeout_ms` is 60 s: a fresh VM's agent
+  can take over 15 s to answer at session start, past Sortie's 5 s
+  default. Turns are bounded by `stall_timeout_ms` and `turn_timeout_ms`.
 - **Parallel agents.** `STAGE0_MAX_AGENTS` in `stage0.env` (default 3) caps
   agents at once; each VM takes 4 vCPU and 8 GiB. All of them share one
   Claude subscription and its rate limits.
