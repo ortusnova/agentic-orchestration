@@ -46,6 +46,22 @@ say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'stage0.sh: %s\n' "$*" >&2; exit 1; }
 secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
 
+# The live kit is the kit's own detached worktree of origin/main, never the
+# checkout this runs from: what runs is what merged, whatever a developer
+# has checked out (ortus-stage0-deploy.timer keeps it current, deploy.sh).
+# STAGE0_KIT_FROM_CHECKOUT=1 runs this checkout instead, to try a branch.
+LIVE=$STAGE0_HOME/kit
+if [[ ${STAGE0_KIT_FROM_CHECKOUT:-} != 1 && $ROOT != "$LIVE" ]]; then
+  git -C "$ROOT" fetch -q origin main
+  if [[ -e $LIVE ]]; then
+    git -C "$LIVE" checkout -q --detach origin/main
+  else
+    git -C "$ROOT" worktree add -q --detach "$LIVE" origin/main
+  fi
+  say "Running the kit from $LIVE (origin/main at $(git -C "$LIVE" rev-parse --short HEAD))"
+  exec "$LIVE/dev/stage0/stage0.sh" "$@"
+fi
+
 mkdir -p "$STAGE0_HOME"/{bin,sortie,workspaces,home,sessions}
 chmod 700 "$STAGE0_HOME"
 ENV_FILE=$STAGE0_HOME/stage0.env
@@ -117,7 +133,11 @@ STAGE0_AO_REPO_PROJECT=${STAGE0_AO_REPO_PROJECT:-ortusnova/agentic-orchestration
 STAGE0_HOMELAB_REPO_URL=${STAGE0_HOMELAB_REPO_URL:-https://github.com/ortusnova/homelab.git}
 STAGE0_HOMELAB_REPO_BASE=${STAGE0_HOMELAB_REPO_BASE:-master}
 STAGE0_HOMELAB_REPO_PROJECT=${STAGE0_HOMELAB_REPO_PROJECT:-ortusnova/homelab}
-[[ $STAGE0_KIT_ROOT == "$ROOT" ]] || say "Note: $ENV_FILE runs the kit from $STAGE0_KIT_ROOT, not $ROOT"
+if [[ $STAGE0_KIT_ROOT != "$ROOT" ]]; then
+  say "The units now run the kit from $ROOT, not $STAGE0_KIT_ROOT ($ENV_FILE)"
+  sed -i "s|^STAGE0_KIT_ROOT=.*|STAGE0_KIT_ROOT=$ROOT|" "$ENV_FILE"
+  STAGE0_KIT_ROOT=$ROOT
+fi
 export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
@@ -224,10 +244,19 @@ units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-t
 # A setup-token token never expires, so the homelab profile needs no token
 # timer; it has no workbench, so no store to keep current either.
 [[ $STAGE0_PROFILE == homelab ]] && units=(ortus-stage0-sortie.service)
+# The live kit follows origin/main on its own; a kit run from a checkout
+# (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
+deploy=''
+[[ $ROOT == "$LIVE" ]] && deploy=1 && units+=(ortus-stage0-deploy.service ortus-stage0-deploy.timer)
 for unit in "${units[@]}"; do
   sed -e "s|@KIT@|$KIT|g" -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$unit" > "$UNITS/$unit"
 done
 systemctl --user daemon-reload
+if [[ $deploy ]]; then
+  systemctl --user enable -q --now ortus-stage0-deploy.timer
+else
+  systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
+fi
 if [[ $STAGE0_PROFILE == homelab ]]; then
   systemctl --user enable -q ortus-stage0-sortie.service
   systemctl --user restart ortus-stage0-sortie.service
