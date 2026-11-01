@@ -13,6 +13,8 @@ export interface StoryActions {
   pullBack(key: string): Promise<unknown>;
   cancel(key: string): Promise<unknown>;
   supersede(key: string): Promise<unknown>;
+  /** Answer a parked story's question, through Sortie. */
+  answer(key: string, text: string): Promise<unknown>;
 }
 
 /** Sync and story actions of one project. */
@@ -21,6 +23,7 @@ export function httpSync(slug: string): SyncClient {
   return {
     retry: () => api.retrySync(), approve: (t) => api.approve(t),
     pullBack: (k) => api.pullBack(k), cancel: (k) => api.cancel(k), supersede: (k) => api.supersede(k),
+    answer: (k, text) => api.answer(k, text),
   };
 }
 

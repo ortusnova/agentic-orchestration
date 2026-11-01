@@ -10,6 +10,8 @@ including a permission request. Commands sent to a broker are kept.
 Drive it with:
   POST /admin/next      the story's next run (a retry or the next stage)
   POST /admin/end       Sortie runs nothing more for the story
+  POST /admin/park      billing/b2 (<PROJECT>-2) stops with a question; an
+                        answer through POST /api/v1/<PROJECT>-2/answer releases it
   GET  /admin/commands  what the brokers received
 """
 
@@ -28,7 +30,9 @@ PLAN_KEYS = ["billing/b1", "billing/b2", "accounts/a3"]
 TOKEN = "check-sortie-token"
 PROJECT = "HLAB"
 PORT = 7690
-state = {"run": 1, "ended": False, "commands": []}
+state = {"run": 1, "ended": False, "commands": [], "park": None, "answers": []}
+QUESTION = ("billing/b2 says to charge in the customer's currency, but accounts/a3 stores every balance in EUR.\n\n"
+            "Should b2 convert at charge time, or should a3 store the currency too?")
 
 
 def ident(i: int = 1) -> str:
@@ -60,7 +64,8 @@ def graph():
 @app.get("/api/v1/state")
 def st():
     r = running()
-    return {"running": [r] if r else [], "retrying": [], "budget_exhausted": []}
+    return {"running": [r] if r else [], "retrying": [], "budget_exhausted": [],
+            "parked": [{"issue_identifier": ident(2), "reason": "agent_blocked", **state["park"]}] if state["park"] else []}
 
 
 @app.get("/api/v1/{key}/broker")
@@ -72,8 +77,20 @@ def broker(key: str, request: Request):
     return {"http_url": r["broker"]["http_url"], "viewer_token": f"viewer-{state['run']}"}
 
 
+@app.post("/api/v1/{key}/answer")
+async def answer(key: str, request: Request):
+    assert request.headers.get("authorization") == f"Bearer {TOKEN}"
+    if not state["park"] or key != ident(2):
+        return JSONResponse({"error": {"code": "not_parked", "message": f"{key} is not parked"}}, status_code=409)
+    state["answers"].append(await request.json())
+    state["park"] = None
+    return {"issue_identifier": key, "released": True}
+
+
 @app.get("/api/v1/{key}")
 def issue(key: str):
+    if key == ident(2) and state["park"]:
+        return {"issue_identifier": key, "running": None, "retry": None, "parked": state["park"]}
     r = running()
     if not r or key != ident():
         return JSONResponse({"error": {"code": "issue_not_found", "message": key}}, status_code=404)
@@ -96,6 +113,12 @@ def end():
 @app.get("/admin/commands")
 def cmds():
     return state["commands"]
+
+
+@app.post("/admin/park")
+def park():
+    state["park"] = {"statement": QUESTION, "parked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    return {"parked": ident(2), "answers": state["answers"]}
 
 
 def ev(seq, **kw):

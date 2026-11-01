@@ -1,5 +1,5 @@
 /** The project home the backend computes with the graph (planning/project-home). */
-import type { GraphNode } from "./types";
+import type { GraphNode, Question } from "./types";
 
 export interface Count { done: number; total: number }
 
@@ -71,6 +71,16 @@ export interface NotReadyItem {
   action: { kind: "approve" | "review" | "plan" | "task"; keys?: string[]; epic?: string; story?: string; task?: string };
 }
 
+/** An open question on the home, ranked before everything else that needs a person. */
+export interface HomeQuestion extends Question {
+  key: string;
+  label: string;
+  change: string;
+  title: string;
+  url: string | null;
+  rank: number;
+}
+
 export interface Span {
   id: string;
   start: number;
@@ -96,7 +106,9 @@ export interface HomeDoc {
     stories: { key: string; label: string; title: string; change: string; needs: Reason | null; running: boolean; estimate: number | null }[];
   } | null;
   not_ready: NotReadyItem[];
-  needs_person: { total: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
+  /** Absent from an older backend. */
+  questions?: HomeQuestion[];
+  needs_person: { total: number; questions?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
 }
 
@@ -190,7 +202,7 @@ export function mapShare(share: number, spans: Span[], visual: { x0: number; x1:
 
 /** What about a story the home shows: a change in it marks the story briefly (D9). */
 export function storySignature(n: GraphNode): string {
-  return [n.tracker?.state ?? "", n.plan_status ?? "", n.runtime?.status ?? "", n.approval ?? ""].join("|");
+  return [n.tracker?.state ?? "", n.plan_status ?? "", n.runtime?.status ?? "", n.approval ?? "", n.question ? "asks" : ""].join("|");
 }
 
 /** The stories whose state changed between two graphs. */

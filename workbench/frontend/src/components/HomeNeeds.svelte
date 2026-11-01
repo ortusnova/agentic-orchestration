@@ -1,15 +1,21 @@
 <script lang="ts">
+  import { can } from "../lib/identity.svelte";
   import { graphHref } from "../lib/router";
-  import { plainTask, REASON_TEXT, slackText, slackWidth, type Column, type NotReadyItem } from "../lib/home";
+  import { plainTask, REASON_TEXT, slackText, slackWidth, type Column, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, slug, marks, onapprove,
+    items, questions = [], slug, marks, onapprove, onanswer,
   }: {
     items: NotReadyItem[];
+    /** The open questions of parked stories, ranked first. */
+    questions?: HomeQuestion[];
     slug: string;
     marks: Set<string>;
     /** Approve stories; resolves to an error message, or null. */
     onapprove: (keys: string[]) => Promise<string | null>;
+    /** Answer a parked story's question; resolves to an error message, or null. */
+    onanswer: (key: string, text: string) => Promise<string | null>;
   } = $props();
 
   // A column shows this many items until a person asks for all of them.
@@ -60,7 +66,7 @@
 
 <section class="needs" aria-labelledby="needs-h">
   <div class="head">
-    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {person.length} by urgency</span></h2>
+    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {questions.length + person.length} by urgency</span></h2>
     <p class="legend">
       <span>The bar is the time before an item holds agents up, in stories until estimates exist. Shorter is more urgent.</span>
       <span class="key"><i class="u-now"></i>blocking now</span>
@@ -69,6 +75,24 @@
     </p>
   </div>
   <div class="cols">
+    <div class="col" data-column="answer">
+      <div class="ch"><h3>Answer</h3><span>{questions.length} · {questions.length === 1 ? "an agent waits" : "agents wait"}</span></div>
+      {#if !questions.length}
+        <p class="none">No agent waits on an answer.</p>
+      {/if}
+      <ol>
+        {#each questions as q (q.key)}
+          <li class="item q hot" class:moved={marks.has(q.key)} data-rank={q.rank} data-key={q.key}>
+            <span class="rk" aria-label="Rank {q.rank}">{q.rank}</span>
+            <div class="body">
+              <a class="name" href={graphHref(slug, { epic: q.change, selected: q.key })} title="{q.key}: {q.title}">{q.label}</a>
+              <span class="note">{[q.identifier, q.title].join(" · ")}</span>
+              <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)} />
+            </div>
+          </li>
+        {/each}
+      </ol>
+    </div>
     {#each COLUMNS as col (col.id)}
       {@const list = person.filter((i) => i.column === col.id)}
       {@const shown = expanded[col.id] ? list : list.slice(0, SHOWN)}
@@ -121,7 +145,7 @@
   .legend > span:first-child { max-width: 62ch; }
   .key i { display: inline-block; width: 18px; height: 6px; margin-right: 6px; border-radius: 3px; vertical-align: 1px; }
 
-  .cols { display: grid; grid-template-columns: 1.1fr 1fr 0.9fr; gap: 14px; align-items: start; }
+  .cols { display: grid; grid-template-columns: 1.4fr 1.1fr 1fr 0.9fr; gap: 14px; align-items: start; }
   .col { min-width: 0; padding: 10px 14px 6px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
   .ch { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
   .ch h3 { font-size: 14px; font-weight: 700; }
@@ -130,6 +154,8 @@
   ol { list-style: none; }
   .item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--hair); }
   .item:last-child { border-bottom: 0; }
+  .item.q { grid-template-columns: 26px minmax(0, 1fr); align-items: start; }
+  .item.q .body { gap: 4px; }
   .rk { width: 26px; height: 26px; display: grid; place-items: center; border: 1.5px solid var(--line); border-radius: 50%; color: var(--mute); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .item.hot .rk { border-color: var(--ink); background: var(--ink); color: #fff; }
   .body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }

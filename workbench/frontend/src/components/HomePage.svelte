@@ -8,7 +8,7 @@
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -17,6 +17,7 @@
     /** Stories whose state just changed. */
     marks?: Set<string>;
     onapprove: (keys: string[]) => Promise<string | null>;
+    onanswer: (key: string, text: string) => Promise<string | null>;
     actions?: Snippet;
   } = $props();
 
@@ -81,7 +82,7 @@
         <p class="big">{health?.verdict ? VERDICT_TEXT[health.verdict] : "No verdict"}</p>
         <ul class="reasons">
           {#each health?.reasons ?? [] as r (r.code + r.text)}
-            <li>{#if r.key}<a href={storyHref(r.key)}>{r.text}</a>{:else}{r.text}{/if}</li>
+            <li data-reason={r.code} class:ask={r.code === "question"} title={r.code === "question" ? r.text : undefined}>{#if r.key}<a href={storyHref(r.key)}>{r.text}</a>{:else}{r.text}{/if}</li>
           {/each}
         </ul>
       </div>
@@ -112,10 +113,15 @@
       <div class="tile" data-tile="needs">
         <h3>Needs a person</h3>
         <p class="num">{home.needs_person.total}</p>
-        <p class="cap ink">{plural(home.needs_person.spec, "spec to write", "specs to write")} · {plural(home.needs_person.approve, "approval", "approvals")}<br />{plural(home.needs_person.operator, "operator task", "operator tasks")}</p>
+        <p class="cap ink">{#if home.questions?.length}<b data-questions>{plural(home.questions.length, "question", "questions")} to answer</b><br />{/if}{plural(home.needs_person.spec, "spec to write", "specs to write")} · {plural(home.needs_person.approve, "approval", "approvals")}<br />{plural(home.needs_person.operator, "operator task", "operator tasks")}</p>
         {#if home.needs_person.nearest}
+          {@const asked = home.questions?.find((q) => q.key === home.needs_person.nearest)}
           {@const first = home.not_ready.find((i) => i.key === home.needs_person.nearest)}
-          <p class="cap end">nearest: {first?.kind === "task" ? plainTask(first.title) : (first?.label ?? home.needs_person.nearest)}{first?.critical ? ", on the critical path" : ""}</p>
+          {#if asked}
+            <p class="cap end">nearest: {asked.label}, which asks a question</p>
+          {:else}
+            <p class="cap end">nearest: {first?.kind === "task" ? plainTask(first.title) : (first?.label ?? home.needs_person.nearest)}{first?.critical ? ", on the critical path" : ""}</p>
+          {/if}
         {/if}
       </div>
     </section>
@@ -146,7 +152,7 @@
       </section>
     {/if}
 
-    <HomeNeeds items={home.not_ready} {slug} {marks} {onapprove} />
+    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} {slug} {marks} {onapprove} {onanswer} />
 
     <section class="progress" aria-labelledby="ms-h">
       <h2 id="ms-h">Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2>
@@ -204,6 +210,8 @@
   .verdict.ok .big { color: var(--done); }
   .reasons { margin-top: 6px; list-style: none; font-size: 13.5px; max-width: 60ch; }
   .reasons a { color: inherit; }
+  /* A question can run long: the Answer column holds it whole. */
+  .reasons li.ask { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .num { margin-top: 2px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .num small { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--mute); }
   .num.muted { color: var(--mute); }

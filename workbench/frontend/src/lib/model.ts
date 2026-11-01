@@ -6,7 +6,7 @@ export type StatusClass = "done" | "prog" | "todo" | "cancelled";
 const ACTIVE_STATE = /progress|review|doing|active|started/i;
 
 export interface Badge {
-  kind: "run" | "retry" | "budget";
+  kind: "ask" | "run" | "retry" | "budget";
   label: string;
 }
 
@@ -94,6 +94,9 @@ export class GraphModel {
   badge(n: GraphNode): Badge | null {
     if (n.kind === "story") return runtimeBadge(n);
     const badges = this.storiesOf(n.plan_key).map(runtimeBadge).filter((b): b is Badge => b !== null);
+    // A question waits on a person: it outranks every agent at work.
+    const asks = badges.filter((b) => b.kind === "ask").length;
+    if (asks) return { kind: "ask", label: asks === 1 ? "1 question" : `${asks} questions` };
     const running = badges.filter((b) => b.kind === "run").length;
     if (running) return { kind: "run", label: running === 1 ? "1 agent running" : `${running} agents running` };
     if (badges.some((b) => b.kind === "retry")) return { kind: "retry", label: "agent retrying" };
@@ -114,6 +117,7 @@ export class GraphModel {
 }
 
 function runtimeBadge(n: GraphNode): Badge | null {
+  if (n.question) return { kind: "ask", label: "asks a question" };
   switch (n.runtime?.status) {
     case "running":
       return { kind: "run", label: `running · turn ${n.runtime.turn_count ?? 0}` };

@@ -4,6 +4,7 @@
   import { deliveryText, planStatusLabel, rereviewText, type StoryActions } from "../lib/sync";
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
+  import QuestionBox from "./QuestionBox.svelte";
   import { workersOf, workerStatus } from "../lib/worker";
   import { renderInline, renderMarkdown } from "../lib/markdown";
   import { groupCovers, type ChangeRequirements, type CoveredRequirement, type SpecReader } from "../lib/spec";
@@ -98,6 +99,16 @@
     for (const it of items) expanded[it.ref] = to;
   }
 
+  async function answer(key: string, text: string): Promise<string | null> {
+    if (!actions) return "Answering is not available here.";
+    try {
+      await actions.answer(key, text);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "The answer did not go through.";
+    }
+  }
+
   function why(n: GraphNode): string {
     return model.badge(n)?.label ?? model.statusLabel(n);
   }
@@ -175,6 +186,15 @@
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
         {#if node.approved_by}<p class="approver">Approved by {node.approved_by.name}{#if node.approved_at} · {new Date(node.approved_at * 1000).toLocaleString()}{/if}</p>{/if}
+
+        {#if node.kind === "story" && node.question}
+          <div class="asks" data-asks={node.plan_key}>
+            <b>The agent asks</b>
+            {#key node.plan_key}
+              <QuestionBox question={node.question} story={node.plan_key} canAnswer={approver} onanswer={(text) => answer(node.plan_key, text)} />
+            {/key}
+          </div>
+        {/if}
 
         {#if node.runtime}
           <div class="agent" class:warn={node.runtime.status !== "running"}>
@@ -332,6 +352,8 @@
   .small { height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; color: var(--ink); font-size: 12.5px; font-weight: 600; }
   .small:hover { background: var(--strip); }
   .small.danger { border-color: var(--alert); color: var(--alert); }
+  .asks { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #ecc77f; border-left: 4px solid var(--amber); border-radius: var(--r-well); background: var(--amber-tint); }
+  .asks > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber-ink); }
   .workers { display: flex; flex-direction: column; gap: 6px; }
   .worker .row { display: flex; align-items: center; gap: 8px; }
   .list .worker .row button:first-child { flex: 1; min-width: 0; margin-right: 0; }

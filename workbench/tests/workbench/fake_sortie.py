@@ -44,6 +44,11 @@ class FakeSortie:
         self.max_agents: int | None = 3
         self.budget_exhausted: list[dict[str, Any]] = []
         self.parked: list[dict[str, Any]] = []
+        # The full stop statement of each park, by identifier, as the
+        # per-issue response carries it; and the answers people sent.
+        self.park_details: dict[str, dict[str, Any]] = {}
+        self.answers: list[dict[str, Any]] = []
+        self.answer_releases = True
         # Sync: no connection at all; the next apply is refused as stale;
         # refresh fails; the refreshes Sortie was asked for.
         self.unreachable = False
@@ -68,6 +73,21 @@ class FakeSortie:
         self.brokers.pop(identifier, None)
         if retry_attempt is not None:
             self.retrying[identifier] = {"issue_identifier": identifier, "attempt": retry_attempt}
+
+    def park(self, identifier: str, statement: str, parked_at: str = "2026-11-01T18:35:26Z", reason: str = "agent_blocked",
+             listed: str | None = None) -> None:
+        """Park the issue with the agent's stop statement. ``listed`` is the
+        statement as the state lists it, when it is shorter."""
+        self.end(identifier)
+        self.unpark(identifier)
+        self.parked.append({"issue_identifier": identifier, "reason": reason, "parked_at": parked_at,
+                            "statement": statement if listed is None else listed})
+        self.park_details[identifier] = {"statement": statement, "parked_at": parked_at, "reason": reason}
+
+    def unpark(self, identifier: str) -> None:
+        """Release the park, as a person's gesture in the tracker does."""
+        self.parked = [p for p in self.parked if p["issue_identifier"] != identifier]
+        self.park_details.pop(identifier, None)
 
     def issue(self, plan_key, kind="story", state="Todo", parent=None, runtime=None, terminal=False, **extra):
         node = {
@@ -150,6 +170,16 @@ class FakeSortie:
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
                                              "config": {"agent": agent}})
+        if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
+            ident = path.removeprefix("/api/v1/").removesuffix("/answer")
+            if ident not in self.park_details:
+                return httpx.Response(409, json={"error": {"code": "not_parked", "message": f"{ident} is not parked"}})
+            if not (body or {}).get("text") or not (body or {}).get("author"):
+                return httpx.Response(400, json={"error": {"code": "invalid_answer", "message": "text and author"}})
+            self.answers.append({"identifier": ident, "text": body["text"], "author": body["author"]})
+            if self.answer_releases:
+                self.unpark(ident)
+            return httpx.Response(200, json={"issue_identifier": ident, "released": True})
         if path.startswith("/api/v1/") and path.endswith("/broker"):
             ident = path.removeprefix("/api/v1/").removesuffix("/broker")
             if ident not in self.brokers:
@@ -157,10 +187,10 @@ class FakeSortie:
             return httpx.Response(200, json=self.brokers[ident])
         if path.startswith("/api/v1/") and path.count("/") == 3:
             ident = path.removeprefix("/api/v1/")
-            if ident not in self.running and ident not in self.retrying:
+            if ident not in self.running and ident not in self.retrying and ident not in self.park_details:
                 return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": ident}})
             return httpx.Response(200, json={"issue_identifier": ident, "running": self.running.get(ident),
-                                             "retry": self.retrying.get(ident)})
+                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident)})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
 
     def handle_project(self, method: str, key: str, body: Any) -> httpx.Response:

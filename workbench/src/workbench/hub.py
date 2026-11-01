@@ -13,6 +13,7 @@ from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
+from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
 from .workers import worker_fields
 
@@ -45,6 +46,10 @@ class Hub:
         # project it dispatches, and why the last read failed.
         self.agent_state: dict[str, Any] | None = None
         self.state_error: str | None = None
+        # The open question of each parked issue, by tracker identifier, and
+        # the per-issue responses that gave their statements, by park.
+        self.questions: dict[str, dict[str, Any]] = {}
+        self._park_details: dict[tuple[str, Any], dict[str, Any]] = {}
         self.history = History()
         # Read-only: never pull back an edited story on its own.
         self.read_only = False
@@ -87,18 +92,40 @@ class Hub:
         # The home reads the agent slots and held runs from Sortie's state,
         # which Sortie keeps for the project it dispatches only.
         if not graph.get("dispatched"):
-            self.agent_state, self.state_error = None, None
+            self.agent_state, self.state_error, self.questions = None, None, {}
             return {}
         try:
             state = await self.sortie.state()
         except SortieError as exc:
             log.warning("sortie state unavailable: %s", exc)
-            self.agent_state, self.state_error = None, exc.message
+            self.agent_state, self.state_error, self.questions = None, exc.message, {}
             return {}
         self.agent_state, self.state_error = state, None
+        self.questions = await self._questions(state)
         if not any(n.get("runtime") for n in graph.get("nodes") or []):
             return {}
         return worker_fields(state)
+
+    async def _questions(self, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """The open question of each parked issue, by tracker identifier. The
+        state may shorten a stop statement; the issue's own response holds it
+        whole, and is read once per park."""
+        out: dict[str, dict[str, Any]] = {}
+        details: dict[tuple[str, Any], dict[str, Any] | None] = {}
+        for entry in parked(state):
+            ident = entry["issue_identifier"]
+            park = (ident, parked_at_of(entry))
+            detail = self._park_details.get(park) if park[1] is not None else None
+            if detail is None:
+                try:
+                    detail = await self.sortie.issue(ident)
+                except SortieError as exc:
+                    log.info("sortie has no details of %s's park: %s", ident, exc.message)
+                    detail = None
+            details[park] = detail
+            out[ident] = question(entry, detail)
+        self._park_details = {k: v for k, v in details.items() if v is not None}
+        return out
 
     async def pull_back_stale(self) -> None:
         """Pull back each released story whose content changed since its
@@ -132,6 +159,9 @@ class Hub:
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls())
         for n in doc["nodes"]:
             n.update(self.fields.get(n["plan_key"], {}))
+            ident = (n.get("tracker") or {}).get("identifier")
+            if n.get("kind") == "story":
+                n["question"] = self.questions.get(ident) if ident else None
             if n.get("runtime") and n.get("tracker"):
                 n["runtime"] = {"stage": None, "session_id": None, "held": False, "holder": None, "watchable": False,
                                 **n["runtime"], **self.workers.get(n["tracker"]["identifier"], {})}
@@ -178,10 +208,12 @@ class Hub:
                 graph=snap["graph"], nodes=doc.get("nodes") or [], fields=self.fields, planning=self.plan.planning,
                 plan_states=doc.get("plan_states"), tracker_known=self.tracker is not None, valid=snap["valid"],
                 errors=len(snap["errors"]), history=self.history,
+                questions=home_questions(self.questions, doc.get("nodes") or []),
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
                     "state": self.agent_state, "state_error": self.state_error, "sync": doc.get("sync"),
+                    "statements": {i: q["statement"] for i, q in self.questions.items() if q["statement"]},
                 },
             )
         except Exception:  # the home must never take the graph down with it

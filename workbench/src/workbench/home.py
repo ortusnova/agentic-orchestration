@@ -16,6 +16,8 @@ import networkx as nx
 
 from planlib import milestones as ms
 
+from .questions import statement_of
+
 # Slack, in stories, up to which an item is "soon" rather than "later".
 SOON = 4
 HISTORY_HOURS = 10
@@ -52,8 +54,11 @@ def tracker_states(nodes: Iterable[dict[str, Any]], plan_states: dict[str, str] 
 # Execution health (D5) ----------------------------------------------------------
 
 
-def held_runs(state: dict[str, Any], key_of: dict[str, str]) -> list[dict[str, Any]]:
-    """Runs that wait on a permission, a budget or a person."""
+def held_runs(state: dict[str, Any], key_of: dict[str, str],
+              statements: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """Runs that wait on a permission, a budget or a person. A parked story
+    carries the agent's question: ``statements`` holds the whole ones, by
+    tracker identifier, where the state may shorten them."""
     out = []
     for r in state.get("running") or []:
         if r.get("held"):
@@ -63,8 +68,10 @@ def held_runs(state: dict[str, Any], key_of: dict[str, str]) -> list[dict[str, A
         out.append({"identifier": r["issue_identifier"], "key": key_of.get(r["issue_identifier"]),
                     "reason": _words(r.get("reason") or "budget exhausted"), "holder": None})
     for r in state.get("parked") or []:
-        out.append({"identifier": r["issue_identifier"], "key": key_of.get(r["issue_identifier"]),
-                    "reason": _words(r.get("reason") or "waiting on a person"), "holder": None})
+        ident = r["issue_identifier"]
+        out.append({"identifier": ident, "key": key_of.get(ident),
+                    "reason": _words(r.get("reason") or "waiting on a person"), "holder": None,
+                    "question": (statements or {}).get(ident) or statement_of(r)})
     return out
 
 
@@ -80,7 +87,8 @@ def slots_of(state: dict[str, Any] | None) -> int | None:
 
 def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: bool, project: str,
                      state: dict[str, Any] | None, state_error: str | None, sync: dict[str, Any] | None,
-                     runway: int, remaining: int, key_of: dict[str, str]) -> dict[str, Any]:
+                     runway: int, remaining: int, key_of: dict[str, str],
+                     statements: dict[str, str] | None = None) -> dict[str, Any]:
     """The verdict on whether the agents will stay busy, with its reasons.
 
     The first that applies wins: stuck, done, idle now, will idle, healthy.
@@ -91,7 +99,7 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
     running = [{"identifier": r["issue_identifier"], "key": key_of.get(r["issue_identifier"])}
                for r in (state or {}).get("running") or []]
     busy = len(running) if state is not None else None
-    held = held_runs(state, key_of) if state is not None else []
+    held = held_runs(state, key_of, statements) if state is not None else []
 
     if not reachable:
         reasons.append({"code": "sortie_unreachable", "text": f"Sortie is unreachable: {sortie_error}" if sortie_error else "Sortie is unreachable"})
@@ -101,7 +109,13 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
         message = (sync.get("reason") or {}).get("message") or "unknown error"
         reasons.append({"code": "sync_failed", "text": f"The last sync failed: {message}"})
     for h in held:
-        reasons.append({"code": "held", "text": f"{h['key'] or h['identifier']} is held: {h['reason']}", "key": h["key"]})
+        who = h["key"] or h["identifier"]
+        if "question" not in h:
+            reasons.append({"code": "held", "text": f"{who} is held: {h['reason']}", "key": h["key"]})
+        elif h["question"]:
+            reasons.append({"code": "question", "text": f"{who} asks: {h['question']}", "key": h["key"]})
+        else:
+            reasons.append({"code": "question", "text": f"{who} stopped for a person without saying why", "key": h["key"]})
 
     out = {"verdict": None, "reasons": reasons, "slots": slots, "busy": busy,
            "free": max(0, slots - busy) if slots is not None and busy is not None else None,
@@ -432,10 +446,13 @@ def timeline(milestones: list[dict[str, Any]], goal: str | None, items: list[dic
 def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fields: dict[str, dict[str, Any]],
                planning: dict[str, Any], plan_states: dict[str, str] | None, tracker_known: bool, valid: bool,
                errors: int, health_inputs: dict[str, Any], history: History | None = None,
-               estimates: dict[str, float] | None = None) -> dict[str, Any]:
+               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The home document. ``graph`` is the last valid plan graph; ``nodes`` the
-    merged graph's nodes, with tracker state and plan fields."""
+    merged graph's nodes, with tracker state and plan fields; ``questions``
+    the open questions of its stories, ranked, which come before everything
+    else that needs a person."""
     estimates = estimates or {}
+    questions = questions or []
     done, dropped = tracker_states(nodes, plan_states)
     # A story its pull requests delivered is done, wherever the work was done.
     done |= {k for k, f in fields.items() if f.get("plan_status") == "delivered"}
@@ -457,10 +474,11 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "milestones_declared": bool(planning.get("declared")),
         "story_progress": "live" if health_inputs["reachable"] else ("last_known" if tracker_known else "unknown"),
         "health": health,
+        "questions": questions,
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],
-                "needs_person": _needs([]), "timeline": None}
+                "needs_person": _needs([], questions), "timeline": None}
 
     out = ms.progress(planning.get("milestones") or [], graph, planning.get("tasks") or {}, done, dropped, estimates)
     # A milestone declared done was finished by hand: its stories are not
@@ -468,6 +486,9 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     settled = done | {s for m in out["milestones"] if m.get("declared_done") for s in m["stories"]}
     items = not_ready(out["milestones"], graph, fields, settled, dropped, out["critical_path"],
                       free=health["free"] or 0, runway=runway, estimates=estimates)
+    for i in items:
+        if i["rank"] is not None:
+            i["rank"] += len(questions)
     line = timeline(out["milestones"], out["goal"], items, estimates, done)
     by_key = {n["plan_key"]: n for n in nodes}
     reason_of = {i["key"]: i["reason"] for i in items if i["kind"] == "story"}
@@ -492,18 +513,19 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     return {
         **base,
         "milestones": milestones, "goal": out["goal"], "next": out["next"], "critical_path": path,
-        "not_ready": items, "needs_person": _needs(items), "timeline": line,
+        "not_ready": items, "needs_person": _needs(items, questions), "timeline": line,
     }
 
 
-def _needs(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _needs(items: list[dict[str, Any]], questions: list[dict[str, Any]]) -> dict[str, Any]:
     person = [i for i in items if i["column"] is not None]
     approve = [i for i in person if i["column"] == "approve"]
     return {
-        "total": len(person),
+        "total": len(questions) + len(person),
+        "questions": len(questions),
         "approve": len(approve),
         "approve_stories": sum(len(i.get("stories") or [i["key"]]) for i in approve),
         "spec": sum(1 for i in person if i["column"] == "spec"),
         "operator": sum(1 for i in person if i["column"] == "operator"),
-        "nearest": person[0]["key"] if person else None,
+        "nearest": questions[0]["key"] if questions else (person[0]["key"] if person else None),
     }

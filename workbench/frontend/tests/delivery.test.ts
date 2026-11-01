@@ -50,6 +50,7 @@ class FakeActions implements StoryActions {
   async pullBack() { return {}; }
   async cancel() { return {}; }
   async supersede() { return {}; }
+  async answer() { return {}; }
 }
 
 const noSession: SessionClient = {
