@@ -2,5 +2,6 @@ go 1.26.1
 
 use (
 	./acp-broker
+	./dev/stage0/edge
 	./smol-builder
 )
