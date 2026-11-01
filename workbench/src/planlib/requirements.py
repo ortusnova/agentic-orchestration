@@ -265,7 +265,43 @@ def requirement_details(store: Path, change: str) -> dict[str, list[dict[str, An
     return out
 
 
-def _parse_details(text: str):
+def main_requirement_details(store: Path, capability: str) -> list[dict[str, Any]]:
+    """The requirements of a capability's main spec, in the form
+    :func:`requirement_details` gives, with operation ``None``; a missing
+    spec has none."""
+    spec = Path(store) / "openspec" / "specs" / capability / "spec.md"
+    if not spec.is_file():
+        return []
+    return list(_parse_details(spec.read_text(), main=True))
+
+
+_MAIN_SECTION = re.compile(r"^##\s+Requirements\s*$")
+_RENAME_FROM = re.compile(r"^\s*-?\s*FROM:\s*`?###\s+Requirement:\s*(.+?)`?\s*$")
+
+
+def renamed_from(store: Path, change: str) -> dict[tuple[str, str], str]:
+    """The change's renames, as (capability, new name) to old name."""
+    specs_dir = Path(store) / CHANGES_DIR / change / "specs"
+    out: dict[tuple[str, str], str] = {}
+    if not specs_dir.is_dir():
+        return out
+    for spec in sorted(specs_dir.rglob("spec.md")):
+        capability = spec.parent.relative_to(specs_dir).as_posix()
+        section, old = None, None
+        for line in spec.read_text().splitlines():
+            m = _SECTION.match(line)
+            if m or (line.startswith("## ") and not line.startswith("### ")):
+                section, old = (m.group(1) if m else None), None
+            elif section == "RENAMED":
+                if f := _RENAME_FROM.match(line):
+                    old = f.group(1)
+                elif (t := _RENAME_TO.match(line)) and old is not None:
+                    out[(capability, t.group(1))] = old
+                    old = None
+    return out
+
+
+def _parse_details(text: str, main: bool = False):
     section: str | None = None
     req: dict[str, Any] | None = None
     scenario: dict[str, Any] | None = None
@@ -291,14 +327,18 @@ def _parse_details(text: str):
         if m or (line.startswith("## ") and not line.startswith("### ")):
             yield from flush()
             req, scenario, body = None, None, []
-            section = m.group(1) if m else None
+            if main:
+                section = "MAIN" if _MAIN_SECTION.match(line) else None
+            else:
+                section = m.group(1) if m else None
             continue
-        if section not in _LIVE_OPERATIONS:
+        if section not in _LIVE_OPERATIONS and section != "MAIN":
             continue
         m = _REQUIREMENT.match(line)
         if m:
             yield from flush()
-            req, scenario, body = {"name": m.group(1), "operation": section, "text": "", "scenarios": []}, None, []
+            op = None if section == "MAIN" else section
+            req, scenario, body = {"name": m.group(1), "operation": op, "text": "", "scenarios": []}, None, []
             continue
         if req is None:
             continue

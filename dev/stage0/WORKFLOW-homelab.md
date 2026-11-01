@@ -75,6 +75,10 @@ agent:
   max_concurrent_agents: ${STAGE0_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
+  # A fresh VM's agent can take over 15 s to answer at session start; the
+  # default 5 s fails every first attempt. Running turns are bounded by the
+  # stall and turn timeouts above, not by this.
+  read_timeout_ms: 60000
 
 dispatch:
   rules:
@@ -145,6 +149,16 @@ environment:
 You are working on story **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}
+{{- if .park }}
+
+A person released this story ({{ .park.gesture }}). You stopped earlier{{ if .park.statement }}: {{ .park.statement }}{{ else }}.{{ end }}
+Comments posted since you stopped, oldest first; answer them before you go on:
+{{ range .park.comments }}
+- {{ .author }} ({{ .created_at }}): {{ .body }}
+{{- else }}
+(none)
+{{- end }}
+{{- end }}
 
 The repository is checked out in the current directory, on the story's
 branch. Read its `AGENTS.md` first and follow it. Change the code to meet the

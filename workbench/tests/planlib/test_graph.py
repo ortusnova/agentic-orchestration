@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 
 from planlib import Schemas, validate
 from planlib.cli import main
 from tests.conftest import breakdown, deliverable
+from tests.planlib.test_checks import with_specs
+from tests.planlib.test_requirements import CAPTURED, captured_show
 
 
 def no_openspec(*_):
@@ -201,3 +204,52 @@ def test_a_repository_name_must_be_kebab_case(store):
     store.change("workers", breakdown(deliverable("wiring", repository="Not OK")))
     r = validate(store.root, show=no_openspec)
     assert r.graph is None and any("repository" in str(e) for e in r.errors)
+
+
+def test_story_body_carries_the_covered_requirements_text(store):
+    store.plan([("billing", [])])
+    store.change("billing", breakdown(deliverable("invoice", covers=["billing/invoicing#Monthly invoice"])))
+    shutil.copytree(CAPTURED / "billing" / "specs", store.root / "openspec" / "changes" / "billing" / "specs")
+    body = by_key(validate(store.root, show=captured_show).graph)["billing/invoice"]["body"]
+    assert "- `billing/invoicing#Monthly invoice`" in body
+    assert "### Monthly invoice" in body
+    assert "The system SHALL generate an invoice on the first day of each month:" in body
+    assert "Invoices SHALL be immutable once sent." in body
+    assert "#### Scenario: First of the month" in body
+    assert "- **WHEN** the clock reaches the first day of a month" in body
+    assert "Tax lines" not in body
+
+
+def test_spec_text_in_the_body_never_changes_an_approval(store):
+    store.plan([("billing", [])])
+    store.change("billing", breakdown(deliverable("invoice", covers=["billing/invoicing#Monthly invoice"])))
+    payload = with_specs(store, "billing", "billing/invoicing", "Monthly invoice")
+    r = validate(store.root, show=lambda *_: payload)
+    approvals = {k: v["digest"] for k, v in r.stories.items()}
+    spec = store.root / "openspec" / "changes" / "billing" / "specs" / "billing" / "invoicing" / "spec.md"
+    spec.write_text(spec.read_text().replace("- **THEN** b", "- **THEN** b, and c"))
+    r2 = validate(store.root, show=lambda *_: payload, approvals=approvals, frozen=approvals)
+    assert r2.errors == []
+    node = by_key(r2.graph)["billing/invoice"]
+    assert "**THEN** b, and c" in node["body"] and node["approval"] == "approved"
+    assert r2.stories["billing/invoice"]["digest"] == approvals["billing/invoice"]
+
+
+def test_a_renamed_requirement_reads_from_the_main_spec(store):
+    store.plan([("billing", [])])
+    store.change("billing", breakdown(deliverable("invoice", covers=["billing#New name"])))
+    delta = store.root / "openspec" / "changes" / "billing" / "specs" / "billing"
+    delta.mkdir(parents=True)
+    (delta / "spec.md").write_text(
+        "## RENAMED Requirements\n\n- FROM: `### Requirement: Old name`\n- TO: `### Requirement: New name`\n"
+    )
+    main = store.root / "openspec" / "specs" / "billing"
+    main.mkdir(parents=True)
+    (main / "spec.md").write_text(
+        "# billing Specification\n\n## Purpose\n\nBills.\n\n## Requirements\n\n"
+        "### Requirement: Old name\nIt SHALL bill.\n\n#### Scenario: s\n- **WHEN** a\n- **THEN** b\n"
+    )
+    r = validate(store.root, show=lambda *_: {"deltas": []})
+    assert r.errors == []
+    body = by_key(r.graph)["billing/invoice"]["body"]
+    assert "### New name" in body and "It SHALL bill." in body and "#### Scenario: s" in body
