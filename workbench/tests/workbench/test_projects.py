@@ -5,7 +5,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from workbench.app import create_app
-from tests.conftest import breakdown, deliverable
+from tests.conftest import StoreBuilder, breakdown, deliverable
 from tests.workbench.conftest import P, make_config, project, settle, sign_in
 from tests.workbench.fake_sortie import FakeSortie
 from tests.workbench.test_watch import validate_offline, wait_for
@@ -120,7 +120,9 @@ def test_two_projects_plan_and_sync_apart(store):
         change = other.store / "openspec" / "changes" / "welcome"
         change.mkdir()
         (change / "proposal.md").write_text("## Why\n\nwelcome\n")
-        (change / "breakdown.yaml").write_text(yaml.safe_dump(breakdown(deliverable("greet"))))
+        welcome = breakdown(deliverable("greet", covers=["welcome#Do greet"]))
+        (change / "breakdown.yaml").write_text(yaml.safe_dump(welcome))
+        StoreBuilder._spec_for_covers(change, welcome)
         settle(client, "onboarding")
         settle(client)
 

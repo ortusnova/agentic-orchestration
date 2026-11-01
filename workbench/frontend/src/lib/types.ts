@@ -54,7 +54,7 @@ export interface GraphNode {
   delivery?: Delivery | null;
 }
 
-export type PlanStatus = "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
 
 /** One pull request a story names, as GitHub last reported it. */
 export interface DeliveryPull {

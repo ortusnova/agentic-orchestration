@@ -31,6 +31,7 @@
     }
     if (node.plan_status === "needs_rereview") return "needs re-review";
     if (node.plan_status === "held") return "held for approval";
+    if (node.plan_status === "needs_spec") return "needs a spec";
     if (node.plan_status === "draft") return "not approved";
     if (cls === "prog") return "in progress";
     const open = model.blockers(node.plan_key).filter((b) => !model.isDone(model.node(b))).length;

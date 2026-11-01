@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import APPROVER, Identity
+from .plan_overlay import needs_spec, tracker_by_key
 from .projects import ProjectManager, ProjectRuntime
 from .sortie import SortieError
 
@@ -43,6 +44,17 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
     def sortie_failure(exc: SortieError) -> HTTPException:
         return HTTPException(status_code=exc.status if exc.status >= 400 else 502, detail={"code": exc.code, "message": exc.message})
 
+    def without_spec(rt: ProjectRuntime, graph: dict[str, Any], approvals: dict[str, dict], keys: list[str]) -> list[str]:
+        """The keys that read "Needs a spec": no spec, not delivered, and no
+        approval that matches their content."""
+        nodes = {n["plan_key"]: n for n in graph["nodes"]}
+        tracker = tracker_by_key(rt.hub.tracker)
+        plan_states = (rt.hub.tracker or {}).get("plan_states")
+        stories = rt.plan.stories
+        return [k for k in keys
+                if not (k in approvals and approvals[k]["digest"] == stories[k]["digest"])
+                and needs_spec(nodes.get(k, {}), tracker.get(k), plan_states)]
+
     @router.post("/approve")
     async def approve(slug: str, body: ApproveBody, who: Identity = Depends(approver)) -> dict:
         rt = projects.get(slug)
@@ -70,6 +82,12 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             if delivered:
                 raise HTTPException(status_code=409, detail={"code": "delivered_by", "message":
                                     f"{', '.join(delivered)} names the pull requests that deliver it, so no agent takes it: nothing to approve"})
+        # A story with no spec is never approved; the epic's batch leaves it out.
+        unspecified = without_spec(rt, snap["graph"], approvals, keys)
+        if unspecified and (not body.epic or len(unspecified) == len(keys)):
+            raise HTTPException(status_code=409, detail={"code": "no_spec", "plan_key": unspecified[0], "keys": unspecified,
+                                                         "message": f"{', '.join(unspecified)} covers no requirement: give it a spec first"})
+        keys = [k for k in keys if k not in unspecified]
         await asyncio.to_thread(rt.registry.approve, rt.project.id, {k: stories[k]["digest"] for k in keys}, who.key, who.name)
         log.info("project %s: %s approved %s", slug, who.key, ", ".join(keys))
         await refreshed(rt)
@@ -121,7 +139,7 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         meta = rt.plan.stories.get(body.key)
         if not meta or not meta.get("supersedes"):
             raise HTTPException(status_code=409, detail={"code": "no_supersedes", "message": f"{body.key} declares no supersedes"})
-        if rt.hub.fields.get(body.key, {}).get("plan_status") == "draft":
+        if rt.hub.fields.get(body.key, {}).get("plan_status") in ("draft", "needs_spec"):
             raise HTTPException(status_code=409, detail={"code": "replacement_draft", "message": "approve the replacement first"})
         replaced = meta["supersedes"]
         writable(rt)

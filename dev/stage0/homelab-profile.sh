@@ -44,18 +44,18 @@ homelab_profile() {
   cmp -s "$vm_key" "$STAGE0_HOME/inputs/vm-age/keys.txt" || install -m 0600 "$vm_key" "$STAGE0_HOME/inputs/vm-age/keys.txt"
 
   # The mounts, as scripts/smolvm/sandbox passes them (design D7); the guest
-  # user's home is /home/brian. Each path is quoted: {workspace} is not plain
+  # user's home is /home/builder. Each path is quoted: {workspace} is not plain
   # YAML in a flow mapping. The uv and Go caches come from homelab.cache,
   # as in the sandbox, so host and guest paths cannot drift.
   local sources=$HOME/.cache/homelab-sources vmhost=$HOME/.cache/homelab-vmhost
   local recorders=$HOME/.local/state/homelab/sortie-recorder
   mkdir -p "$sources" "$vmhost" "$recorders"
   local mounts ns hosts guests i
-  mounts="{host: \"$sources\", guest: \"/home/brian/.cache/homelab-sources\", read_only: true}"
-  mounts+=", {host: \"$vmhost\", guest: \"/home/brian/.cache/homelab-vmhost\"}"
+  mounts="{host: \"$sources\", guest: \"/home/builder/.cache/homelab-sources\", read_only: true}"
+  mounts+=", {host: \"$vmhost\", guest: \"/home/builder/.cache/homelab-vmhost\"}"
   for ns in uv go; do
     mapfile -t hosts < <(cd "$hl" && python3 -m homelab.cache path --all "$ns")
-    mapfile -t guests < <(cd "$hl" && env -u HOMELAB_CACHE_HOME HOME=/home/brian python3 -m homelab.cache path --all "$ns")
+    mapfile -t guests < <(cd "$hl" && env -u HOMELAB_CACHE_HOME HOME=/home/builder python3 -m homelab.cache path --all "$ns")
     (( ${#hosts[@]} == ${#guests[@]} && ${#hosts[@]} > 0 )) || die "homelab.cache gave no $ns paths"
     for i in "${!hosts[@]}"; do
       mkdir -p "${hosts[i]}"
@@ -82,6 +82,9 @@ homelab_pack() {
   cp "$hl/scripts/vmhost/install-tools.sh" "$hl/scripts/vmhost/fetch.sh" \
      "$hl/scripts/smolvm/image/guest-setup.sh" "$hl/scripts/smolvm/image/guest-start.sh" \
      "$hl/scripts/smolvm/image/recorder.py" "$stage/homelab/"
+  # homelab's guest-setup.sh gives its guest user these ids: smolvm's shared
+  # folders let a guest write only as their host owner, this user.
+  printf '%s:%s\n' "$(id -u)" "$(id -g)" > "$stage/homelab/guest-uid"
   cp "$KIT/pack/install-harness.sh" "$KIT/pack/agent-acp" "$KIT/pack/claude-settings.json" \
      "$KIT/pack/opencode.json" "$stage/harness/"
   hash=$({

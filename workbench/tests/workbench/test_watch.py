@@ -14,10 +14,24 @@ def no_openspec(*_):
     raise AssertionError("openspec should not be called")
 
 
+def specs_on_disk(root, change):
+    """A fake `openspec show`: the change's delta specs as written on disk
+    (tests/conftest.py writes them for what a breakdown covers)."""
+    specs = root / "openspec" / "changes" / change / "specs"
+    deltas = []
+    for f in sorted(specs.rglob("spec.md")):
+        for line in f.read_text().splitlines():
+            if line.startswith("### Requirement: "):
+                name = line.removeprefix("### Requirement: ")
+                deltas.append({"spec": f.parent.relative_to(specs).as_posix(), "operation": "ADDED",
+                               "requirement": {"text": f"It SHALL {name}."}})
+    return {"deltas": deltas}
+
+
 def validate_offline(root, **kw):
     import planlib
 
-    return planlib.validate(root, show=no_openspec, **kw)
+    return planlib.validate(root, show=specs_on_disk, **kw)
 
 
 def wait_for(predicate, timeout=2.0):

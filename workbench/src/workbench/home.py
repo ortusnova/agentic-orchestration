@@ -210,7 +210,7 @@ def _story_reason(p: _Plan, key: str, fields: dict[str, Any], gate_tasks: list[d
     if status in ("frozen", "delivered", "delivery_unconfirmed"):
         return None
     draft = status in ("draft", "needs_rereview")
-    if draft and n.get("deliverable_kind") == "story" and not n.get("covers"):
+    if status == "needs_spec" or (draft and n.get("deliverable_kind") == "story" and not n.get("covers")):
         return "no_spec"
     if status == "needs_rereview":
         return "needs_rereview"
