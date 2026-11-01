@@ -66,6 +66,9 @@ fi
 
 mkdir -p "$STAGE0_HOME"/{bin,sortie,workspaces,home,sessions}
 chmod 700 "$STAGE0_HOME"
+# deploy.sh runs this again from a systemd unit, whose PATH lacks the tools
+# below; it uses the PATH of the last run, recorded here.
+printf '%s\n' "$PATH" > "$STAGE0_HOME/path"
 ENV_FILE=$STAGE0_HOME/stage0.env
 if [[ ! -s $ENV_FILE && ${STAGE0_PROFILE:-control} == homelab ]]; then
   say "Writing the default homelab-profile settings to $ENV_FILE"
