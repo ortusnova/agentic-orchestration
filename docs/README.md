@@ -20,6 +20,7 @@ workbench, which reaches each broker over HTTP.
 | [ACP broker guide](../acp-broker/docs/guide.md) | The broker's flags, viewers, use with Sortie, and telemetry. |
 | [ACP broker notes](../acp-broker/docs/notes.md) | The upstream ACP work the broker depends on, and what each agent does. |
 | [smol-builder](../smol-builder/README.md) | Build the smolvm packs agents run in. |
+| [Worker daemon operator guide](../worker-daemon/docs/operator-guide.md) | Run a worker host: the daemon's configuration (control-plane URL, reserve, floor, client certificate), what a job does, and its flows. |
 | [Sortie](../sortie/docs/README.md) | The orchestrator: our fork's documentation. |
 | [Specs](../specs/openspec/specs) | The requirements of every component, as OpenSpec specs. |
 | [Development setup](../dev/.env.example) | `dev/dev.sh` and its settings. |

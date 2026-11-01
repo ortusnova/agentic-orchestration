@@ -10,6 +10,7 @@ and for the people who plan, watch, steer, and review that work.
 | `workbench/` | The plan workbench and `planlib`: plan a project as epics and stories, validate the plan, approve it, and sync it to the tracker. Watch and steer the agents that work on it. | Python, Svelte |
 | `acp-broker/` | Sits between an orchestrator and an Agent Client Protocol (ACP) agent. One session, two inputs: the autonomous driver and people, who can watch, steer, take over, hand back, and answer permission requests. | Go |
 | `smol-builder/` | Builds the smolvm machine images that agents run in. | Go |
+| `worker-daemon/` | Runs on a worker host: dials the control plane's worker API, runs each job in a smolvm machine, and carries its flows. Linux and macOS. | Go |
 | `specs/` | The OpenSpec store: the requirements of every component, and the record of each change. | Markdown |
 | `docs/` | Documentation for the whole system. | Markdown |
 | `dev/` | The development setup: runs every component locally against a local tracker and forge. | Shell, Python |
