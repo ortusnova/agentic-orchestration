@@ -91,10 +91,69 @@ describe("worker list", () => {
     h.select(open.plan_key);
     await settle();
     $<HTMLButtonElement>("section.context .chips [data-act='watch']")!.click();
-    expect(watched).toEqual([open.plan_key]);
+    expect(watched).toEqual([open.plan_key, open.plan_key]);
     h.select(other.plan_key);
     await settle();
     expect($("section.context .chips [data-act='watch']")).toBeNull();
+    expect(watched).toEqual([open.plan_key, open.plan_key]);
+  });
+});
+
+describe("selecting a running story", () => {
+  function autoHarness(doc: MergedGraph, w: FakeWorker, extra: Record<string, unknown> = {}) {
+    const watched: string[] = [];
+    let h: Harness;
+    h = harness(doc, w, { onwatch: (n: GraphNode) => { watched.push(n.plan_key); h.watch(n); }, ...extra });
+    return { h, watched };
+  }
+
+  it("opens its worker's session instead of the planning chat", async () => {
+    const { doc, open } = workerDoc();
+    const { h, watched } = autoHarness(doc, new FakeWorker());
+    await settle();
+    expect($("textarea[aria-label='Message']")).not.toBeNull();
+    h.select(open.plan_key);
+    await settle();
+    expect(watched).toEqual([open.plan_key]);
+    expect($(`[data-worker='${open.tracker!.identifier}'] .state`)!.textContent).toContain(`Watching ${open.tracker!.identifier}`);
+    expect($("textarea[aria-label='Message']")).toBeNull();
+  });
+
+  it("opens it from a deep link that already selects the story", async () => {
+    const { doc, open } = workerDoc();
+    const { watched } = autoHarness(doc, new FakeWorker(), { initialView: { epic: null, selected: open.plan_key, showCross: true } });
+    await settle();
+    expect(watched).toEqual([open.plan_key]);
+    expect($(`[data-worker='${open.tracker!.identifier}']`)).not.toBeNull();
+  });
+
+  it("stays on planning after going back, until the selection changes", async () => {
+    const { doc, open } = workerDoc();
+    const { h, watched } = autoHarness(doc, new FakeWorker());
+    await settle();
+    h.select(open.plan_key);
+    await settle();
+    $<HTMLButtonElement>("[data-act='back-to-planning']")!.click();
+    await settle();
+    expect($("textarea[aria-label='Message']")).not.toBeNull();
+    expect(watched).toEqual([open.plan_key]);
+    h.select(null);
+    await settle();
+    h.select(open.plan_key);
+    await settle();
+    expect(watched).toEqual([open.plan_key, open.plan_key]);
+  });
+
+  it("leaves the planning chat for a story whose worker cannot be watched", async () => {
+    const { doc } = workerDoc();
+    const other = synced("billing/run", "Todo", {}, { status: "running", turn_count: 1, last_message: null, watchable: false });
+    doc.nodes.push(other);
+    const { h, watched } = autoHarness(doc, new FakeWorker());
+    await settle();
+    h.select(other.plan_key);
+    await settle();
+    expect(watched).toEqual([]);
+    expect($("textarea[aria-label='Message']")).not.toBeNull();
   });
 });
 

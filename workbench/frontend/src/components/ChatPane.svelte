@@ -89,6 +89,17 @@
     lastSelected = sel;
   });
 
+  // A selected story whose worker is running opens that worker's session, once
+  // per selection, so going back to planning sticks until the selection changes.
+  let autoWatched: string | null = null;
+  $effect(() => {
+    const node = view.selected ? model.node(view.selected) : undefined;
+    const id = node?.kind === "story" && node.runtime?.watchable ? (node.tracker?.identifier ?? null) : null;
+    const key = id && `${node!.plan_key}|${id}`;
+    if (key && key !== autoWatched && worker?.node.tracker?.identifier !== id) onwatch?.(node!);
+    autoWatched = key;
+  });
+
   async function refresh() {
     try {
       const status = await session.status();
