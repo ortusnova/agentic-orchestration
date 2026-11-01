@@ -38,8 +38,9 @@ homelab_profile() {
   krunfw=$("$hl/scripts/smolvm/libkrunfw/build.sh" --print-dir) || die "homelab's guest kernel build failed to name its directory"
   [[ -f $krunfw/build.json ]] || die "homelab's guest kernel $krunfw is not built: run \`make dev-host\` in homelab"
 
-  # The vm age key, alone in a folder the machines mount read-only: a test
-  # fixture (design D3), copied so no other identity is ever mounted.
+  # The vm age key, a test fixture (design D3), copied here alone: run-sortie.sh
+  # hands it to the machines as HOMELAB_VM_AGE_KEY, so no other identity is
+  # ever exposed.
   install -d -m 0700 "$STAGE0_HOME/inputs" "$STAGE0_HOME/inputs/vm-age"
   cmp -s "$vm_key" "$STAGE0_HOME/inputs/vm-age/keys.txt" || install -m 0600 "$vm_key" "$STAGE0_HOME/inputs/vm-age/keys.txt"
 
@@ -53,10 +54,11 @@ homelab_profile() {
   local mounts ns hosts guests i
   mounts="{host: \"$sources\", guest: \"/home/builder/.cache/homelab-sources\", read_only: true}"
   mounts+=", {host: \"$vmhost\", guest: \"/home/builder/.cache/homelab-vmhost\"}"
-  # One mount per cache namespace: Go's two caches (mod, build) share a
-  # parent, and a machine on taichi starts with at most 7 shared folders
-  # (smolvm 1.32.4, nested, virtio-net: 8 fail with "no more IRQs are
-  # available"), one of which Sortie adds for its control directory.
+  # One mount per cache namespace (Go's mod and build share a parent), and
+  # the vm key as an environment value (run-sortie.sh), not a mount: a
+  # machine on taichi starts with at most 6 shared folders beside Sortie's
+  # tool socket (smolvm 1.32.4, nested, virtio-net; one more fails with "no
+  # more IRQs are available"), and Sortie adds one for its control directory.
   local count=2
   for ns in uv go; do
     mapfile -t hosts < <(cd "$hl" && python3 -m homelab.cache path --all "$ns")
@@ -76,10 +78,9 @@ PY
     mounts+=", {host: \"${pair%%$'\n'*}\", guest: \"${pair#*$'\n'}\"}"
     count=$((count + 1))
   done
-  mounts+=", {host: \"$STAGE0_HOME/inputs/vm-age\", guest: \"/opt/homelab-inputs/vm-age\", read_only: true}"
   mounts+=", {host: \"$recorders/{workspace}\", guest: \"/var/log/homelab-recorder\"}"
-  count=$((count + 2))
-  (( count <= 6 )) || die "the homelab workflow would mount $count folders; a machine starts with at most 6 besides Sortie's own"
+  count=$((count + 1))
+  (( count <= 5 )) || die "the homelab workflow would mount $count folders; a machine starts with at most 5 besides Sortie's own"
   export STAGE0_HOMELAB_MOUNTS="[$mounts]"
 
   (umask 077; printf 'STAGE0_SMOLVM_LIB_DIR=%s\n' "$krunfw" > "$STAGE0_HOME/profile.env")
