@@ -24,10 +24,11 @@ Then the released story waits for Sortie's next poll.
 - **A release starts work at once.** After a sync that released a story, the
   workbench asks Sortie to poll now (`POST /api/v1/refresh`), so dispatch
   does not wait for the poll interval.
-- **The Sync button and dialog go away.** In their place is a sync status in
-  the top bar: syncing, synced with its time, or failed with the reason and a
-  retry. It opens the last sync's result: what was created, updated,
-  released, and orphaned.
+- **The Sync button and dialog go away, and nothing replaces them.** Syncing
+  is invisible (operator, 2026-11-01): no sync status, no sync time, and an
+  unapproved story reads "Not approved". Only when the tracker could not be
+  updated does the top bar say so, with the reason, the next try and a
+  retry.
 - **Failures are visible and retried.** An invalid plan, an unreachable
   Sortie, a tracker without a needed capability, or a partial failure stops
   the sync and shows why. A failed sync is retried with backoff, and again on
@@ -42,7 +43,7 @@ Then the released story waits for Sortie's next poll.
 ### Modified Capabilities
 
 - `planning/plan-workbench`: "Sync with preview" is replaced by "The approved
-  plan syncs on its own" and "Sync status".
+  plan syncs on its own" and "The tracker is never shown out of date".
 
 ## Impact
 

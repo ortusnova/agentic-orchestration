@@ -34,61 +34,59 @@ afterEach(() => {
 async function settle() { for (let i = 0; i < 6; i++) { await tick(); await Promise.resolve(); } flushSync(); }
 const $ = <T extends Element = HTMLElement>(s: string) => document.querySelector<T>(s);
 
-describe("sync status", () => {
+describe("the tracker notice", () => {
   function show(st: SyncStatusT | null, sync = new FakeSync()) {
     app = mount(SyncHarness, { target: document.body, props: { status: st, onretry: () => sync.retry() } });
     return sync;
   }
 
-  it("says when the plan is syncing", async () => {
-    show(status({ state: "syncing" }));
-    await settle();
-    expect($("[data-sync]")!.dataset.sync).toBe("syncing");
-    expect($("[data-sync]")!.textContent).toContain("Syncing");
+  it("shows nothing while the tracker matches the plan, a sync runs, or none has run", async () => {
+    for (const st of [status({ state: "syncing" }), status(), status({ state: "idle", synced_at: null, runs: 0 }), null]) {
+      show(st);
+      await settle();
+      expect($("[data-sync]")).toBeNull();
+      expect(document.body.textContent!.toLowerCase()).not.toContain("sync");
+      unmount(app!); app = undefined; document.body.innerHTML = "";
+    }
   });
 
-  it("says when the plan last synced, and opens the last result", async () => {
-    show(status({ result: { created: [{ plan_key: "billing/b1", identifier: "T-1" }], updated: [],
-      released: [{ plan_key: "billing/b1", identifier: "T-1" }], orphans: [{ plan_key: "billing/old" }] } }));
-    await settle();
-    expect($("[data-sync]")!.dataset.sync).toBe("synced");
-    expect($("[data-sync]")!.textContent).toContain("Synced");
-    expect($("[data-sync-result]")).toBeNull();
-    $<HTMLButtonElement>("[data-sync]")!.click();
-    await settle();
-    expect($("[data-sync-list='released']")!.textContent).toContain("T-1");
-    expect($("[data-sync-list='orphans']")!.textContent).toContain("billing/old");
-    expect($("[data-sync-list='created']")!.textContent).toContain("T-1");
-  });
-
-  it("shows a failure with its reason and retries it", async () => {
+  it("says the tracker is not updated, why, and tries again", async () => {
     const sync = show(status({ state: "failed", failed_at: 1_800_000_100, retry_at: 1_800_000_160,
       reason: { code: "sortie_unreachable", message: "cannot reach Sortie: connection refused" } }));
     await settle();
     expect($("[data-sync]")!.dataset.sync).toBe("failed");
-    expect($("[data-sync]")!.textContent).toContain("Sync failed");
+    expect($("[data-sync]")!.textContent).toContain("Tracker not updated");
     $<HTMLButtonElement>("[data-sync]")!.click();
     await settle();
     expect($("[role='alert']")!.textContent).toContain("Sortie is unreachable");
+    expect(document.body.textContent).toContain("Trying again at");
     $<HTMLButtonElement>("[data-act='retry-sync']")!.click();
     await settle();
     expect(sync.calls).toEqual(["retry"]);
   });
 
-  it("names a failed write and a missing capability", async () => {
+  it("names a failed write, what it updated first, and a missing capability", async () => {
     show(status({ state: "failed", reason: { code: "tracker_unsupported_operation", message: "the tracker lacks link_dependency" },
-      result: { created: [], failed: { op: "create", plan_key: "billing/b2", error: "boom" } } }));
+      result: { created: [{ plan_key: "billing/b1", identifier: "T-1" }], failed: { op: "create", plan_key: "billing/b2", error: "boom" } } }));
     await settle();
     $<HTMLButtonElement>("[data-sync]")!.click();
     await settle();
     expect($("[role='alert']")!.textContent).toContain("link_dependency");
     expect($("[data-sync-failed]")!.textContent).toContain("billing/b2");
+    expect($("[data-sync-list='written']")!.textContent).toContain("T-1");
   });
 
-  it("shows nothing synced yet before the first sync", async () => {
-    show(status({ state: "idle", synced_at: null, runs: 0 }));
+  it("says a read-only workbench is read-only", async () => {
+    show(status({ state: "disabled" }));
     await settle();
-    expect($("[data-sync]")!.textContent).toContain("Not synced yet");
+    expect($("[data-sync]")!.textContent).toContain("Read-only");
+  });
+
+  it("calls a story nobody approved not approved", () => {
+    const doc = planDoc();
+    const s = doc.nodes.find((n) => n.kind === "story")!;
+    Object.assign(s, { status: "draft", tracker: null });
+    expect(new GraphModel(doc).statusLabel(s)).toBe("Not approved");
   });
 });
 

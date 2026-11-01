@@ -2,7 +2,7 @@
 
 ### Requirement: Sync with preview
 **Reason**: The confirmation repeats the approval, which is already the person's decision to start work. A sync writes only approved stories, deletes nothing, and changes an issue's state only to release it.
-**Migration**: Approving, pulling back, cancelling or superseding a story syncs the plan within about a second. The sync status in the top bar shows each sync's result and any failure.
+**Migration**: Approving, pulling back, cancelling or superseding a story syncs the plan within about a second. Nothing shows a sync; the top bar says so only when the tracker could not be updated ("The tracker is never shown out of date").
 
 ## ADDED Requirements
 
@@ -21,7 +21,7 @@ The workbench SHALL sync a project's plan to the tracker, through Sortie's previ
 #### Scenario: An invalid plan
 - **WHEN** the planning agent leaves the plan invalid
 - **THEN** no sync runs until the plan is valid again
-- **AND** the sync status says the plan is invalid
+- **AND** the top bar says the tracker is not updated because the plan is invalid
 
 ### Requirement: A release asks Sortie to poll at once
 After a sync that released at least one story, the workbench SHALL ask Sortie to poll its tracker at once (`POST /api/v1/refresh`, with Sortie's control token). A failure of that request SHALL NOT fail the sync; the story then starts at Sortie's next poll.
@@ -31,14 +31,18 @@ After a sync that released at least one story, the workbench SHALL ask Sortie to
 - **THEN** the workbench calls Sortie's refresh once
 - **AND** Sortie dispatches `billing/b1` on that poll, not on the next timed poll
 
-### Requirement: Sync status
-The workbench SHALL show each project's sync status in the top bar: syncing; synced, with the time of the last successful sync; or failed, with the reason. The status SHALL update live, as the graph does. Opening it SHALL show the last sync's result: the issues created and updated, the stories released, the orphaned issues, and any failed write. A failed sync SHALL be retried with backoff of at most 60 seconds, and at the next trigger. A person with the `planner` role SHALL be able to retry a failed sync at once.
+### Requirement: The tracker is never shown out of date
+Syncing SHALL be invisible. The workbench SHALL NOT show a sync status, a sync time, or the word "sync" while the tracker matches the plan, or while a sync runs. A story that is not approved SHALL read "Not approved", never "Not synced". When a sync fails, the top bar SHALL say that the tracker is not updated, and why, in words a person acts on; opening it SHALL show the failed write, if any, and when the next try runs. A failed sync SHALL be retried with backoff of at most 60 seconds, and at the next trigger. A person with the `planner` role SHALL be able to retry a failed sync at once. The notice SHALL disappear when a sync succeeds. A read-only workbench SHALL say it is read-only.
 
 #### Scenario: Sortie is unreachable
 - **WHEN** a sync fails because Sortie does not answer
-- **THEN** the top bar shows the sync as failed, and says Sortie is unreachable
-- **AND** the workbench retries within 60 seconds, and the status turns to synced once a sync succeeds
+- **THEN** the top bar says the tracker is not updated, because Sortie is unreachable
+- **AND** the workbench retries within 60 seconds, and the notice disappears once a sync succeeds
 
-#### Scenario: The last result
-- **WHEN** a person opens the sync status after a sync that released `billing/b1` and orphaned `billing/old`
-- **THEN** it lists `billing/b1` as released and `billing/old` as orphaned
+#### Scenario: Nothing to say
+- **WHEN** the last sync succeeded, or a sync is running, or none has run yet
+- **THEN** the top bar shows nothing about the tracker
+
+#### Scenario: A story nobody approved
+- **WHEN** `billing/tax` is a draft
+- **THEN** its node reads "Not approved"

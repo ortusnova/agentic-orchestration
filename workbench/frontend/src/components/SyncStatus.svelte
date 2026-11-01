@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { SyncIssueRef, SyncStatus } from "../lib/types";
 
+  // Syncing is invisible: this speaks only when the tracker could not be
+  // updated, or when the workbench never writes to it (read-only).
   let { status, onretry }: { status: SyncStatus | null | undefined; onretry: () => Promise<unknown> } = $props();
 
   let open = $state(false);
@@ -9,28 +11,17 @@
   const phase = $derived(status?.state ?? "idle");
   const clock = (t: number | null | undefined) =>
     t ? new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
-  const label = $derived(
-    phase === "syncing" ? "Syncing…"
-      : phase === "synced" ? `Synced ${clock(status?.synced_at)}`
-      : phase === "failed" ? "Sync failed"
-      : phase === "disabled" ? "Sync off"
-      : "Not synced yet",
-  );
 
   const REASONS: Record<string, string> = {
     sortie_unreachable: "Sortie is unreachable.",
-    plan_invalid: "The plan is invalid. It syncs once its problems are fixed.",
-    tracker_unsupported_operation: "The tracker cannot do this sync.",
+    plan_invalid: "The plan is invalid. The tracker catches up once its problems are fixed.",
+    tracker_unsupported_operation: "The tracker cannot make this change.",
   };
   const reasonText = $derived(status?.reason ? (REASONS[status.reason.code] ?? "") : "");
-
-  const LISTS: { key: "released" | "created" | "updated" | "orphans"; title: string }[] = [
-    { key: "released", title: "Released to agents" },
-    { key: "created", title: "Issues created" },
-    { key: "updated", title: "Issues updated" },
-    { key: "orphans", title: "Orphaned issues" },
-  ];
   const name = (r: SyncIssueRef) => r.identifier || r.plan_key;
+  const written = $derived(
+    status?.result ? [...(status.result.created ?? []), ...(status.result.updated ?? []), ...(status.result.released ?? [])] : [],
+  );
 
   async function retry() {
     retrying = true;
@@ -42,47 +33,40 @@
   }
 </script>
 
-<div class="sync-status">
-  <button type="button" class="pill {phase}" data-sync={phase} aria-expanded={open} onclick={() => (open = !open)}
-    title={phase === "failed" ? status?.reason?.message : phase === "disabled" ? "This workbench is read-only: it never writes to the tracker" : "The approved plan syncs to the tracker on its own"}>
-    <span class="dot" aria-hidden="true"></span><span class="label">{label}</span>
-  </button>
-  {#if open}
-    <div class="panel" role="dialog" aria-label="Last sync" data-sync-result>
-      {#if phase === "failed" && status?.reason}
-        <p class="alert" role="alert">
-          {#if reasonText}<b>{reasonText}</b>{/if}
-          <span class="mono">{status.reason.message}</span>
-        </p>
-        {#if status.retry_at}<p class="muted">Retrying at {clock(status.retry_at)}, and at the next change.</p>{/if}
-        <button type="button" class="retry" data-act="retry-sync" onclick={retry} disabled={retrying}>
-          {retrying ? "Retrying…" : "Retry now"}
-        </button>
-      {:else if phase === "syncing"}
-        <p class="muted">Syncing the approved plan to the tracker…</p>
-      {/if}
-      {#if status?.result}
-        {#if status.result.failed}
+{#if phase === "failed"}
+  <div class="sync-status">
+    <button type="button" class="pill failed" data-sync="failed" aria-expanded={open} onclick={() => (open = !open)}
+      title={status?.reason?.message}>
+      <span class="dot" aria-hidden="true"></span><span class="label">Tracker not updated</span>
+    </button>
+    {#if open}
+      <div class="panel" role="dialog" aria-label="Tracker not updated" data-sync-result>
+        {#if status?.reason}
+          <p class="alert" role="alert">
+            {#if reasonText}<b>{reasonText}</b>{/if}
+            <span class="mono">{status.reason.message}</span>
+          </p>
+        {/if}
+        {#if status?.result?.failed}
           <p class="alert" data-sync-failed>Stopped at <span class="mono">{status.result.failed.op} {status.result.failed.plan_key}</span>: {status.result.failed.error}</p>
         {/if}
-        {#each LISTS as l (l.key)}
-          {@const items = status.result[l.key] ?? []}
-          {#if items.length}
-            <div class="list" data-sync-list={l.key}>
-              <h3>{l.title} <span class="n">{items.length}</span></h3>
-              <p class="mono">{items.map(name).join(", ")}</p>
-            </div>
-          {/if}
-        {/each}
-        {#if LISTS.every((l) => !(status?.result?.[l.key] ?? []).length) && !status.result.failed}
-          <p class="muted">The tracker already matched the plan.</p>
+        {#if written.length}
+          <p class="muted" data-sync-list="written">Updated before it stopped: <span class="mono">{written.map(name).join(", ")}</span></p>
         {/if}
-      {:else if phase === "idle"}
-        <p class="muted">The approved plan syncs to the tracker on its own, about a second after each change.</p>
-      {/if}
-    </div>
-  {/if}
-</div>
+        {#if status?.retry_at}<p class="muted">Trying again at {clock(status.retry_at)}, and at the next change.</p>{/if}
+        <button type="button" class="retry" data-act="retry-sync" onclick={retry} disabled={retrying}>
+          {retrying ? "Trying…" : "Try now"}
+        </button>
+      </div>
+    {/if}
+  </div>
+{:else if phase === "disabled"}
+  <div class="sync-status">
+    <span class="pill" data-sync="disabled" title="This workbench never writes to the tracker">
+      <span class="dot" aria-hidden="true"></span><span class="label">Read-only</span>
+    </span>
+  </div>
+{/if}
 
 <style>
   .sync-status { position: relative; }
@@ -95,17 +79,11 @@
     .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slate); flex: none; }
-  .synced .dot { background: #5fb48a; }
-  .syncing .dot { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
   .failed { border-color: var(--alert); }
   .failed .dot { background: var(--alert); }
-  @keyframes pulse { 50% { opacity: 0.3; } }
-  @media (prefers-reduced-motion: reduce) { .syncing .dot { animation: none; } }
   .panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; width: min(380px, 90vw); display: flex; flex-direction: column;
     gap: var(--s-sm); padding: var(--s-md) var(--s-card-x); border-radius: var(--r-well); background: #fff; color: var(--ink);
     box-shadow: 0 24px 60px -24px rgba(20, 22, 26, 0.5); border: 1px solid var(--line); }
-  h3 { font-size: 12px; font-weight: 700; color: var(--mute); }
-  .n { font-variant-numeric: tabular-nums; color: var(--ink); }
   .mono { font: 500 12px var(--font-mono); overflow-wrap: anywhere; }
   .muted { color: var(--mute); font-size: 12.5px; }
   .alert { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--alert); border-radius: var(--r-button); font-size: 12.5px; }

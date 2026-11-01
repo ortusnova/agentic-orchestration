@@ -9,6 +9,7 @@
 ## 2. Frontend
 
 - [x] 2.1 Replace the Sync button and `SyncDialog.svelte` with the sync status in the top bar, and the last result on open; test syncing, synced, failed and retry.
+- [x] 2.2 Show nothing about syncing: drafts read "Not approved", and the top bar speaks only when the tracker could not be updated ("The tracker is never shown out of date"); test that syncing, synced and idle show nothing.
 
 ## 3. Docs and proof
 
