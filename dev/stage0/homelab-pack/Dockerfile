@@ -9,12 +9,13 @@ COPY homelab/ /opt/homelab-sandbox/
 RUN /opt/homelab-sandbox/install-tools.sh \
  && /opt/homelab-sandbox/guest-setup.sh \
  && rm -rf /var/lib/apt/lists/*
-# The agent harness, for brian.
+# The agent harness, for brian. A pack does not carry the image's USER: a
+# machine runs its commands as root unless it is created with `--user brian`
+# (measured on smolvm 1.32.4). With that, every command runs as brian, with
+# HOME=/home/brian, and /workspace, the machine's own disk (mode 1777), takes
+# Sortie's seeding as brian. Sortie gains the setting in the spec store's
+# smolvm-machine-shape story (design D12, amended 2026-10-31); until then a
+# machine from this pack runs as root, so no homelab story runs on it.
 COPY harness/ /opt/stage0-harness/
 RUN /opt/stage0-harness/install-harness.sh brian /home/brian
-# smolvm runs every command as the image's user, so Sortie's seeding, hooks,
-# agent and export all run as the chain's user (design D12). Sortie seeds the
-# repository into /workspace.
-RUN install -d -o brian -g brian /workspace
-USER brian
 WORKDIR /workspace
