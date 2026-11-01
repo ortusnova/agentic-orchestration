@@ -12,7 +12,7 @@ and for the people who plan, watch, steer, and review that work.
 | `smol-builder/` | Builds the smolvm machine images that agents run in. | Go |
 | `specs/` | The OpenSpec store: the requirements of every component, and the record of each change. | Markdown |
 | `docs/` | Documentation for the whole system. | Markdown |
-| `dev/` | The development setup: runs every component locally against a local tracker and forge. | Shell, Python |
+| `dev/` | The development setup: runs every component locally against a local tracker and forge, and the stage-0 kit with its stage-1 edge. | Shell, Python, Go |
 | `sortie/` | Git submodule: our fork of [Sortie](https://github.com/sortie-ai/sortie), the orchestrator. It is licensed separately, under Apache-2.0. | Go |
 
 See [docs/](docs/README.md) for how the parts fit and every guide.
