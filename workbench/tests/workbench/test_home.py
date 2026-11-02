@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import httpx
 import planlib
@@ -18,7 +20,7 @@ from tests.workbench.test_approvals import STATES, app_for
 from tests.workbench.test_watch import validate_offline
 from workbench.app import create_app
 from workbench.config import Config
-from workbench.home import History, build_home, execution_health
+from workbench.home import History, build_home, execution_health, waits_of
 
 # 2.1 Execution health -----------------------------------------------------------
 
@@ -496,6 +498,106 @@ def test_a_story_released_later_is_listed_after_the_others(store):
         early.update(state="Todo")
         settle(client)
         assert [r["identifier"] for r in client.get(f"{P}/home").json()["released"]] == ["ONS-10", "ONS-5"]
+
+
+# Waiting is reported as stuck (agent-platform/run-supervision) ----------------------
+
+# The health the scenario below serves, which the frontend's test renders:
+# it is rewritten with UPDATE_FIXTURES=1.
+WAITING_FIXTURE = Path(__file__).resolve().parents[2] / "frontend" / "tests" / "fixtures" / "waiting-on-review.json"
+PULLS = ["ortusnova/homelab#91", "ortusnova/homelab#92", "ortusnova/homelab#93", "ortusnova/homelab#94",
+         "ortusnova/homelab#94", "ortusnova/sortie#30"]
+
+
+def row(key, state, **extra):
+    return {"key": key, "identifier": extra.pop("identifier", None), "state": state, "pr": None, "question": None,
+            "reason": None, **extra}
+
+
+def pull(ref):
+    return {"ref": ref, "url": f"https://example.test/{ref}"}
+
+
+def test_free_slots_while_stories_wait_is_stuck_not_idle():
+    released = [row("ons/a", "in_review", pr=pull("o/r#1")), row("ons/b", "in_review", pr=pull("o/r#1")),
+                row("ons/c", "in_review", pr=pull("o/r#2"))]
+    nodes = [{"plan_key": r["key"], "tracker": {"state": "In Review"}} for r in released]
+    waits = waits_of(released, nodes, state())
+    h = health(waits=waits)
+    assert h["verdict"] == "stuck"
+    assert h["reasons"] == [{"code": "waiting", "text": "3 stories wait on 2 pull requests in review", "key": None}]
+    assert [w["text"] for w in h["waits"]] == ["o/r#1 in review, for ons/a and ons/b: a reviewer reviews it",
+                                               "o/r#2 in review, for ons/c: a reviewer reviews it"]
+    # A story ready for a slot, or no free slot, is not stuck on the waits.
+    assert health(waits=waits, runway=1)["verdict"] == "will_idle"
+    assert health(waits=waits, state=state(["T-1", "T-2", "T-3"]))["verdict"] != "stuck"
+
+
+def test_each_kind_of_wait_names_who_acts_on_it():
+    s = state(["T-5"], budget_exhausted=[{"issue_identifier": "T-6", "reason": "token_budget"}],
+              parked=[{"issue_identifier": "T-4", "reason": "agent_blocked", "statement": "Which repo?"}])
+    s["running"][0].update(held=True, hold_reason="permission_request", holder="human")
+    released = [row("ons/r", "in_review", pr=pull("o/r#1")), row("ons/m", "in_review", pr=pull("o/r#2")),
+                row("ons/d", "in_review", pr=pull("o/r#3")),
+                row("ons/q", "needs_you", identifier="T-4", question="Which repo?"),
+                row("ons/h", "held", identifier="T-5", reason="permission request"),
+                row("ons/b", "held", identifier="T-6", reason="token budget"),
+                row("ons/w", "working", identifier="T-7")]
+    states = {"ons/r": "In Review", "ons/m": "Merging", "ons/d": "Awaiting deploy"}
+    nodes = [{"plan_key": r["key"], "tracker": {"state": states.get(r["key"], "In Progress")}} for r in released]
+    waits = waits_of(released, nodes, s)
+    assert [(w["kind"], w["who"]) for w in waits] == [
+        ("review", "a reviewer"), ("merge", "a maintainer"), ("deploy", "the operator"),
+        ("question", "a person"), ("budget", "the operator"), ("hold", "a person")]
+    assert [w["text"] for w in waits] == [
+        "o/r#1 in review, for ons/r: a reviewer reviews it",
+        "o/r#2 to merge, for ons/m: a maintainer merges it",
+        "o/r#3 to deploy, for ons/d: the operator deploys it",
+        "a question, for ons/q: a person answers it",
+        "a held budget (token budget), for ons/b: the operator raises the budget",
+        "a held run (permission request), for ons/h: a person answers its request",
+    ]
+    h = health(state=s, waits=waits, key_of={"T-4": "ons/q", "T-5": "ons/h", "T-6": "ons/b"})
+    assert h["verdict"] == "stuck"
+    assert h["reasons"][0] == {"code": "waiting", "text": "6 stories wait on 1 pull request in review, 1 pull request "
+                               "to merge, 1 deploy, 1 question, 1 held budget and 1 held run", "key": None}
+
+
+def waiting_health(home):
+    """The health as the frontend fixture keeps it: without the hourly history."""
+    return {**home["health"], "history": []}
+
+
+def test_scenario_every_story_waits_on_a_review(store):
+    """p1 has 3 free slots and its 6 held stories wait on 5 open pull requests."""
+    keys = [f"s{i}" for i in range(1, 7)]
+    released_plan(store, *keys)
+    fake = FakeSortie()
+    fake.plan_states = STATES
+    fake.max_agents = 3
+    fake.issue("ons", kind="epic")
+    for i, (k, ref) in enumerate(zip(keys, PULLS), start=1):
+        fake.issue(f"ons/{k}", identifier=f"ONS-{i}", state="In Review", pr=ref)
+    app = app_for(store, fake, sync_enabled=False)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        home = client.get(f"{P}/home").json()
+    h = home["health"]
+    assert (h["slots"], h["busy"], h["free"], h["runway"]) == (3, 0, 3, 0)
+    assert h["verdict"] == "stuck"
+    assert h["reasons"] == [{"code": "waiting", "text": "6 stories wait on 5 pull requests in review", "key": None}]
+    assert [w["pr"]["ref"] for w in h["waits"]] == sorted(set(PULLS))
+    shared = next(w for w in h["waits"] if w["pr"]["ref"] == "ortusnova/homelab#94")
+    assert [s["key"] for s in shared["stories"]] == ["ons/s4", "ons/s5"]
+    assert shared["pr"]["url"] == "https://github.com/ortusnova/homelab/pull/94"
+    assert {w["who"] for w in h["waits"]} == {"a reviewer"}
+
+    if os.environ.get("UPDATE_FIXTURES"):
+        WAITING_FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        WAITING_FIXTURE.write_text(json.dumps(waiting_health(home), indent=2, sort_keys=True) + "\n")
+    assert json.loads(WAITING_FIXTURE.read_text()) == waiting_health(home), \
+        "the frontend's fixture is stale: run the test with UPDATE_FIXTURES=1"
 
 
 # The home view counts what milestone work waits on (agent-platform/workbench-home) --

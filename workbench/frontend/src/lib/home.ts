@@ -41,6 +41,35 @@ export interface Health {
   held: { identifier: string; key: string | null; reason: string; holder: string | null }[];
   runway: number | null;
   history?: { end: number; busy: number | null; runway: number | null }[];
+  /** What the released stories wait on, and who acts on each; absent from an older backend. */
+  waits?: Wait[];
+}
+
+export type WaitKind = "review" | "merge" | "deploy" | "question" | "budget" | "hold";
+
+/** One thing released stories wait on while no agent works on them (agent-platform/run-supervision). */
+export interface Wait {
+  kind: WaitKind;
+  /** Review, merge, deploy: the pull request, which stories may share. */
+  pr: { ref: string; url: string | null } | null;
+  /** Budget, hold: why. */
+  reason: string | null;
+  stories: { key: string; identifier: string | null }[];
+  /** Who acts on it, and what they do: "a reviewer", "reviews it". */
+  who: string;
+  does: string;
+  /** All of it in words, as the backend says it. */
+  text: string;
+}
+
+/** What a wait is, in words, after its pull request when it has one: "in review", "a held budget (token budget)". */
+export function waitWhat(w: Wait): string {
+  if (w.kind === "review") return w.pr ? "in review" : "a review";
+  if (w.kind === "merge") return w.pr ? "to merge" : "a merge";
+  if (w.kind === "deploy") return w.pr ? "to deploy" : "a deploy";
+  if (w.kind === "question") return "a question";
+  const what = w.kind === "budget" ? "a held budget" : "a held run";
+  return w.reason ? `${what} (${w.reason})` : what;
 }
 
 export type Reason =

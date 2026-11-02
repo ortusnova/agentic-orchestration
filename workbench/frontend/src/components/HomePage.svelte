@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { plainTask, progressLines, REASON_TEXT, VERDICT_TEXT, type HomeDoc } from "../lib/home";
+  import { plainTask, progressLines, REASON_TEXT, VERDICT_TEXT, waitWhat, type HomeDoc } from "../lib/home";
   import { graphHref } from "../lib/router";
   import type { MergedGraph } from "../lib/types";
   import HomeNeeds from "./HomeNeeds.svelte";
@@ -25,6 +25,7 @@
 
   const home: HomeDoc | null = $derived(doc.home && !doc.home.error ? doc.home : null);
   const health = $derived(home?.health);
+  const waiting = $derived(health?.reasons.some((r) => r.code === "waiting") ?? false);
   const goal = $derived(home?.milestones.find((m) => m.id === home?.goal));
   const next = $derived(home?.milestones.find((m) => m.id === home?.next));
   const live = $derived(!doc.sortie.reachable ? "Sortie unreachable" : `Sortie · ${health?.busy ?? 0} running`);
@@ -87,6 +88,13 @@
             <li data-reason={r.code} class:ask={r.code === "question"} title={r.code === "question" ? r.text : undefined}>{#if r.key}<a href={storyHref(r.key)}>{r.text}</a>{:else}{r.text}{/if}</li>
           {/each}
         </ul>
+        {#if waiting && health?.waits?.length}
+          <ul class="waits" aria-label="What the stories wait on">
+            {#each health.waits as w (w.kind + (w.pr?.ref ?? w.stories[0]?.key))}
+              <li data-wait={w.kind}>{#if w.pr}{#if w.pr.url}<a href={w.pr.url} target="_blank" rel="noreferrer">{w.pr.ref}</a>{:else}{w.pr.ref}{/if}{" "}{/if}{waitWhat(w)}, for {#each w.stories as s, i (s.key)}{i === 0 ? "" : i === w.stories.length - 1 ? " and " : ", "}<a href={storyHref(s.key)}>{s.key}</a>{/each}: <b data-who>{w.who}</b> {w.does}</li>
+            {/each}
+          </ul>
+        {/if}
       </div>
       <div class="tile" data-tile="slots">
         <h3>Agent slots</h3>
@@ -214,6 +222,9 @@
   .verdict.ok .big { color: var(--done); }
   .reasons { margin-top: 6px; list-style: none; font-size: 13.5px; max-width: 60ch; }
   .reasons a { color: inherit; }
+  .waits { margin-top: 6px; padding-left: 16px; font-size: 12.5px; max-width: 60ch; color: #6f1c16; }
+  .waits a { color: inherit; }
+  .waits b { font-weight: 600; }
   /* A question can run long: the Answer column holds it whole. */
   .reasons li.ask { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
   .num { margin-top: 2px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
