@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import Harness from "./HomeHarness.svelte";
 import { graph, synced } from "./fixtures";
 import {
-  changedStories, doingText, mapShare, since, slackText, slackWidth, visualSpans,
-  type HomeDoc, type HomeMilestone, type NotReadyItem, type ReleasedStory,
+  changedStories, mapShare, slackText, slackWidth, visualSpans,
+  type HomeDoc, type HomeMilestone, type NotReadyItem,
 } from "../src/lib/home";
 import { parseRoute } from "../src/lib/router";
 import type { MergedGraph } from "../src/lib/types";
@@ -320,94 +320,6 @@ describe("home: live", () => {
     expect(slackWidth(0)).toBeLessThan(slackWidth(1));
     expect(slackWidth(1)).toBeLessThan(slackWidth(4));
     expect(slackWidth(40)).toBe(100);
-  });
-});
-
-function released(key: string, identifier: string, extra: Partial<ReleasedStory> = {}): ReleasedStory {
-  return {
-    key, label: key.split("/")[1], change: key.split("/")[0], title: `Do ${key}`, identifier, url: `https://tracker/${identifier}`,
-    state: "waiting", attempt: null, error: null, turn: null, started_at: null, pr: null, question: null, reason: null, ...extra,
-  };
-}
-
-const rowText = (key: string) => text(`[data-released='${key}'] .doing`);
-
-describe("home: what each released story is doing", () => {
-  const now = () => Date.now() / 1000;
-
-  it("a retry keeps its place: three stories in release order, ONS-11 starting again", async () => {
-    const h = homeDoc({
-      released: [
-        released("ons/s10", "ONS-10", { state: "working", turn: 2, started_at: now() - 12 * 60 }),
-        released("ons/s11", "ONS-11", { state: "starting", attempt: 2, error: "response_timeout" }),
-        released("ons/s13", "ONS-13"),
-      ],
-    });
-    h.health = { ...h.health, busy: 1, free: 2 };
-    await render(doc(h));
-    expect($$("[data-released]").map((e) => e.querySelector(".id")?.textContent)).toEqual(["ONS-10", "ONS-11", "ONS-13"]);
-    expect(rowText("ons/s11")).toBe("starting, attempt 2, last error: response_timeout");
-    expect(rowText("ons/s10")).toBe("working, turn 2, for 12 min");
-    expect(rowText("ons/s13")).toBe("waiting for a slot");
-    // The slots in use are a figure of their own, after the list.
-    const figure = $("[data-figure='slots']")!;
-    expect(figure.textContent?.replace(/\s+/g, " ").trim()).toBe("1 of 3 agent slots in use");
-    const list = $("[data-released='ons/s13']")!;
-    expect(list.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect($$("[data-released]").every((r) => !r.contains(figure))).toBe(true);
-  });
-
-  it("a story in review reads in review and links its pull request", async () => {
-    await render(doc(homeDoc({
-      released: [released("hl/x", "ONS-23", { state: "in_review",
-        pr: { ref: "ortusnova/homelab#97", url: "https://github.com/ortusnova/homelab/pull/97" } })],
-    })));
-    expect(text("[data-released='hl/x'] .what")).toBe("in review");
-    const link = $<HTMLAnchorElement>("[data-released='hl/x'] a.pr")!;
-    expect(link.textContent).toBe("ortusnova/homelab#97");
-    expect(link.getAttribute("href")).toBe("https://github.com/ortusnova/homelab/pull/97");
-  });
-
-  it("says each state in words", async () => {
-    await render(doc(homeDoc({
-      released: [
-        released("a/needs", "T-1", { state: "needs_you", question: "Which repository?" }),
-        released("a/held", "T-2", { state: "held", reason: "permission request" }),
-        released("a/first", "T-3", { state: "starting", attempt: 1 }),
-      ],
-    })));
-    expect(rowText("a/needs")).toBe("needs you: Which repository?");
-    expect(rowText("a/held")).toBe("held: permission request");
-    expect(rowText("a/first")).toBe("starting, attempt 1");
-    // Each row opens its story in the graph.
-    expect($<HTMLAnchorElement>("[data-released='a/held'] a.name")!.getAttribute("href")).toContain("a%2Fheld");
-  });
-
-  it("updates live, and a retry does not move a story", async () => {
-    const rows = [released("ons/s10", "ONS-10", { state: "working", turn: 1 }), released("ons/s11", "ONS-11", { state: "working", turn: 1 }),
-      released("ons/s13", "ONS-13")];
-    const a = await render(doc(homeDoc({ released: rows })));
-    a.setDoc(doc(homeDoc({ released: [rows[0], released("ons/s11", "ONS-11", { state: "starting", attempt: 2, error: "response_timeout" }), rows[2]] })));
-    await settle();
-    expect($$("[data-released]").map((e) => e.dataset.released)).toEqual(["ons/s10", "ons/s11", "ons/s13"]);
-    expect(rowText("ons/s11")).toBe("starting, attempt 2, last error: response_timeout");
-    a.setDoc(doc(homeDoc({ released: [rows[0], rows[2]] })));
-    await settle();
-    expect($$("[data-released]").map((e) => e.dataset.released)).toEqual(["ons/s10", "ons/s13"]);
-  });
-
-  it("says when nothing is released", async () => {
-    await render(doc(homeDoc({ released: [] })));
-    expect(text("section.released .none")).toBe("No story is released and not yet done.");
-    expect(text("[data-figure='slots']")).toBe("0 of 3 agent slots in use");
-  });
-
-  it("puts the time since a run started in words", () => {
-    expect(since(1000, 1030)).toBe("under a minute");
-    expect(since(0, 12 * 60 + 5)).toBe("12 min");
-    expect(since(0, 2 * 3600 + 5 * 60)).toBe("2 h 5 min");
-    expect(since(0, 3600)).toBe("1 h");
-    expect(doingText(released("a/b", "T-1", { state: "working", turn: 3 }), 0)).toBe("working, turn 3");
   });
 });
 
