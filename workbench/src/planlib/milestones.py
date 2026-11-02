@@ -258,6 +258,45 @@ def members(m: dict[str, Any], by_change: dict[str, list[str]], tasks: dict[str,
     return list(dict.fromkeys(stories)), counted, changes
 
 
+def membership(ordered: list[dict[str, Any]], stories: dict[str, list[str]], graph: dict[str, Any] | None,
+               dropped: set[str]) -> dict[str, tuple[list[str], list[str]]]:
+    """The stories each milestone counts, and those of them it only waits on.
+
+    A milestone waits on the stories its stories depend on, directly or
+    through other stories. One that no milestone includes, or only a later
+    one does, counts with the milestone that waits on it, after its own, in
+    plan order. A story counts once, in the earliest milestone, in dependency
+    order, that includes or waits on it; a milestone's gate always counts
+    with it, and a cancelled story counts nowhere."""
+    nodes = [n["plan_key"] for n in (graph or {}).get("nodes") or [] if n.get("kind") == "story"]
+    rank = {k: i for i, k in enumerate(nodes)}
+    deps = nx.DiGraph()
+    deps.add_nodes_from(nodes)
+    deps.add_edges_from((b["blocker"], b["blocked"]) for b in (graph or {}).get("blocks") or []
+                        if b["blocker"] in rank and b["blocked"] in rank)
+    gates = {m["gate"] for m in ordered if m.get("gate")}
+    counted: set[str] = set()
+    out: dict[str, tuple[list[str], list[str]]] = {}
+    for m in ordered:
+        own = [s for s in stories[m["id"]] if s not in dropped and (s not in counted or s == m.get("gate"))]
+        mine = set(own)
+        found: set[str] = set()
+        todo = [s for s in own if s in deps]
+        seen = set(todo)
+        while todo:
+            for a in deps.predecessors(todo.pop()):
+                if a in seen or a in dropped:
+                    continue
+                seen.add(a)
+                todo.append(a)
+                if a not in mine and a not in counted and a not in gates:
+                    found.add(a)
+        waits = sorted(found, key=rank.__getitem__)
+        out[m["id"]] = (own + waits, waits)
+        counted |= mine | found
+    return out
+
+
 def progress(milestones: list[dict[str, Any]], graph: dict[str, Any] | None, tasks: dict[str, list[dict[str, Any]]],
              done: set[str], dropped: Iterable[str] = (), estimates: dict[str, float] | None = None) -> dict[str, Any]:
     """Each milestone's membership and progress in dependency order, the
@@ -270,10 +309,14 @@ def progress(milestones: list[dict[str, Any]], graph: dict[str, Any] | None, tas
     agent tasks and person tasks are reported apart, never summed."""
     dropped = set(dropped)
     by_change = stories_by_change(graph)
+    ordered = order(milestones)
+    base = {m["id"]: members(m, by_change, tasks) for m in ordered}
+    counts = membership(ordered, {mid: b[0] for mid, b in base.items()}, graph, dropped)
     out = []
-    for m in order(milestones):
-        stories, counted, changes = members(m, by_change, tasks)
-        stories = [s for s in stories if s not in dropped]
+    for m in ordered:
+        _, counted, changes = base[m["id"]]
+        stories, waits = counts[m["id"]]
+        changes = list(dict.fromkeys(changes + [s.split("/", 1)[0] for s in waits]))
         kinds = task_counts(counted)
         person = {"done": sum(kinds[k]["done"] for k in PERSON_KINDS), "total": sum(kinds[k]["total"] for k in PERSON_KINDS)}
         stories_done = sum(1 for s in stories if s in done)
@@ -286,6 +329,7 @@ def progress(milestones: list[dict[str, Any]], graph: dict[str, Any] | None, tas
         out.append({
             **m,
             "stories": stories,
+            "waits_on": waits,
             "changes": changes,
             "tasks": counted,
             "progress": {

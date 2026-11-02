@@ -137,7 +137,7 @@
             {#each chain.head as s, i (s.key)}
               {#if i > 0}<li class="arr" aria-hidden="true"></li>{/if}
               <li><a class="node" class:need={!!s.needs && s.needs !== "waits_on_work"} class:gate={s.key === home.critical_path.gate} class:moved={marks.has(s.key)}
-                href={storyHref(s.key)} title="{s.key}: {s.title}"><span class="mono">{s.key === home.critical_path.gate ? "gate" : s.running ? "running" : s.needs ? REASON_TEXT[s.needs] : "ready"}</span><b>{s.label}</b></a></li>
+                href={storyHref(s.key)} title="{s.key}: {s.title}"><span class="mono">{s.key === home.critical_path.gate ? "gate" : s.running ? "running" : s.needs ? REASON_TEXT[s.needs] : "ready"}</span><b>{s.label}</b>{#if s.waited_on}<span class="mono of" data-change={s.change}>{s.change}</span>{/if}</a></li>
             {/each}
             {#if chain.skipped.length}
               <li class="arr" aria-hidden="true"></li>
@@ -146,7 +146,7 @@
             {#each chain.tail as s (s.key)}
               <li class="arr" aria-hidden="true"></li>
               <li><a class="node" class:need={!!s.needs && s.needs !== "waits_on_work"} class:gate={s.key === home.critical_path.gate} class:moved={marks.has(s.key)}
-                href={storyHref(s.key)} title="{s.key}: {s.title}"><span class="mono">{s.key === home.critical_path.gate ? "gate" : s.needs ? REASON_TEXT[s.needs] : "ready"}</span><b>{s.label}</b></a></li>
+                href={storyHref(s.key)} title="{s.key}: {s.title}"><span class="mono">{s.key === home.critical_path.gate ? "gate" : s.needs ? REASON_TEXT[s.needs] : "ready"}</span><b>{s.label}</b>{#if s.waited_on}<span class="mono of" data-change={s.change}>{s.change}</span>{/if}</a></li>
             {/each}
           </ol>
         {/if}
@@ -236,6 +236,7 @@
   .node.need { border-style: dashed; border-color: var(--alert); }
   .node.gate { border: 2px solid var(--ink-rule); }
   .node.skipped { border-style: dotted; color: var(--mute); }
+  .node .of { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font: 500 10.5px var(--font-mono); color: var(--mute); }
   .arr { width: 18px; height: 1.5px; margin: 0 1px; background: var(--slate); position: relative; }
   .arr::after { content: ""; position: absolute; right: -1px; top: -3.25px; border: 4px solid transparent; border-left-color: var(--slate); }

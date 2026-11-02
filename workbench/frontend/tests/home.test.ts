@@ -322,3 +322,50 @@ describe("home: live", () => {
     expect(slackWidth(40)).toBe(100);
   });
 });
+
+describe("home: the stories milestone work waits on", () => {
+  const RDW = "record-delivered-work";
+  const by = `${RDW}/delivered-by`;
+
+  /** homelab-pilot is in M1 and depends on delivered-by, whose change is in no milestone. */
+  function waitedDoc(): HomeDoc {
+    const base = homeDoc();
+    const m1 = base.milestones[1];
+    return {
+      ...base,
+      milestones: [base.milestones[0], {
+        ...m1, changes: [...m1.changes, RDW], waits_on: [by],
+        progress: { ...m1.progress, stories: { done: 7, total: 22 } },
+      }, base.milestones[2]],
+      critical_path: { milestone: "m1", gate: "rhts/homelab-pilot", stories: [
+        { key: by, label: "delivered-by", title: "Delivered by", change: RDW, needs: "not_approved", running: false, estimate: null, waited_on: true },
+        { key: "rhts/homelab-pilot", label: "homelab-pilot", title: "The pilot", change: "rhts", needs: "waits_on_work", running: false, estimate: null, waited_on: false },
+      ] },
+      not_ready: [item(by, { rank: 1, critical: true, after: [] }), ...base.not_ready.filter((i) => i.key !== "apw/worker-daemon")],
+    };
+  }
+
+  it("lists a dependency outside every milestone with M1's work, under its own change", async () => {
+    await render(doc(waitedDoc()));
+    const row = $(`[data-key='${by}']`)!;
+    expect(row.closest("[data-column]")!.getAttribute("data-column")).toBe("approve");
+    expect(text(`[data-key='${by}'] .name`)).toBe("delivered-by");
+    expect(text(`[data-key='${by}'] .note`)).toBe(`${RDW} · not approved`);
+    const link = $<HTMLAnchorElement>(`[data-key='${by}'] .name`)!;
+    expect(parseRoute(link.getAttribute("href")!)).toMatchObject({ page: "graph", view: { epic: RDW, selected: by } });
+  });
+
+  it("names it with its own change on the critical path", async () => {
+    await render(doc(waitedDoc()));
+    const nodes = $$(".chain .node");
+    expect(nodes.map((n) => n.querySelector("b")!.textContent)).toEqual(["delivered-by", "homelab-pilot"]);
+    expect(nodes[0].querySelector("[data-change]")!.textContent).toBe(RDW);
+    expect(nodes[1].querySelector("[data-change]")).toBeNull();
+  });
+
+  it("counts it in M1's story total", async () => {
+    await render(doc(waitedDoc()));
+    expect(text("[data-milestone-row='m1'] td")).toBe("7 / 22");
+    expect(text("[data-milestone='m1'] .cnt")).toContain("7 / 22 stories");
+  });
+});

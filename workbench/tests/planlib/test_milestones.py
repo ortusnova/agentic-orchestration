@@ -273,3 +273,41 @@ def test_the_order_between_changes_is_a_dependency_of_their_stories(store):
     assert ("route/pilot", "later/l1") not in blocks and ("route/after-pilot", "later/l2") not in blocks
     out = ms.progress(r.milestones, r.graph, r.tasks, done={"route/image"})
     assert out["critical_path"] == ["route/pilot", "route/after-pilot", "later/l1", "later/l2", "gate/g"]
+
+
+# What a milestone waits on (agent-platform/workbench-home) -----------------------
+
+
+def waits_store(store):
+    """m1's gate needs feed/b, which needs feed/a; feed is in no milestone."""
+    store.plan([("feed", []), ("work", ["feed"]), ("next", ["feed"])])
+    store.change("feed", breakdown(deliverable("a"), deliverable("b", ["a"]), deliverable("c", ["b"])))
+    store.change("work", breakdown(deliverable("g", ["feed/b"])))
+    store.change("next", breakdown(deliverable("n", ["feed/c"])))
+
+
+def test_a_milestone_counts_the_stories_it_waits_on_once(store):
+    waits_store(store)
+    store.milestones([milestone("m1", [{"change": "work"}], gate="work/g"),
+                      milestone("m2", [{"change": "next"}, {"change": "feed"}], ["m1"])])
+    r = check(store)
+    assert r.errors == []
+    m1, m2 = ms.progress(r.milestones, r.graph, r.tasks, done={"feed/a"})["milestones"]
+    assert m1["stories"] == ["work/g", "feed/a", "feed/b"] and m1["waits_on"] == ["feed/a", "feed/b"]
+    assert m1["progress"]["stories"] == {"done": 1, "total": 3}
+    # m2 includes feed, but m1 counts what it waits on: m2 keeps feed/c only.
+    assert m2["stories"] == ["next/n", "feed/c"] and m2["waits_on"] == []
+
+
+def test_a_cancelled_story_and_another_milestones_gate_are_not_waited_on(store):
+    waits_store(store)
+    store.milestones([milestone("m1", [{"change": "work"}]),
+                      milestone("m2", [{"change": "next"}], ["m1"], gate="feed/b")])
+    r = check(store)
+    assert r.errors == []
+    m1, m2 = ms.progress(r.milestones, r.graph, r.tasks, done=set())["milestones"]
+    # feed/b is m2's gate, so it stays there; m1 still waits on feed/a, through it.
+    assert m1["waits_on"] == ["feed/a"] and "feed/b" in m2["stories"]
+    m1, m2 = ms.progress(r.milestones, r.graph, r.tasks, done=set(), dropped={"feed/b"})["milestones"]
+    assert m1["waits_on"] == [] and m1["stories"] == ["work/g"]
+    assert m2["waits_on"] == ["feed/c"]
