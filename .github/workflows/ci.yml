@@ -28,10 +28,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [acp-broker, smol-builder, worker-daemon]
+        module: [acp-broker, control-plane, smol-builder, worker-daemon]
     env:
       # The worker daemon's end-to-end tests build Sortie from the sortie/
-      # submodule; with it checked out they must run, not skip.
+      # submodule, and the control plane's egress gate; with it checked out
+      # they must run, not skip.
       WORKER_DAEMON_E2E_NO_SKIP: ${{ matrix.module == 'worker-daemon' && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,3 +104,34 @@ jobs:
           node-version-file: .nvmrc
       - run: npm install -g @fission-ai/openspec@${{ env.OPENSPEC_VERSION }}
       - run: make licenses no-placeholder specs
+
+  # The control plane's images, built here and tagged with the commit, and
+  # its whole compose project started under rootless podman, as the runner's
+  # unprivileged user, with test certificates and fake credentials; then
+  # every scenario of agent-platform/control-plane runs against it.
+  control-plane:
+    name: Control plane (images, compose project, live scenarios)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "*/go.sum"
+      - name: Install podman and podman-compose
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q podman podman-compose
+          podman --version
+          podman-compose --version
+          podman info --format 'rootless: {{.Host.Security.Rootless}}'
+      - name: Check every upstream image is pinned by digest
+        run: make -C control-plane pins
+      - name: Build the images, tagged with the commit
+        run: make -C control-plane images
+      - name: Start the project and run the scenarios
+        run: make -C control-plane live-test
