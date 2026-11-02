@@ -39,6 +39,9 @@ var stage0Values = map[string]string{
 	"STAGE0_HULY_URL":       "http://127.0.0.1:8087",
 	// The remote kind's flow URLs need a real port.
 	"STAGE0_EDGE_WORKER_PORT": "7700",
+
+	"STAGE0_AO_REPO_PROJECT":      "ortusnova/agentic-orchestration",
+	"STAGE0_HOMELAB_REPO_PROJECT": "ortusnova/homelab",
 }
 
 var stage0Placeholder = regexp.MustCompile(`\$\{(STAGE0_[A-Z_]+)\}`)
@@ -46,6 +49,13 @@ var stage0Placeholder = regexp.MustCompile(`\$\{(STAGE0_[A-Z_]+)\}`)
 // loadStage0 renders one of the kit's workflows and loads it the way Sortie
 // does at start and on reload, dispatch validation included.
 func loadStage0(t *testing.T, name string) config.ServiceConfig {
+	t.Helper()
+	return loadStage0Workflow(t, name).Config()
+}
+
+// loadStage0Workflow is loadStage0, returning Sortie's workflow manager,
+// which also holds the parsed prompt template.
+func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	t.Helper()
 	kit := os.Getenv("STAGE0_KIT")
 	if kit == "" {
@@ -87,7 +97,7 @@ func loadStage0(t *testing.T, name string) config.ServiceConfig {
 	if err := config.ValidatePlanReviewGates(cfg.Dispatch, true); err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
-	return cfg
+	return mgr
 }
 
 // stage0Review is the one rule of the workflow that carries gate: criteria.
@@ -159,7 +169,7 @@ func TestStage0_ReviewPrompt(t *testing.T) {
 			t.Fatal(err)
 		}
 		body := string(raw)
-		start := strings.Index(body, `{{- if eq .stage.current "review" -}}`)
+		start := strings.Index(body, `{{- else if eq .stage.current "review" -}}`)
 		end := strings.Index(body, "{{- else -}}")
 		if start < 0 || end < start {
 			t.Fatalf("%s: no review prompt", name)
