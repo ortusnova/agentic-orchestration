@@ -58,7 +58,7 @@ func (p *pki) issue(t *testing.T, cn string, usage x509.ExtKeyUsage) (certPEM, k
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder})
 }
 
-// Once the control plane issues client certificates (design D18), the
+// The control plane issues client certificates (design D18): the
 // daemon presents its own on every request and trusts the configured
 // CA; without the certificate the control plane refuses it.
 func TestClientCertificate(t *testing.T) {

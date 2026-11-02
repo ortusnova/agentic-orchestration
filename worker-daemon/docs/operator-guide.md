@@ -115,15 +115,20 @@ The daemon reaches the control plane only through connections it opens:
 check-in, poll, heartbeat and report on `control_plane.url`, and each
 job's flows on the URLs its offer names.
 
-- **Until the control plane issues client certificates** (design D18),
-  the control plane opens a tunnel to the worker host, and
-  `control_plane.url` is the tunnel's loopback end, such as
-  `http://127.0.0.1:7690`. The tunnel's listener is the tunnel's, not the
-  daemon's. The daemon names itself in `identity_header`.
-- **Once it does,** set an `https` URL and `control_plane.tls.cert_file`,
-  `key_file` and, for a private CA, `ca_file`. The daemon presents the
-  certificate to the control plane and to every flow. The control plane's
-  proxy authenticates the certificate and sets the identity header itself.
+- **The control plane** (design D18) issues each worker host a client
+  certificate (`control-plane/cp.sh worker issue <worker>`; see the
+  [control plane operator guide](../../control-plane/docs/operator-guide.md)).
+  Set `control_plane.url` to Pomerium's `https` URL, such as
+  `https://cp.example.org:8443`, and `control_plane.tls.cert_file`,
+  `key_file` and `ca_file` to the three files it issued. The daemon
+  presents the certificate to the control plane and to every flow.
+  Pomerium admits only certificates from the control plane's CA that its
+  worker list names, and sets the identity header from the certificate,
+  over the one the daemon sends; `worker_id` is the certificate's name.
+- **Without a certificate**, `control_plane.url` is a plain `http` URL
+  and the daemon names itself in `identity_header`. The stage-1 edge
+  that served such hosts through SSH tunnels is gone; this serves only a
+  control plane on the same trusted host, such as a test.
 
 The daemon never uses `HTTP_PROXY` or `HTTPS_PROXY` from its own
 environment.
