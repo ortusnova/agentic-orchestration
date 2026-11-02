@@ -90,6 +90,7 @@ the start instead of being ignored.
 | `smolvm.packs` | no | | Maps an image reference (`run.image`) to an absolute pack path. |
 | `smolvm.pack_dir` | no | | Also resolves an image reference ending in `.smolmachine` to the file of that base name here. |
 | `smolvm.user` | no | the pack's | The user commands run as in the machine; it is given `/workspace`. |
+| `smolvm.images` | no | | Maps an image reference to what this host gives each of its jobs beyond the pack. See [Host inputs of an image](#host-inputs-of-an-image). |
 | `usage_commands` | no | | Maps an agent kind, the base name of `run.command`, to the command run in the machine after each run to read its token usage; `*` covers every other kind. See [Token usage](#token-usage). |
 | `log_level` | no | `info` | `debug`, `info`, `warn` or `error`. Logs go to standard error and never carry a token. |
 
@@ -108,6 +109,40 @@ holds `smallest_job`. When an offered job's `requires` exceeds what is free
 (the control plane counted with an older check-in), the daemon does not
 start it: it reports the attempt `failed`, machine `deleted`, with the
 reason, and Sortie retries it.
+
+### Host inputs of an image
+
+Some jobs need what only their host has: a homelab job needs homelab's
+caches, a folder for its flight recorder, the vm age key and homelab's
+guest kernel. The control plane names none of it; it names the image, and
+`smolvm.images` says what a job of that image gets on this host:
+
+```json
+"images": {
+  "homelab.smolmachine": {
+    "user": "builder",
+    "lib_dir": "/home/brian/.cache/homelab/libkrunfw",
+    "mounts": [
+      { "host": "/home/brian/.cache/homelab-sources", "guest": "/home/builder/.cache/homelab-sources", "read_only": true },
+      { "host": "/home/brian/.local/state/homelab/sortie-recorder", "guest": "/var/log/homelab-recorder", "per_job": true }
+    ],
+    "env_files": { "HOMELAB_VM_AGE_KEY": "/home/brian/.local/share/ortus-nova/stage0/inputs/vm-age/keys.txt" },
+    "setup": ["sudo /opt/homelab-sandbox/guest-start.sh \"$(id -u)\""]
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `user` | The user commands run as for this image, instead of `smolvm.user`. |
+| `lib_dir` | `SMOLVM_LIB_DIR` for every smolvm call on the job's machine: the guest kernel it boots. |
+| `mounts` | Host folders shared with the machine, at `guest`, read-only with `read_only`. With `per_job`, the job gets `host/<job>`, created when it starts and kept after it ends. A guest path may not overlap `/workspace` or `/run/worker`. |
+| `env_files` | Each variable's value is the content of its file, less the final newline, read when the job starts. It is in the environment of every command the daemon runs in the machine (setup, the agent, the usage command) and never logged. |
+| `setup` | Shell scripts run in order in `/workspace`, with the agent's environment, after the workspace is seeded and before the agent starts. One that fails fails the attempt, with its standard error in the reason. |
+
+A job whose `requires.capabilities` holds `nested` gets nested
+virtualization (`smolvm machine create --nested`); the control plane
+offers it only to a worker that declares `nested`.
 
 ### The control-plane connection
 
@@ -142,7 +177,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    is `/jobs/{job}/attempts/{attempt}/seed`.
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
-   `/run/worker`, and the two sockets mounted with `--mount-socket`. It
+   `/run/worker`, the two sockets mounted with `--mount-socket`, and the
+   image's host inputs, if this host configures any. It
    gives no network flag, allowlist or credential binding, so smolvm gives
    the machine no network: `socat` in the guest serves the sockets on guest
    loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp), and
@@ -151,7 +187,7 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    the branch at the bundle's `HEAD`, or, when several are there, the one
    named after the job (`sortie/ONS-7` for `ONS-7`). It adds `/.sortie` to
    the repository's `.git/info/exclude`, so the agent's control directory
-   is never committed.
+   is never committed. Then it runs the image's `setup` scripts.
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
    forwarder, `NO_PROXY=127.0.0.1,localhost`, and `WORKER_MCP_URL` at the
