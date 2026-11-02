@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workers · slot lanes · prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&family=Bodoni+Moda:ital,wght@1,400&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1d1d1f;--rule:#14161a;--raised:#2a2a2d;--imute:#a1a1a6;--paper:#fbfbf8;--strip:#f4f4f2;--panel:#fff;--line:#dcdcd7;--hair:#e6e6e0;--mute:#5d626b;
+--done:#2f6f4e;--amber:#c98a1a;--amber-ink:#8a5a06;--amber-tint:#fbf4e5;--slate:#8a8f98;--slate-ink:#6b7079;--alert:#c4382f;
+--sans:"Instrument Sans",Helvetica,Arial,sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace;--serif:"Bodoni Moda",Georgia,serif;--label:250px}
+*{box-sizing:border-box;margin:0}
+html{background:var(--paper);color:var(--ink);font:400 13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+::selection{background:var(--amber-tint)}:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button{font:inherit;cursor:pointer}
+.bar{height:56px;background:var(--ink);color:#fff;display:flex;align-items:center;gap:16px;padding:0 20px;position:sticky;top:0;z-index:5}
+.proj{background:var(--raised);border-radius:6px;height:32px;padding:0 12px;display:flex;align-items:center;font-weight:600}
+.tabs{display:flex;gap:4px}.tabs a{padding:5px 14px;border-radius:5px;color:#b8b8bd}.tabs a.on{background:#fff;color:var(--ink)}
+.seg{margin-left:auto;display:flex;background:var(--raised);border-radius:8px;padding:3px}
+.seg button{border:0;background:none;color:#d6d6da;padding:5px 12px;border-radius:6px}.seg small{color:var(--imute);margin-left:4px}
+.seg button[aria-selected=true]{background:#fff;color:var(--ink)}.seg button[aria-selected=true] small{color:var(--mute)}
+main{padding:10px 24px 40px;position:relative}
+.example{background:var(--amber-tint);color:var(--amber-ink);border-radius:6px;padding:6px 12px;margin:8px 0 0;display:inline-block}
+.axis{position:sticky;top:56px;z-index:3;background:var(--paper);height:40px;margin-left:var(--label);border-bottom:1px solid var(--rule)}
+.tick{position:absolute;bottom:5px;transform:translateX(-50%);white-space:nowrap;font:italic 400 15px var(--serif);color:var(--mute)}
+.tick.end{transform:translateX(-100%)}.tick.first{transform:none}
+.tick.n{font-style:normal;font:700 10px var(--sans);letter-spacing:.05em;background:var(--rule);color:#fff;border-radius:3px;padding:2px 8px;bottom:8px}
+.track{position:relative}
+.nowline{position:absolute;top:0;bottom:0;width:1.5px;background:var(--rule);z-index:2;pointer-events:none}
+.worker{margin-top:18px}
+.wh{display:flex;align-items:baseline;gap:14px;padding:6px 0 8px;border-bottom:1px solid var(--line)}
+.wh h2{font:700 24px/1.1 var(--sans);letter-spacing:-.02em;width:calc(var(--label) - 14px)}
+.wh .busy{font-size:15px}.wh .busy b{font-size:20px}.wh .host{color:var(--mute);font:500 11px var(--mono)}
+.lane{display:grid;grid-template-columns:var(--label) 1fr;min-height:96px;border-bottom:1px solid var(--hair)}
+.ll{padding:12px 14px 10px 0}
+.ll .no{font:700 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.ll .st{font-weight:600;margin-top:2px}.st.working{color:var(--amber-ink)}.st.stalled{color:var(--alert)}.st.free{color:var(--slate-ink);font:italic 400 17px var(--serif)}
+.ll p{color:var(--mute);margin-top:2px}
+.jt{border:0;background:none;padding:0;margin-top:4px;text-align:left;font-size:14px}.jt b{font-weight:600}.jt:hover b{text-decoration:underline;text-underline-offset:3px}
+.jm{color:var(--mute);font-variant-numeric:tabular-nums}.jm b{color:var(--ink)}.alarm{color:var(--alert)!important}.ll p.alarm{color:var(--alert);font-weight:600}
+.lt{position:relative;min-height:96px}
+.job{position:absolute;min-width:6px;top:18px;height:60px;border-radius:6px;padding:7px 10px;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;text-align:left;border:1.5px solid var(--amber);background:var(--amber-tint);color:var(--ink);transition:box-shadow .2s cubic-bezier(.2,.8,.2,1)}
+button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
+.job .h{display:flex;gap:6px;align-items:baseline;white-space:nowrap}.job b{font-weight:600}
+.job .f{display:flex;gap:12px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.job .f b{color:var(--ink)}
+.id{font:500 11px var(--mono);color:var(--mute)}
+.rest{position:absolute;top:18px;height:60px;border:1.5px dashed var(--amber);border-left:0;border-radius:0 6px 6px 0;background:repeating-linear-gradient(135deg,#fff 0 6px,rgba(201,138,26,.2) 6px 7px);pointer-events:none}
+.job.ran{border-radius:6px 0 0 6px}
+.job.stalled{border-color:var(--alert);background:#fff}
+.job.starting{border-style:dashed;background:#fff}
+.job.outside{border-style:dashed;background:#fff}
+.job.next{border:1.5px dashed var(--slate);background:#fff;color:var(--mute)}
+.more{position:absolute;top:28px;color:var(--mute);font-weight:600}
+.job.cut{border-left-style:dashed;border-top-left-radius:0;border-bottom-left-radius:0}
+.later{display:grid;grid-template-columns:var(--label) 1fr;padding:8px 0 4px}
+.later h4{font:700 11px var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--mute);padding-top:3px}
+.later ul{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:6px 18px}
+.later li{display:flex;gap:6px;align-items:baseline}.later li i{width:7px;height:7px;border-radius:50%;background:var(--slate);display:inline-block}
+.later li.unowned{color:var(--alert)}.later li.unowned i{background:var(--alert)}
+.later li.you{color:var(--amber-ink)}.later li.you i{background:var(--amber)}
+.later li.held i{background:none;border:1.5px solid var(--alert)}.later li.held{color:var(--alert)}
+.later li small{color:var(--mute)}
+.legend{margin:18px 0 0 var(--label);color:var(--mute);display:flex;gap:22px;flex-wrap:wrap}
+.sw{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.session[hidden]{display:none}
+.session{position:fixed;top:56px;right:0;bottom:0;width:540px;background:var(--panel);border-left:1px solid var(--line);box-shadow:0 8px 28px -12px rgba(20,22,26,.35);display:flex;flex-direction:column;padding:20px 22px;gap:12px;z-index:6}
+.sh{display:flex;justify-content:space-between;gap:12px}.sh b{font:600 15px var(--sans)}.sh p{color:var(--mute)}
+.facts{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);padding:10px 0}
+.facts dt{font:700 10px var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--mute)}.facts dd{font-weight:700;font-size:15px;font-variant-numeric:tabular-nums}.facts dd small{display:block;font-weight:400;font-size:11px;color:var(--mute)}
+.tx{flex:1;background:var(--ink);color:#e9e9ec;border-radius:10px;padding:14px 16px;font:500 12px/1.65 var(--mono);overflow:auto}.tx .me{color:var(--imute)}.tx .tool{color:#f0c060}
+.steer{display:flex;gap:8px}.steer input{flex:1;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font:inherit}
+.primary{background:var(--ink);color:#fff;border:0;border-radius:8px;height:38px;padding:0 16px;font-weight:600}
+.ghost{background:#fff;border:1px solid var(--line);border-radius:8px;height:38px;padding:0 14px;font-weight:600}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body>
+<header class="bar"><div class="proj">ortus-nova-specs</div><nav class="tabs"><a class="on">Home</a><a>Graph</a><a>Plan</a></nav>
+ <div class="seg" role="tablist"><button role="tab" data-state="now" aria-selected="true">Now <small>real, 11:20 UTC</small></button><button role="tab" data-state="busy" aria-selected="false">Busy <small>example</small></button></div></header>
+<main id="app"></main>
+<aside id="session" class="session" hidden aria-label="Agent session"></aside>
+<script>
+// Axis: one hour back to two hours ahead. ETA = the median successful run on that
+// Sortie (p1 10 min, taichi 17 min; a vm chain 38 min). Tokens: no run has reported any yet.
+const FROM=-60, TO=120, pct=m=>((Math.max(FROM,Math.min(TO,m))-FROM)/(TO-FROM)*100);
+const DATA={
+ now:{workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 39 GiB of 62 GiB free",slots:[{},{},{}],
+   freeNote:"4 pull requests wait for a review agent that does not run yet",
+   later:[["unowned","ONS-67 repeat-stop","review and merge sortie#28"],["unowned","ONS-47 one-sortie","review #60, then the cutover"],["unowned","ONS-74 pr-repair-reactions","review #64"],["unowned","ONS-76 deploy-drains-host","review #62"],["you","ONS-75, ONS-73","UI to look at; your merge approves"],["blocked","ONS-68 failure-routing","after ONS-67"],["blocked","ONS-20","after ONS-19"]]},
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 63 GiB of 91 GiB free",slots:[{},{}],
+   freeNote:"its next stories wait on ONS-34's live proof",
+   outside:[{id:"ONS-34",title:"image-archive",phase:"Live proof",started:85,eta:null,by:"hl-ons-34-proof · started by an agent session on p1, not Sortie",last:"vm CI acceptance, one app at a time",tokens:null}],
+   later:[["blocked","ONS-52, 61, 48","live proofs after ONS-34"],["blocked","ONS-37 canary-rebuild","after ONS-34 · critical path"],["you","ONS-55 proof-cadence","waits on your 3.3 answer"],["held","ONS-49, 50, 51","16 of 16 sessions used on a refused push; token fixed"]]}]},
+ busy:{example:true,workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 21 GiB of 62 GiB free",slots:[
+   {state:"working",job:{id:"ONS-68",title:"failure-routing",phase:"Build",repo:"sortie",started:23,eta:5,tokens:"1.8 M",cost:"$0.42",turn:4,last:"edited internal/orchestrator/route.go",ago:"20 s"},next:[{id:"ONS-70",title:"health-checks",est:10}]},
+   {state:"working",job:{id:"ONS-74",title:"pr-repair-reactions",phase:"Review",repo:"agentic-orchestration",started:6,eta:10,tokens:"410 k",cost:"$0.09",turn:2,last:"ran make -C dev/stage0 test",ago:"1 min"},next:[{id:"ONS-76",title:"fix CI on #62",est:10}]},
+   {state:"starting",job:{id:"ONS-69",title:"workbench-platform-faults",phase:"Build",repo:"agentic-orchestration",started:1,eta:null,attempt:2,tokens:null,last:"last error: session start response_timeout",ago:"40 s"},next:[]}],
+   later:[["blocked","ONS-72 unfinished-work-handoff","after ONS-68"]]},
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 18 GiB of 91 GiB free",slots:[
+   {state:"working",job:{id:"ONS-52",title:"seed-security-updates",phase:"Live proof",repo:"homelab",step:"vm chain 9 of 13: k8s-up",started:52,eta:25,tokens:"640 k",cost:"$0.15",last:"k8s-up: waiting for Longhorn",ago:"2 min"},next:[{id:"ONS-61",title:"live seed-proof",est:40}]},
+   {state:"stalled",job:{id:"ONS-37",title:"canary-rebuild",phase:"Build",repo:"homelab",started:41,eta:0,overdue:true,tokens:"2.3 M",cost:"$0.55",turn:3,last:"no agent event since turn 3",ago:"14 min"},next:[{id:"ONS-48",title:"live k8s-up",est:40}]}],
+   later:[["blocked","ONS-53 seed-boot-fallback","after ONS-52"]]}]}};
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const dur=m=>m>=60?`${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")}`:`${m} min`;
+let state="now", jobs={};
+function bars(key,job,cls){
+ jobs[key]=job; const l=pct(-job.started), r=pct(0), clipped=job.started>-FROM;
+ const ran=`<button class="job ${cls} ${job.eta?'ran':''}" data-job="${key}" style="left:${l}%;width:calc(${r-l}% - 1px)" title="Watch ${esc(job.id)}">
+  <span class="h"><span class="id">${esc(job.id)}</span><b>${esc(job.title)}</b><span class="id">${esc(job.phase)}${job.step?' · '+esc(job.step):''}</span></span>
+  <span class="f">${cls==='outside'?`<span><b>${dur(job.started)}</b></span><span>tokens not reported</span><span>no estimate</span>`:`<span>since ${dur(job.started)} ago</span>`}</span></button>`;
+ const rest=job.eta?`<div class="rest" style="left:${r}%;width:${pct(job.eta)-r}%"></div>`:"";
+ return ran.replace('class="job ','class="job '+(clipped?'cut ':''))+rest;
+}
+function nexts(after,list){let t=after,h="";for(const n of list){const l=pct(t+2),w=pct(t+2+n.est)-l;h+=`<div class="job next" style="left:${l}%;width:${w}%"><span class="h"><span class="id">${esc(n.id)}</span><b>${esc(n.title)}</b></span><span class="f">next · ~${n.est} min</span></div>`;t+=2+n.est}return h}
+function lane(w,s,i,firstFree){
+ const j=s.job, label=j?`<div class="no">Slot ${i+1}</div><div class="st ${s.state}">${esc(j.phase)} · ${s.state==="starting"?"starting, attempt "+j.attempt:s.state}</div>
+  <button class="jt" data-job="${w.name}:${i}"><span class="id">${esc(j.id)}</span> <b>${esc(j.title)}</b></button>
+  <div class="jm"><b>${dur(j.started)}</b> · ${j.tokens?esc(j.tokens)+' tok':'tokens not reported'} · ${j.overdue?'<b class="alarm">overdue</b>':j.eta?'<b>~'+j.eta+' min</b> left':'ETA once it starts'}</div>`
+  :`<div class="no">Slot ${i+1}</div><div class="st free">Free</div>${i===firstFree?`<p class="${w.freeNote.startsWith('4')?'alarm':''}">${esc(w.freeNote)}</p>`:''}`;
+ let t="";if(s.job){t=bars(`${w.name}:${i}`,s.job,s.state==="working"?"":s.state)+nexts(s.job.eta||0,s.next||[])}
+ return `<div class="lane"><div class="ll">${label}</div><div class="lt">${t}</div></div>`;
+}
+function worker(w){
+ const busy=w.slots.filter(s=>s.job).length;
+ const out=(w.outside||[]).map((j,k)=>`<div class="lane"><div class="ll"><div class="no">Not Sortie's</div><div class="st working">${esc(j.phase)} · running</div><p>${esc(j.by)}</p></div><div class="lt">${bars(`${w.name}:o${k}`,j,"outside")}</div></div>`).join("");
+ const later=w.later.length?`<div class="later"><h4>Then on ${esc(w.name)}</h4><ul>${w.later.map(([k,a,b])=>`<li class="${k}"><i></i><b>${esc(a)}</b><small>${esc(b)}</small></li>`).join("")}</ul></div>`:"";
+ return `<section class="worker"><div class="wh"><h2>${esc(w.name)}</h2><span class="busy"><b>${busy}</b> of ${w.slots.length} slots busy</span><span class="host">${esc(w.role)} · ${esc(w.host)}</span></div>
+  <div class="track"><div class="nowline" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(0)/100})"></div>${w.slots.map((s,i)=>lane(w,s,i,w.slots.findIndex(x=>!x.job))).join("")}${out}</div>${later}</section>`;
+}
+function render(){jobs={};const d=DATA[state];
+ const ticks=[[-60,"−1 h"],[-30,"−30"],[0,"NOW 11:20"],[30,"+30"],[60,"+1 h"],[90,"+90"],[120,"+2 h"]].map(([m,t])=>`<span class="tick ${m===0?'n':m===120?'end':m===-60?'first':''}" style="left:${pct(m)}%">${t}</span>`).join("");
+ document.getElementById("app").innerHTML=(d.example?`<p class="example">Example data, to show running slots. <b>Now</b> is the real state.</p>`:"")+`<div class="axis">${ticks}</div>`+d.workers.map(worker).join("")+
+ `<div class="legend"><span><i class="sw" style="background:var(--amber-tint);border:1.5px solid var(--amber)"></i>run so far</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,#fff 0 4px,rgba(201,138,26,.3) 4px 5px);border:1.5px dashed var(--amber)"></i>estimated rest</span><span><i class="sw" style="border:1.5px dashed var(--slate)"></i>next on this slot</span><span><i class="sw" style="border:1.5px solid var(--alert)"></i>stalled or overdue</span><span>Click a bar to watch or steer its agent.</span></div>`;}
+const TX=[["me","› sortie: run (attempt 1)"],["","Reading the story's spec and acceptance criteria."],["tool","read internal/orchestrator/exit.go"],["","Routing each stopped failure by its signature's class."],["tool","edit internal/orchestrator/route.go (+84 −3)"],["tool","go test ./internal/orchestrator -run Route   ok 2.1s"]];
+function open(key){const j=jobs[key],[w]=key.split(":"),el=document.getElementById("session");
+ el.innerHTML=`<div class="sh"><div><b>${esc(j.id)} ${esc(j.title)}</b><p>${esc(w)} · ${esc(j.phase)}${j.repo?' · '+esc(j.repo):''}</p></div><button class="ghost" data-close>Close</button></div>
+ <dl class="facts"><div><dt>Running</dt><dd>${dur(j.started)}</dd></div><div><dt>Tokens</dt><dd>${j.tokens?esc(j.tokens):'—'}<small>${j.tokens?esc(j.cost):'not reported'}</small></dd></div><div><dt>Finishes in</dt><dd>${j.overdue?'<span style="color:var(--alert)">overdue</span>':j.eta?'~'+j.eta+' min':'—'}<small>${j.eta?'median of past runs':''}</small></dd></div><div><dt>Last event</dt><dd>${esc(j.ago||'—')}<small>${esc(j.last)}</small></dd></div></dl>
+ <div class="tx">${TX.map(([k,t])=>`<div class="${k}">${esc(t)}</div>`).join("")}</div>
+ <form class="steer" onsubmit="return false"><input placeholder="Steer: the agent reads this at its next turn"><button class="primary">Send</button><button class="ghost" type="button">Stop</button></form>`;
+ el.hidden=false;}
+document.addEventListener("click",e=>{const t=e.target.closest("[data-state]");if(t){state=t.dataset.state;document.querySelectorAll("[data-state]").forEach(b=>b.setAttribute("aria-selected",b===t));document.getElementById("session").hidden=true;render()}
+ const j=e.target.closest("[data-job]");if(j)open(j.dataset.job);if(e.target.closest("[data-close]"))document.getElementById("session").hidden=true;});
+document.addEventListener("keydown",e=>{if(e.key==="Escape")document.getElementById("session").hidden=true});
+render();
+</script></body></html>
