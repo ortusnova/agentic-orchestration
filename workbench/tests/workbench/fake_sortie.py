@@ -17,7 +17,9 @@ class FakeSortie:
 
     DEFAULT = "T"
 
-    def __init__(self):
+    def __init__(self, token: str = SORTIE_TOKEN):
+        # The control token it takes.
+        self.token = token
         # Tracker projects of the workspace: key -> {"name", "problems"}.
         self.projects: dict[str, dict[str, Any]] = {self.DEFAULT: {"name": "Tracker", "problems": []}}
         self.ensure_error: tuple[int, str] | None = None
@@ -44,6 +46,14 @@ class FakeSortie:
         self.max_agents: int | None = 3
         self.budget_exhausted: list[dict[str, Any]] = []
         self.parked: list[dict[str, Any]] = []
+        # What else /api/v1/state lists: the pull requests it watches, the
+        # issues held behind others, the issues between two stages, and a
+        # dispatch pause; and the finished runs /api/v1/runs serves.
+        self.pending_reactions: list[dict[str, Any]] = []
+        self.held: list[dict[str, Any]] = []
+        self.between_stages: list[dict[str, Any]] = []
+        self.dispatch_paused: Any = None
+        self.runs: list[dict[str, Any]] = []
         # The full stop statement of each park, by identifier, as the
         # per-issue response carries it; and the answers people sent.
         self.park_details: dict[str, dict[str, Any]] = {}
@@ -99,14 +109,14 @@ class FakeSortie:
         return node
 
     def client(self) -> SortieClient:
-        return SortieClient("http://sortie.test", SORTIE_TOKEN, transport=httpx.MockTransport(self.handle))
+        return SortieClient("http://sortie.test", self.token, transport=httpx.MockTransport(self.handle))
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         if self.unreachable:
             raise httpx.ConnectError("connection refused", request=request)
         self.requests.append((request.method, request.url.path, body))
-        if request.headers.get("authorization") != f"Bearer {SORTIE_TOKEN}":
+        if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"error": {"code": "unauthorized", "message": "token"}})
         if self.down:
             return httpx.Response(502, json={"error": {"code": "tracker_transport_error", "message": "tracker down"}})
@@ -169,7 +179,14 @@ class FakeSortie:
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
+                                             "pending_reactions": self.pending_reactions, "held": self.held,
+                                             "between_stages": self.between_stages, "dispatch_paused": self.dispatch_paused,
                                              "config": {"agent": agent}})
+        if path == "/api/v1/runs":
+            status = request.url.params.get("status")
+            limit = int(request.url.params.get("limit") or 50)
+            runs = [r for r in reversed(self.runs) if not status or r.get("status") == status]
+            return httpx.Response(200, json={"runs": runs[:limit], "next_cursor": None})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:

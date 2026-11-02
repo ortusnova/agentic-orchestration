@@ -86,6 +86,10 @@ class SortieClient:
         """The running, retrying, and budget-held issues."""
         return await self._request("GET", "/api/v1/state")
 
+    async def runs(self, status: str = "succeeded", limit: int = 200) -> dict[str, Any]:
+        """The newest page of finished runs with that status, newest first."""
+        return await self._request("GET", "/api/v1/runs", params={"status": status, "limit": str(limit)})
+
     async def issue(self, identifier: str) -> dict[str, Any]:
         """One issue's runtime: its running entry or its retry entry."""
         return await self._request("GET", f"/api/v1/{quote(identifier, safe='')}")
@@ -135,6 +139,9 @@ class ProjectSortie:
 
     async def state(self) -> dict[str, Any]:
         return await self.client.state()
+
+    async def runs(self, status: str = "succeeded", limit: int = 200) -> dict[str, Any]:
+        return await self.client.runs(status, limit)
 
     async def issue(self, identifier: str) -> dict[str, Any]:
         return await self.client.issue(identifier)

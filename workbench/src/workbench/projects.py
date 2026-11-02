@@ -33,7 +33,7 @@ class ProjectRuntime:
 
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
                  sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
-                 github: GitHubClient | None = None):
+                 github: GitHubClient | None = None, others: dict[str, SortieClient] | None = None):
         self.project = project
         self.store = store
         self.config = config
@@ -42,7 +42,10 @@ class ProjectRuntime:
         # The pull requests the stories name in delivered_by, looked up on GitHub.
         self.deliveries = DeliveryWatch(github or GitHubClient(config.github_api_url, config.github_token),
                                         self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
-        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls)
+        # Every Sortie whose workers the home shows; the main one also serves the plan.
+        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls,
+                       sortie_name=config.sortie_name,
+                       others={name: c.bind(project.huly_project) for name, c in (others or {}).items()})
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
@@ -193,9 +196,10 @@ class ProjectManager:
 
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
                  session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
-                 github: GitHubClient | None = None):
+                 github: GitHubClient | None = None, others: dict[str, SortieClient] | None = None):
         self.config = config
         self.github = github
+        self.others = others or {}
         self.broker_transport = broker_transport
         self.registry = registry
         self.sortie = sortie
@@ -242,7 +246,7 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport, github=self.github)
+                            broker_transport=self.broker_transport, github=self.github, others=self.others)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt

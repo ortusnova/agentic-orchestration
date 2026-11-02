@@ -10,6 +10,7 @@ from typing import Any
 
 from .autosync import approved_digest
 from .home import History, build_home
+from .lanes import estimates, worker_lanes
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
@@ -21,9 +22,13 @@ log = logging.getLogger(__name__)
 
 _UNSET = object()
 
+# How often each Sortie's run history is read again, for the estimates.
+RUNS_EVERY = 300.0
+
 
 class Hub:
-    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None):
+    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
+                 sortie_name: str = "sortie", others: dict[str, ProjectSortie] | None = None):
         self.plan = plan
         # Called, from any thread, when the approved part of the graph changes.
         self.on_approved_change = lambda: None
@@ -31,6 +36,15 @@ class Hub:
         self._approved: str | None | object = _UNSET
         self.sync_status: dict[str, Any] | None = None
         self.sortie = sortie
+        # Every Sortie the home shows as a worker, by name: the main one,
+        # which also serves the plan, and the others (agent-platform/run-supervision).
+        self.sortie_name = sortie_name
+        self.sorties: dict[str, ProjectSortie] = {sortie_name: sortie, **(others or {})}
+        # Each worker's last state and why its last read failed, and the
+        # estimates from its run history, with when they were read.
+        self.worker_states: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
+        self._runs: dict[str, dict[str, Any]] = {}
+        self._runs_at: dict[str, float] = {}
         # (approvals, rereviews) of the project, by plan key.
         self.records = records or (lambda: ({}, {}))
         # What GitHub reported of each pull request a story names, by ref.
@@ -73,11 +87,13 @@ class Hub:
         except SortieError as exc:
             self.sortie_error = exc.message
             log.warning("sortie plan graph unavailable: %s", exc)
+            await self._read_workers()
         else:
             self.tracker = graph
             self.capabilities = list(graph.get("capabilities") or [])
             self.sortie_error = None
             self.workers = await self._workers(graph)
+            await self._read_workers()
             approvals, _ = self.records()
             frozen = frozen_set(self.plan.stories, approvals, graph)
             if frozen != self.frozen:
@@ -105,6 +121,52 @@ class Hub:
         if not any(n.get("runtime") for n in graph.get("nodes") or []):
             return {}
         return worker_fields(state)
+
+    async def _read_workers(self) -> None:
+        """Each worker's state, for its lanes. The main Sortie's is the one
+        just read for the project it dispatches; it is not read for a
+        project it does not dispatch."""
+        now = time.time()
+        for name, client in self.sorties.items():
+            if name == self.sortie_name:
+                if self.sortie_error is not None:
+                    state, error = None, self.sortie_error
+                elif not (self.tracker or {}).get("dispatched"):
+                    self.worker_states.pop(name, None)
+                    continue
+                else:
+                    state, error = self.agent_state, self.state_error
+            else:
+                try:
+                    state, error = await client.state(), None
+                except SortieError as exc:
+                    if (self.worker_states.get(name) or (None, None))[1] is None:
+                        log.warning("%s's sortie state unavailable: %s", name, exc.message)
+                    state, error = None, exc.message
+            self.worker_states[name] = (state, error)
+            if state is not None and now - self._runs_at.get(name, float("-inf")) >= RUNS_EVERY:
+                self._runs_at[name] = now
+                try:
+                    self._runs[name] = estimates((await client.runs()).get("runs") or [])
+                except SortieError as exc:
+                    log.info("%s's sortie run history unavailable: %s", name, exc.message)
+
+    def _lanes(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes if n.get("tracker")}
+        statements = {i: q["statement"] for i, q in self.questions.items() if q.get("statement")}
+        now = time.time()
+        out = []
+        for name in self.sorties:
+            if name not in self.worker_states:
+                if name == self.sortie_name and self.tracker is not None and not self.tracker.get("dispatched"):
+                    out.append({"name": name, "main": True, "dispatched": False})
+                continue
+            state, error = self.worker_states[name]
+            out.append({**worker_lanes(name, main=name == self.sortie_name, state=state, error=error,
+                                       runs=self._runs.get(name), key_of=key_of, now=now,
+                                       statements=statements if name == self.sortie_name else None),
+                        "dispatched": True})
+        return out
 
     async def _questions(self, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """The open question of each parked issue, by tracker identifier. The
@@ -209,6 +271,7 @@ class Hub:
                 plan_states=doc.get("plan_states"), tracker_known=self.tracker is not None, valid=snap["valid"],
                 errors=len(snap["errors"]), history=self.history,
                 questions=home_questions(self.questions, doc.get("nodes") or []),
+                workers=self._lanes(doc.get("nodes") or []),
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,

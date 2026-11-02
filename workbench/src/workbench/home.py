@@ -446,11 +446,13 @@ def timeline(milestones: list[dict[str, Any]], goal: str | None, items: list[dic
 def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fields: dict[str, dict[str, Any]],
                planning: dict[str, Any], plan_states: dict[str, str] | None, tracker_known: bool, valid: bool,
                errors: int, health_inputs: dict[str, Any], history: History | None = None,
-               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None,
+               workers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The home document. ``graph`` is the last valid plan graph; ``nodes`` the
     merged graph's nodes, with tracker state and plan fields; ``questions``
     the open questions of its stories, ranked, which come before everything
-    else that needs a person."""
+    else that needs a person; ``workers`` each worker's slot lanes
+    (lanes.worker_lanes)."""
     estimates = estimates or {}
     questions = questions or []
     done, dropped = tracker_states(nodes, plan_states)
@@ -475,6 +477,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "story_progress": "live" if health_inputs["reachable"] else ("last_known" if tracker_known else "unknown"),
         "health": health,
         "questions": questions,
+        "workers": workers or [],
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],

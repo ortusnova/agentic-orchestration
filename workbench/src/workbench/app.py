@@ -40,12 +40,14 @@ def create_app(config: Config, **services) -> FastAPI:
     ``sessions`` builds each project's session manager from
     ``(project, store, runtime_dir)``, and ``broker_transport`` carries the
     requests to workers' brokers, and ``github`` the GitHub client that looks up
-    the pull requests stories name."""
+    the pull requests stories name, and ``sorties`` the clients of the other
+    Sorties by name."""
     sortie = services.get("sortie") or SortieClient(config.sortie_url, config.sortie_token)
     github = services.get("github") or GitHubClient(config.github_api_url, config.github_token)
+    others: dict[str, SortieClient] = services.get("sorties") or {s.name: SortieClient(s.url, s.token) for s in config.other_sorties}
     registry = Registry(config.home / "workbench.db")
     projects = ProjectManager(config, registry, sortie, services.get("sessions"), services.get("validate"),
-                              broker_transport=services.get("broker_transport"), github=github)
+                              broker_transport=services.get("broker_transport"), github=github, others=others)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -55,6 +57,8 @@ def create_app(config: Config, **services) -> FastAPI:
         finally:
             await projects.stop()
             await sortie.aclose()
+            for other in others.values():
+                await other.aclose()
             await github.aclose()
             if app.state.oidc is not None:
                 await app.state.oidc.aclose()
