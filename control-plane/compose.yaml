@@ -13,6 +13,11 @@
 # nono (the model and forge APIs).
 name: ortus-cp
 
+# Each service is a container of its own, not a member of a pod: the
+# workbench joins Sortie's network namespace, and the rest their networks.
+x-podman:
+  in_pod: false
+
 networks:
   internal:
     name: ortus-cp-internal
