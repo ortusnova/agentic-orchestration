@@ -2,7 +2,7 @@ go 1.27.3
 
 use (
 	./acp-broker
-	./dev/stage0/edge
+	./control-plane
 	./smol-builder
 	./worker-daemon
 )
