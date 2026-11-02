@@ -36,9 +36,9 @@ main{padding:10px 24px 40px;position:relative}
 .jt{border:0;background:none;padding:0;margin-top:4px;text-align:left;font-size:14px}.jt b{font-weight:600}.jt:hover b{text-decoration:underline;text-underline-offset:3px}
 .jm{color:var(--mute);font-variant-numeric:tabular-nums}.jm b{color:var(--ink)}.alarm{color:var(--alert)!important}.ll p.alarm{color:var(--alert);font-weight:600}
 .lt{position:relative;min-height:96px}
-.job{position:absolute;min-width:6px;top:18px;height:60px;border-radius:6px;padding:7px 10px;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;text-align:left;border:1.5px solid var(--amber);background:var(--amber-tint);color:var(--ink);transition:box-shadow .2s cubic-bezier(.2,.8,.2,1)}
+.job{position:absolute;min-width:6px;top:18px;height:60px;border-radius:6px;padding:7px 10px;display:flex;flex-direction:column;justify-content:space-between;text-align:left;border:1.5px solid var(--amber);background:var(--amber-tint);color:var(--ink);transition:box-shadow .2s cubic-bezier(.2,.8,.2,1)}
 button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
-.job .h{display:flex;gap:6px;align-items:baseline;white-space:nowrap}.job b{font-weight:600}
+.job .h{display:flex;gap:6px;align-items:baseline;white-space:nowrap;min-width:0}.job b{font-weight:600}
 .job .f{display:flex;gap:12px;color:var(--mute);font-variant-numeric:tabular-nums;white-space:nowrap}.job .f b{color:var(--ink)}
 .id{font:500 11px var(--mono);color:var(--mute)}
 .rest{position:absolute;top:18px;height:60px;border:1.5px dashed var(--amber);border-left:0;border-radius:0 6px 6px 0;background:repeating-linear-gradient(135deg,#fff 0 6px,rgba(201,138,26,.2) 6px 7px);pointer-events:none}
@@ -75,6 +75,17 @@ button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
 .fault{position:absolute;z-index:3;top:18px;left:0;right:0;height:60px;border:1.5px solid var(--alert);border-radius:6px;background:#fff;display:flex;align-items:center;gap:14px;padding:0 14px}
 .fault span{color:var(--mute)}.fault .ghost{margin-left:auto;height:32px}
 .later li.ready{color:var(--done)}.later li.ready i{background:var(--done)}
+.job{background:linear-gradient(to right,var(--amber-tint) 0 var(--split,100%),transparent var(--split,100%)),repeating-linear-gradient(135deg,#fff 0 6px,rgba(201,138,26,.18) 6px 7px);overflow:visible}
+.job .h,.job .f{overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.job .h b{overflow:hidden;text-overflow:ellipsis}
+.job.stalled{background:#fff}.job.next{background:#fff}
+.job.cut{border-left-style:dashed;border-top-left-radius:0;border-bottom-left-radius:0}
+.tip{display:none;position:absolute;left:0;bottom:calc(100% + 6px);z-index:7;min-width:280px;max-width:380px;background:var(--ink);color:#fff;border-radius:8px;padding:10px 12px;flex-direction:column;gap:3px;white-space:normal;font-weight:400;box-shadow:0 10px 24px -12px rgba(20,22,26,.5);pointer-events:none}
+.tip b{font-weight:600}.tip span{color:#d6d6da}.tip .mute{color:var(--imute)}.tip .alarm{color:#f08a80!important}
+.job:hover .tip,.job:focus-visible .tip{display:flex}
+.job{z-index:3}
+.job:hover,.job:focus-visible{z-index:6}
+.more{position:absolute;right:6px;top:36px;color:var(--mute);font-weight:600}
 </style></head><body>
 <header class="bar"><div class="proj">ortus-nova-specs</div><nav class="tabs"><a class="on">Home</a><a>Graph</a><a>Plan</a></nav>
  <div class="seg" role="tablist"><button role="tab" data-state="now" aria-selected="true">Now <small>real, 11:20 UTC</small></button><button role="tab" data-state="busy" aria-selected="false">Busy <small>example</small></button></div></header>
@@ -83,7 +94,7 @@ button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
 <script>
 // Axis: one hour back to two hours ahead. ETA = the median successful run on that
 // Sortie (p1 10 min, taichi 17 min; a vm chain 38 min). Tokens: no run has reported any yet.
-const FROM=-60, TO=120, pct=m=>((Math.max(FROM,Math.min(TO,m))-FROM)/(TO-FROM)*100);
+const FROM=-30, TO=60, MEDIAN=14, pct=m=>((Math.max(FROM,Math.min(TO,m))-FROM)/(TO-FROM)*100);
 const STATES=[["working","Working"],["stuck","Something stuck"],["drain","Draining for a deploy"],["dry","Out of approved work"]];
 const DATA={
  working:{workers:[
@@ -128,15 +139,20 @@ const DATA={
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const dur=m=>m>=60?`${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")}`:`${m} min`;
 let state="working", jobs={};
+function tip(job,extra){return `<span class="tip" role="tooltip"><b>${esc(job.id)} ${esc(job.title)}</b><span>${esc(job.phase||'Next')}${job.step?' · '+esc(job.step):''}${job.repo?' · '+esc(job.repo):''}</span>${extra}</span>`}
 function bars(key,job,cls){
- jobs[key]=job; const l=pct(-job.started), r=pct(0), clipped=job.started>-FROM;
- const ran=`<button class="job ${cls} ${job.eta?'ran':''}" data-job="${key}" style="left:${l}%;width:calc(${r-l}% - 1px)" title="Watch ${esc(job.id)}">
-  <span class="h"><span class="id">${esc(job.id)}</span><b>${esc(job.title)}</b><span class="id">${esc(job.phase)}${job.step?' · '+esc(job.step):''}</span></span>
-  <span class="f">${cls==='outside'?`<span><b>${dur(job.started)}</b></span><span>tokens not reported</span><span>no estimate</span>`:`<span>since ${dur(job.started)} ago</span>`}</span></button>`;
- const rest=job.eta?`<div class="rest" style="left:${r}%;width:${pct(job.eta)-r}%"></div>`:"";
- return ran.replace('class="job ','class="job '+(clipped?'cut ':''))+rest;
+ jobs[key]=job;
+ const end=job.overdue?0:job.eta!=null&&job.eta>0?job.eta:(cls==="starting"?MEDIAN:0);
+ const l=pct(-job.started), r=pct(end), now=pct(0), clipped=job.started>-FROM;
+ const split=r>l?Math.round((now-l)/(r-l)*100):100;
+ const left=job.overdue?`<b class="alarm">overdue</b>`:job.eta?`<b>~${job.eta} min</b> left`:cls==="starting"?"starting":"no estimate";
+ const facts=`<span><b>${dur(job.started)}</b> running · ${job.tokens?esc(job.tokens)+' tokens · '+esc(job.cost):'tokens not reported'}</span><span>${left}${job.eta?' · median of past runs':''}</span>${job.last?`<span class="mute">${esc(job.last)}${job.ago?' · '+esc(job.ago)+' ago':''}</span>`:''}`;
+ return `<button class="job ${cls} ${clipped?'cut':''}" data-job="${key}" style="left:${l}%;width:calc(${r-l}% - 2px);--split:${split}%">
+  <span class="h"><span class="id">${esc(job.id)}</span><b>${esc(job.title)}</b></span>
+  <span class="f"><span><b>${dur(job.started)}</b></span><span>${left}</span></span>${tip(job,facts)}</button>`;
 }
-function nexts(after,list){let t=after,h="";for(const n of list){const l=pct(t+2),w=pct(t+2+n.est)-l;h+=`<div class="job next" style="left:${l}%;width:${w}%"><span class="h"><span class="id">${esc(n.id)}</span><b>${esc(n.title)}</b></span><span class="f">next · ~${n.est} min</span></div>`;t+=2+n.est}return h}
+function nexts(after,list){let t=after,h="",more=0;for(const n of list){if(t+2>=TO){more++;continue}const l=pct(t+2),w=pct(t+2+n.est)-l;h+=`<div class="job next" tabindex="0" style="left:${l}%;width:calc(${w}% - 2px)"><span class="h"><span class="id">${esc(n.id)}</span><b>${esc(n.title)}</b></span><span class="f">next · ~${n.est} min</span>${tip(n,`<span>starts in about ${t+2} min · takes about ${n.est} min</span>`)}</div>`;t+=2+n.est}
+ if(more)h+=`<span class="more">+ ${more} more</span>`;return h}
 function lane(w,s,i,firstFree){
  const j=s.job, label=j?`<div class="no">Slot ${i+1}</div><div class="st ${s.state}">${esc(j.phase)} · ${s.state==="starting"?"starting, attempt "+j.attempt:s.state}</div>
   <button class="jt" data-job="${w.name}:${i}"><span class="id">${esc(j.id)}</span> <b>${esc(j.title)}</b></button>
@@ -156,7 +172,7 @@ function worker(w){
   ${w.notice?`<p class="notice">${esc(w.notice)}</p>`:''}<div class="track">${w.drain?`<div class="drain" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(w.drain.at)/100})"><span>${esc(w.drain.label)}</span></div>`:''}<div class="nowline" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(0)/100})"></div>${w.slots.map((s,i)=>lane(w,s,i,w.slots.findIndex(x=>!x.job))).join("")}${out}</div>${later}</section>`;
 }
 function render(){jobs={};const d=DATA[state];
- const ticks=[[-60,"−1 h"],[-30,"−30"],[0,"NOW"],[30,"+30"],[60,"+1 h"],[90,"+90"],[120,"+2 h"]].map(([m,t])=>`<span class="tick ${m===0?'n':m===120?'end':m===-60?'first':''}" style="left:${pct(m)}%">${t}</span>`).join("");
+ const ticks=[[-30,"−30 min"],[-15,"−15"],[0,"NOW"],[15,"+15"],[30,"+30"],[45,"+45"],[60,"+1 h"]].map(([m,t])=>`<span class="tick ${m===0?'n':m===60?'end':m===-30?'first':''}" style="left:${pct(m)}%">${t}</span>`).join("");
  document.getElementById("app").innerHTML=`<p class="example">Example data: how the lanes read once one Sortie runs everything and review counts as work in a slot.</p>`+`<div class="axis">${ticks}</div>`+d.workers.map(worker).join("")+
  `<div class="legend"><span><i class="sw" style="background:var(--amber-tint);border:1.5px solid var(--amber)"></i>run so far</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,#fff 0 4px,rgba(201,138,26,.3) 4px 5px);border:1.5px dashed var(--amber)"></i>estimated rest</span><span><i class="sw" style="border:1.5px dashed var(--slate)"></i>next on this slot</span><span><i class="sw" style="border:1.5px solid var(--alert)"></i>stalled or overdue</span><span>Click a bar to watch or steer its agent.</span></div>`;}
 const TX=[["me","Example transcript: the real panel streams this agent's session."],["","Reading the story's spec and acceptance criteria."],["tool","read internal/orchestrator/exit.go"],["","Routing each stopped failure by its signature's class."],["tool","edit internal/orchestrator/route.go (+84 −3)"],["tool","go test ./internal/orchestrator -run Route   ok 2.1s"]];
