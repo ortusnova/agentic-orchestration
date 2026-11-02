@@ -17,7 +17,7 @@ Never write anywhere else. Never call a tracker or its API, and never run `sorti
 - Each deliverable has a kebab-case `id`, a short imperative `title`, a `kind` (`story` or `enabler`), `depends_on` (ids in the change, or `<change>/<id>` in another change), `covers` (`<capability-path>#<Requirement name>`, using the exact requirement names in the change's specs), and at least one checkable `acceptance_criteria`.
 - A dependency on another change's deliverable needs `plan.yaml` to order the two changes.
 - Do not write `status` or `approved_digest`. Never approve anything: only a person approves, story by story, in the workbench.
-- Set `review` on a deliverable when the person says how its work is reviewed: `human` (the default: a person merges the pull request) or `criteria` (a separate agent checks the acceptance criteria and the pull request merges on its own). Ask when it is not clear and the work is risky.
+- `review` on a deliverable is `human` (the default) or `criteria`. Both go through the criteria gate (design D5): a separate agent session checks each acceptance criterion, and Sortie merges the pull request once that review and CI pass. So write criteria an agent can check with evidence; one the review cannot settle becomes a question for a person on the workbench. Do not change `review` on a started story.
 - When the person says a deliverable's work was already done, by hand or anywhere else, set `delivered_by` to the pull requests that delivered it, each `owner/repo#number` (for example `delivered_by: [ortusnova/homelab#85]`). Once they are merged, the workbench reads the story as done, and no agent takes it.
 
 ## Started stories

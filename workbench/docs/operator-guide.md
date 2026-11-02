@@ -197,7 +197,7 @@ Each story shows its plan status on its node and in its details. The graph API n
 | Not confirmed (`delivery_unconfirmed`) | It names pull requests, and one is open, closed without merging, or cannot be looked up. It reads "Delivery not confirmed" with each pull request and why, and counts as not done. |
 | Re-review (`needs_rereview`) | It needs a person again: a story it depends on was cancelled (`blocker_canceled`), or an agent said the work was already done and its evidence did not check out (`unverified_no_change`). Approve it again, or cancel it. |
 
-A story's `review` field says who reviews its pull request: `human` (the default; a person merges it in the forge) or `criteria` (a separate agent checks the acceptance criteria, and the pull request merges on its own).
+A story's `review` field is `human` (the default) or `criteria`. In the stage-0 kit both go through the criteria gate (design D5): an agent session separate from the build checks each acceptance criterion, and Sortie merges the pull request once that review and CI pass. A criterion the review cannot settle shows as a question on the workbench, and the pull request stays open.
 
 ### A story built outside an agent run
 
