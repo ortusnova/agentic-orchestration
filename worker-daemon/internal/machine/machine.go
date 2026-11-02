@@ -40,6 +40,21 @@ type Spec struct {
 	// Share is the host directory mounted at [GuestShare].
 	Share    string
 	Forwards []Forward
+	// Nested gives the machine nested virtualization, for a job that
+	// requires the nested capability.
+	Nested bool
+	// Mounts are the image's host folders (config smolvm.images).
+	Mounts []Mount
+	// HostEnv holds KEY=VALUE entries for every backend command on this
+	// machine, such as SMOLVM_LIB_DIR for an image's guest kernel.
+	HostEnv []string
+}
+
+// Mount is a host folder shared with the machine.
+type Mount struct {
+	Host     string
+	Guest    string
+	ReadOnly bool
 }
 
 // Exec is one command in the machine.

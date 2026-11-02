@@ -24,8 +24,7 @@ import (
 
 // fixRepoProject is the repository each workflow's CI provider reads.
 var fixRepoProject = map[string]string{
-	"WORKFLOW.md":         "ortusnova/agentic-orchestration",
-	"WORKFLOW-homelab.md": "ortusnova/homelab",
+	"WORKFLOW.md": "ortusnova/agentic-orchestration",
 }
 
 // stage0Fix is one workflow with the reaction settings Sortie builds from

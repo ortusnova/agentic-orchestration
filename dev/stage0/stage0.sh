@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
-# Stage 0 of agent-platform-workers (spec store, design D13) on one host: a
-# persistent Sortie under plan control with co-located smolvm, the plan
-# workbench, acp-broker, and the local Huly, as systemd user units. GitHub is
-# the forge. Rootless throughout: no sudo, no system unit.
+# Stages 0 and 1 of agent-platform-workers (spec store, design D13, D18): one
+# persistent Sortie under plan control, on p1, that dispatches every
+# repository under the remote kind, with the plan workbench, acp-broker, the
+# local Huly and the stage-1 edge; and a worker daemon on p1 and on each
+# worker host, which runs the jobs (spec store agent-platform/one-sortie), as
+# systemd user units. GitHub is the forge. Rootless throughout: no sudo, no
+# system unit.
 #
 # Two profiles, chosen by STAGE0_PROFILE on the first run (then kept in
 # stage0.env):
 #   control (default)  p1: Sortie, the workbench, acp-broker and the local
-#                      Huly, for the whole plan; and the stage-1 edge (design
+#                      Huly, for the whole plan; the stage-1 edge (design
 #                      D18): the edge, nono and one SSH tunnel per worker host
-#                      (worker-host.sh).
-#   homelab            taichi: a second Sortie, and acp-broker, that runs only
-#                      homelab stories (spec store run-homelab-through-sortie,
-#                      design D5-D12). No workbench and no Huly: it reaches
-#                      p1's Huly through the tunnel huly-tunnel.sh opens on p1.
-#                      It reads exactly two credential files, github-token and
-#                      claude-oauth-token, and falls back to nothing.
+#                      (worker-host.sh); and p1's own worker.
+#   worker             a worker host such as taichi: the worker daemon only,
+#                      which dials p1's edge through the tunnel p1 opens to it
+#                      (worker-host.sh add, on p1), and homelab's inputs when
+#                      the host has homelab's dev host. No Sortie, no Huly and
+#                      no credential. A host on the retired homelab profile
+#                      moves to it with STAGE0_PROFILE=worker, which stops its
+#                      Sortie and removes its unit.
 #
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
-#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack
+#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm packs
 #   dev/stage0/stage0.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
 #                                         (deploy.sh does this once plan-bench moves)
 #
@@ -30,8 +34,8 @@
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
 # planning sessions.
-# Needs (homelab): smolvm 1.32.4 or later, Go, git, python3, homelab's dev host
-# (`make dev-host` in homelab), the two credential files, and p1's tunnel.
+# Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's tunnel; for
+# homelab jobs, python3 and homelab's dev host (`make dev-host` in homelab).
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -78,34 +82,36 @@ if [[ ${STAGE0_KIT_FROM_CHECKOUT:-} != 1 && $ROOT != "$LIVE" ]]; then
   exec "$LIVE/dev/stage0/stage0.sh" "$@"
 fi
 
-mkdir -p "$STAGE0_HOME"/{bin,sortie,workspaces,home,sessions}
+mkdir -p "$STAGE0_HOME"/bin
 chmod 700 "$STAGE0_HOME"
 # deploy.sh runs this again from a systemd unit, whose PATH lacks the tools
 # below; it uses the PATH of the last run, recorded here.
 printf '%s\n' "$PATH" > "$STAGE0_HOME/path"
 ENV_FILE=$STAGE0_HOME/stage0.env
-if [[ ! -s $ENV_FILE && ${STAGE0_PROFILE:-control} == homelab ]]; then
-  say "Writing the default homelab-profile settings to $ENV_FILE"
+# The homelab profile, a second Sortie on taichi, is retired (spec store
+# agent-platform/one-sortie): its host becomes a worker once p1's Sortie
+# dispatches homelab. The move stops that Sortie, so a person makes it.
+if [[ -s $ENV_FILE ]] && grep -qx 'STAGE0_PROFILE=homelab' "$ENV_FILE"; then
+  [[ ${STAGE0_PROFILE:-} == worker ]] \
+    || die "the homelab profile is retired: p1's Sortie dispatches homelab now. Once p1 runs this kit's main, move this host to a worker, which stops its Sortie: STAGE0_PROFILE=worker $0"
+  say "Moving $ENV_FILE from the homelab profile to the worker profile"
+  sed -i 's/^STAGE0_PROFILE=homelab$/STAGE0_PROFILE=worker/' "$ENV_FILE"
+fi
+if [[ ! -s $ENV_FILE && ${STAGE0_PROFILE:-control} == worker ]]; then
+  say "Writing the default worker-profile settings to $ENV_FILE"
   (umask 077; cat > "$ENV_FILE" <<EOF
-# Stage-0 settings, homelab profile (dev/stage0/stage0.sh). Run stage0.sh again after an edit.
-STAGE0_PROFILE=homelab
+# Stage-0 settings, worker profile (dev/stage0/stage0.sh). Run stage0.sh again after an edit.
+STAGE0_PROFILE=worker
 STAGE0_KIT_ROOT=$ROOT
-STAGE0_SORTIE_SRC=$HOME/dev/sortie-worktrees/stage0
-STAGE0_SORTIE_PORT=7680
-# p1's Huly, through the tunnel p1 opens to this host's loopback (huly-tunnel.sh).
-STAGE0_HULY_URL=http://127.0.0.1:8087
-STAGE0_HULY_WORKSPACE=sortie
-STAGE0_HULY_EMAIL=sortie@example.com
-STAGE0_HULY_PASSWORD=sortie-dev-pass
-STAGE0_HULY_PROJECT=ONS
-STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
-STAGE0_HOMELAB_REPO_BASE=master
-STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
-# The operator's homelab checkout: the kit adds its own detached worktree of
-# origin/master under \$STAGE0_HOME/homelab and builds the pack from it.
-STAGE0_HOMELAB_SRC=$HOME/dev/homelab
-# Agents at once; each homelab machine takes 8 vCPU and 20 GiB (design D11).
+# The worker's name; p1's edge names it by its tunnel anyway (worker-host.sh).
+STAGE0_WORKER_NAME=$(hostname -s)
+# Jobs at once (the daemon's run_slots).
 STAGE0_MAX_AGENTS=2
+# The operator's homelab checkout, for homelab jobs: the kit adds its own
+# detached worktree of origin/master under \$STAGE0_HOME/homelab and builds the
+# homelab pack from it. Without it, this worker takes no homelab job.
+STAGE0_HOMELAB_SRC=$HOME/dev/homelab
+STAGE0_HOMELAB_REPO_BASE=master
 EOF
   )
 fi
@@ -126,8 +132,7 @@ STAGE0_HULY_PROJECT=ONS
 STAGE0_REPO_URL=https://github.com/ortusnova/sortie.git
 STAGE0_REPO_BASE=plan-bench
 STAGE0_REPO_PROJECT=ortusnova/sortie
-# Other repositories (WORKFLOW.md): agentic-orchestration runs here; homelab
-# is listed closed to dispatch, for the homelab Sortie.
+# Other repositories (WORKFLOW.md), each dispatched here too.
 STAGE0_AO_REPO_URL=https://github.com/ortusnova/agentic-orchestration.git
 STAGE0_AO_REPO_BASE=main
 STAGE0_AO_REPO_PROJECT=ortusnova/agentic-orchestration
@@ -148,8 +153,12 @@ fi
 . "$ENV_FILE"
 # A stage0.env written before a setting existed gets its default here.
 STAGE0_PROFILE=${STAGE0_PROFILE:-control}
-case $STAGE0_PROFILE in control|homelab) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or homelab" ;; esac
+case $STAGE0_PROFILE in control|worker) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or worker" ;; esac
 STAGE0_MAX_AGENTS=${STAGE0_MAX_AGENTS:-3}
+STAGE0_PACK=${STAGE0_PACK:-$STAGE0_HOME/stage0.smolmachine}
+STAGE0_EDGE_WORKER_PORT=${STAGE0_EDGE_WORKER_PORT:-7700}
+STAGE0_WORKER_NAME=${STAGE0_WORKER_NAME:-$(hostname -s)}
+[[ $STAGE0_PROFILE == control ]] && STAGE0_WORKER_NAME=p1
 STAGE0_AO_REPO_URL=${STAGE0_AO_REPO_URL:-https://github.com/ortusnova/agentic-orchestration.git}
 STAGE0_AO_REPO_BASE=${STAGE0_AO_REPO_BASE:-main}
 STAGE0_AO_REPO_PROJECT=${STAGE0_AO_REPO_PROJECT:-ortusnova/agentic-orchestration}
@@ -164,12 +173,12 @@ fi
 export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
-  STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT
+  STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT STAGE0_EDGE_WORKER_PORT
 
-if [[ $STAGE0_PROFILE == homelab ]]; then
+if [[ $STAGE0_PROFILE == worker ]]; then
   # make dev-host installs smolvm in ~/.local/bin, which a non-login shell lacks.
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH ;; esac
-  needed=(smolvm go git openssl python3 curl)
+  needed=(smolvm go git curl sha256sum)
 else
   needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh)
 fi
@@ -180,20 +189,69 @@ done
 . "$KIT/smolvm-version.sh"
 # shellcheck source=huly-restart-policy.sh
 . "$KIT/huly-restart-policy.sh"
-smolvm_version_ok > /dev/null || die "Sortie needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
-if [[ $STAGE0_PROFILE == homelab ]]; then
-  # Exactly these two files, mode 0600, and nothing to fall back to (design D10).
+smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
+# shellcheck source=worker-config.sh
+. "$KIT/worker-config.sh"
+UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
+
+if [[ $STAGE0_PROFILE == worker ]]; then
+  # A worker host holds no credential (spec store agent-platform/stage-1-edge):
+  # its jobs' model and forge requests get theirs from nono on p1.
   for f in github-token claude-oauth-token; do
-    [[ -s $STAGE0_HOME/$f ]] || die "$STAGE0_HOME/$f is missing (BACKLOG.md, taichi stage 0)"
-    [[ $(stat -c %a "$STAGE0_HOME/$f") == 600 ]] || die "$STAGE0_HOME/$f must be mode 0600"
+    [[ -e $STAGE0_HOME/$f ]] && say "$STAGE0_HOME/$f is no longer used on a worker host: delete it, and revoke the token"
   done
-  STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" --setup-token-only >/dev/null \
-    || die "$STAGE0_HOME/claude-oauth-token holds no token"
-else
-  gh auth token >/dev/null || die "gh has no token: run gh auth login"
-  STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
-    || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
+  STAGE0_EGRESS_CA=$HOME/.config/ortus-nova/egress-ca.crt
+  [[ -s $STAGE0_EGRESS_CA ]] || die "$STAGE0_EGRESS_CA is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  say "Building worker-daemon and smol-builder into $STAGE0_HOME/bin"
+  (cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
+  (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
+  export PATH=$STAGE0_HOME/bin:$PATH
+  if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
+    say "Building the pack $STAGE0_PACK"
+    smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
+  fi
+  if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
+    command -v python3 > /dev/null || die "python3 is not on PATH; homelab's inputs need it"
+    # shellcheck source=homelab-inputs.sh
+    . "$KIT/homelab-inputs.sh"
+    homelab_inputs
+  else
+    say "No homelab checkout (STAGE0_HOMELAB_SRC): this worker takes no homelab job"
+  fi
+  render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
+  "$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
+    || die "the worker daemon refused $STAGE0_HOME/worker.json"
+
+  retire_sortie "$UNITS"
+  say "Installing the user units"
+  mkdir -p "$UNITS"
+  units=(ortus-stage0-worker.service)
+  deploy=''
+  [[ $ROOT == "$LIVE" ]] && deploy=1 && units+=(ortus-stage0-deploy.service ortus-stage0-deploy.timer)
+  for unit in "${units[@]}"; do
+    sed -e "s|@KIT@|$KIT|g" -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$unit" > "$UNITS/$unit"
+  done
+  systemctl --user daemon-reload
+  if [[ $deploy ]]; then
+    systemctl --user enable -q --now ortus-stage0-deploy.timer
+  else
+    systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
+  fi
+  systemctl --user enable -q ortus-stage0-worker.service
+  systemctl --user restart ortus-stage0-worker.service
+  sleep 2
+  systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT/" || true)
+  [[ $code != 000 && -n $code ]] \
+    || say "p1's edge does not answer at http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT yet: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  say "Ready: worker $STAGE0_WORKER_NAME dials p1's edge at http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT (journalctl --user -u ortus-stage0-worker)"
+  exit 0
 fi
+
+mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
+gh auth token >/dev/null || die "gh has no token: run gh auth login"
+STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
+  || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
 
 if [[ ! -d $STAGE0_SORTIE_SRC ]]; then
   say "Creating the Sortie checkout $STAGE0_SORTIE_SRC (ortusnova/sortie plan-bench)"
@@ -204,20 +262,18 @@ if [[ -n $UPDATE_SORTIE ]]; then
   git -C "$STAGE0_SORTIE_SRC" fetch -q origin plan-bench
   git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench
 fi
-say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-broker and smol-builder into $STAGE0_HOME/bin"
+say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-broker, smol-builder and worker-daemon into $STAGE0_HOME/bin"
 (cd "$STAGE0_SORTIE_SRC" && GOWORK=off go build -o "$STAGE0_HOME/bin/sortie" ./cmd/sortie)
 (cd "$ROOT/acp-broker" && go build -o "$STAGE0_HOME/bin/acp-broker" ./cmd/acp-broker)
 (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
+(cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
 export PATH=$STAGE0_HOME/bin:$PATH
-if [[ $STAGE0_PROFILE == control ]]; then
-  # shellcheck source=nono-version.sh
-  . "$KIT/nono-version.sh"
-  say "Building the stage-1 edge and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
-  (cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
-  nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
-fi
+# shellcheck source=nono-version.sh
+. "$KIT/nono-version.sh"
+say "Building the stage-1 edge and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
+(cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
+nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
 
-if [[ $STAGE0_PROFILE == control ]]; then
 say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench" && uv sync -q)
 (cd "$ROOT/workbench/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
@@ -246,57 +302,54 @@ if [[ ! -s $STAGE0_HOME/workbench-password-hash ]]; then
 from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
-else
-  curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" \
-    || die "p1's Huly does not answer at $STAGE0_HULY_URL: on p1, run dev/stage0/huly-tunnel.sh $(hostname)"
-  # shellcheck source=homelab-profile.sh
-  . "$KIT/homelab-profile.sh"
-  homelab_profile
-fi
 secret "$STAGE0_HOME/sortie-token"
 secret "$STAGE0_HOME/viewer-token"
-if [[ $STAGE0_PROFILE == control ]]; then
-  # The edge reaches nono with this; nono intercepts TLS for the credential
-  # hosts with the egress CA, whose certificate each worker host gets
-  # (worker-host.sh) and whose key never leaves this host.
-  secret "$STAGE0_HOME/nono-pass"
-  if [[ ! -s $STAGE0_HOME/egress-ca/ca.key ]]; then
-    say "Creating the egress CA in $STAGE0_HOME/egress-ca"
-    mkdir -p "$STAGE0_HOME/egress-ca"
-    (umask 077 && cd "$STAGE0_HOME/egress-ca" \
-      && openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key 2>/dev/null \
-      && openssl req -x509 -new -key ca.key -sha256 -days 3650 -subj "/CN=Ortus Nova stage-0 egress CA" \
-        -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign,digitalSignature" \
-        -out ca.crt) || die "could not create the egress CA"
-    chmod 644 "$STAGE0_HOME/egress-ca/ca.crt"
-  fi
-  # shellcheck source=edge-config.sh
-  . "$KIT/edge-config.sh"
-  mkdir -p "$STAGE0_WORKERS"
-  render_edge_config "$STAGE0_HOME/edge.json"
-  "$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
+# The edge reaches nono with this; nono intercepts TLS for the credential
+# hosts with the egress CA, whose certificate each worker gets (worker-host.sh,
+# worker-config.sh) and whose key never leaves this host.
+secret "$STAGE0_HOME/nono-pass"
+if [[ ! -s $STAGE0_HOME/egress-ca/ca.key ]]; then
+  say "Creating the egress CA in $STAGE0_HOME/egress-ca"
+  mkdir -p "$STAGE0_HOME/egress-ca"
+  (umask 077 && cd "$STAGE0_HOME/egress-ca" \
+    && openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key 2>/dev/null \
+    && openssl req -x509 -new -key ca.key -sha256 -days 3650 -subj "/CN=Ortus Nova stage-0 egress CA" \
+      -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign,digitalSignature" \
+      -out ca.crt) || die "could not create the egress CA"
+  chmod 644 "$STAGE0_HOME/egress-ca/ca.crt"
 fi
+# shellcheck source=edge-config.sh
+. "$KIT/edge-config.sh"
+# p1's own worker: its edge port is on p1's loopback, with no tunnel.
+register_local_worker "$STAGE0_WORKER_NAME"
+render_edge_config "$STAGE0_HOME/edge.json"
+"$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
 
-if [[ $STAGE0_PROFILE == control ]] && [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
+if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
   say "Building the pack $STAGE0_PACK"
   smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
 fi
+STAGE0_EGRESS_CA=$STAGE0_HOME/egress-ca/ca.crt
+# p1 takes homelab jobs only with homelab's dev host here (STAGE0_HOMELAB_SRC).
+if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
+  # shellcheck source=homelab-inputs.sh
+  . "$KIT/homelab-inputs.sh"
+  homelab_inputs
+fi
+render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
+"$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
+  || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
 say "Rendering Sortie's workflow"
-workflow=$KIT/WORKFLOW.md
-[[ $STAGE0_PROFILE == homelab ]] && workflow=$KIT/WORKFLOW-homelab.md
-STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$workflow" "$STAGE0_HOME/sortie/WORKFLOW.md"
+STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
 "$KIT/run-sortie.sh" validate >/dev/null || die "Sortie refused the workflow: $KIT/run-sortie.sh validate"
 
 say "Installing the user units"
-UNITS=$HOME/.config/systemd/user
+retire_huly_tunnels "$UNITS"
 mkdir -p "$UNITS"
 units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
   ortus-stage0-store.service ortus-stage0-store.timer
-  ortus-stage0-nono.service ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service)
-# A setup-token token never expires, so the homelab profile needs no token
-# timer; it has no workbench, so no store to keep current either.
-[[ $STAGE0_PROFILE == homelab ]] && units=(ortus-stage0-sortie.service)
+  ortus-stage0-nono.service ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
 deploy=''
@@ -310,26 +363,20 @@ if [[ $deploy ]]; then
 else
   systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
 fi
-if [[ $STAGE0_PROFILE == homelab ]]; then
-  systemctl --user enable -q ortus-stage0-sortie.service
-  systemctl --user restart ortus-stage0-sortie.service
-  for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
-  curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" || die "Sortie did not start: journalctl --user -u ortus-stage0-sortie"
-  say "Ready: Sortie 127.0.0.1:$STAGE0_SORTIE_PORT runs homelab stories from $STAGE0_HULY_URL (project $STAGE0_HULY_PROJECT)"
-  exit 0
-fi
-systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service ortus-stage0-edge.service
+systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
+  ortus-stage0-edge.service ortus-stage0-worker.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 systemctl --user restart ortus-stage0-nono.service ortus-stage0-edge.service
-for name in $(worker_names); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
+for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
+systemctl --user restart ortus-stage0-worker.service
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
-for unit in ortus-stage0-nono ortus-stage0-edge; do
+for unit in ortus-stage0-nono ortus-stage0-edge ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
-say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"
+say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker(s), p1's own and $(tunnel_workers | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"
