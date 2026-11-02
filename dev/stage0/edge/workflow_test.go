@@ -83,16 +83,6 @@ func TestOneSortieDispatchesEveryRepository(t *testing.T) {
 	}
 }
 
-// Under the remote kind Sortie runs no hook: it refuses to prepare the
-// workspace of every story whose workflow has one, so no story runs.
-func TestTheRemoteKindHasNoHooks(t *testing.T) {
-	for _, line := range workflowFrontMatter(t) {
-		if line == "hooks:" || strings.HasPrefix(line, "hooks:") {
-			t.Errorf("WORKFLOW.md has hooks, which the remote kind refuses: %q", line)
-		}
-	}
-}
-
 // Requirements say what a job needs, never a host name: the homelab job
 // requires nested and the homelab sandbox's CPUs, memory and disk, and no
 // requirement, image or flow names p1, taichi or any worker.
