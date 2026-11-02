@@ -1,0 +1,69 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Slot lanes in time</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&family=Bodoni+Moda:ital,wght@1,400&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:#fbfbf8;color:#1d1d1f;font:400 13px/1.45 "Instrument Sans",Helvetica,Arial,sans-serif}
+.bar{height:56px;background:#1d1d1f;color:#fff;display:flex;align-items:center;gap:16px;padding:0 20px}
+.proj{background:#2a2a2d;border-radius:6px;height:32px;padding:0 12px;display:flex;align-items:center;font-weight:600}
+.mono{font:500 11px "JetBrains Mono",monospace;color:#5d626b}
+.wrap{position:relative;padding:14px 24px 0 24px}
+/* time axis: x = 230px + minutes from -60 to +120, 5px per minute; NOW at 530px */
+.axis{position:relative;height:30px;margin-left:206px;border-bottom:1px solid #14161a}
+.tick{position:absolute;bottom:4px;font:italic 400 14px "Bodoni Moda",Georgia,serif;color:#5d626b;transform:translateX(-50%)}
+.now{position:absolute;top:44px;bottom:0;left:530px;width:1.5px;background:#14161a;z-index:1}
+.nowl{position:absolute;top:14px;left:536px;background:#14161a;color:#fff;border-radius:3px;padding:2px 8px;font:700 10px "Instrument Sans";letter-spacing:.05em;z-index:2}
+.grp{display:flex;align-items:baseline;gap:12px;margin:14px 0 4px}
+.grp h2{font:700 22px/1.1 "Instrument Sans";letter-spacing:-.02em}.grp .b{color:#5d626b}
+.lane{position:relative;height:74px;border-bottom:1px solid #e6e6e0}
+.ll{position:absolute;left:0;top:10px;width:190px}
+.ll .no{font:700 11px "Instrument Sans";letter-spacing:.06em;text-transform:uppercase;color:#5d626b}
+.ll .st{font-weight:600;margin-top:2px}.ll .st.red{color:#c4382f}.ll .st.amb{color:#8a5a06}
+.job{position:absolute;top:10px;height:54px;border:1.5px solid #c98a1a;border-radius:6px;background:#fbf4e5;padding:6px 10px;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between}
+.job .h{display:flex;gap:6px;align-items:baseline;white-space:nowrap}.job b{font-weight:600}
+.job .f{display:flex;gap:12px;color:#5d626b;font-variant-numeric:tabular-nums;white-space:nowrap}
+.job .f b{color:#1d1d1f}
+.job.eta{border-style:dashed;background:repeating-linear-gradient(135deg,#fff 0 6px,rgba(201,138,26,.18) 6px 7px)}
+.job.stall{border-color:#c4382f;background:#fff}
+.job.next{border:1.5px dashed #8a8f98;background:#fff;color:#5d626b}
+.watch{position:absolute;top:22px;right:8px;background:#1d1d1f;color:#fff;border-radius:8px;padding:3px 10px;font-weight:600;font-size:12px}
+.ex{position:absolute;top:66px;right:24px;background:#fbf4e5;color:#8a5a06;border-radius:6px;padding:3px 10px;z-index:3}
+.legend{margin:14px 0 0 230px;color:#5d626b;display:flex;gap:22px}
+.sw{display:inline-block;width:22px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+</style></head><body>
+<div class="bar"><div class="proj">ortus-nova-specs</div><span style="color:#b8b8bd">Home · Graph · Plan</span></div>
+<div class="ex">Example data</div>
+<div class="wrap">
+ <div class="axis"><span class="tick" style="left:24px">−1 h</span><span class="tick" style="left:174px">−30 min</span><span class="tick" style="left:474px">+30 min</span><span class="tick" style="left:624px">+1 h</span><span class="tick" style="left:924px">+2 h</span></div>
+ <div class="now"></div><div class="nowl">NOW 11:20</div>
+
+ <div class="grp"><h2>p1</h2><span class="b">3 of 3 slots busy · 22 CPUs · 21 GiB free</span></div>
+ <div class="lane"><div class="ll"><div class="no">Slot 1</div><div class="st amb">Build · working</div></div>
+  <div class="job" style="left:415px;width:115px"><div class="h"><span class="mono">ONS-68</span><b>failure-routing</b></div><div class="f"><span><b>23 min</b></span><span>1.8 M tok</span></div></div>
+  <div class="job eta" style="left:531px;width:25px"></div>
+  <div class="job next" style="left:566px;width:180px"><div class="h"><span class="mono">ONS-70</span><b>health-checks</b></div><div class="f">next · ~10 min</div></div>
+  <span class="watch" style="right:auto;left:1240px">Watch ONS-68</span></div>
+ <div class="lane"><div class="ll"><div class="no">Slot 2</div><div class="st amb">Review · working</div></div>
+  <div class="job" style="left:500px;width:30px"></div>
+  <div class="job eta" style="left:531px;width:50px"></div>
+  <div class="job" style="left:300px;width:0;border:0;background:none;padding:0"></div>
+  <div class="job next" style="left:591px;width:150px"><div class="h"><span class="mono">ONS-76</span><b>fix CI on #62</b></div><div class="f">next · ~10 min</div></div>
+  <div style="position:absolute;left:230px;top:22px;color:#5d626b"><span class="mono">ONS-74</span> <b style="color:#1d1d1f">pr-repair-reactions</b> · 6 min · 410 k tok · ~10 min left</div>
+  <span class="watch" style="right:auto;left:1240px">Watch ONS-74</span></div>
+ <div class="lane"><div class="ll"><div class="no">Slot 3</div><div class="st">Starting, attempt 2</div></div>
+  <div class="job next" style="left:525px;width:340px;border-color:#c98a1a"><div class="h"><span class="mono">ONS-69</span><b>workbench-platform-faults</b></div><div class="f">starting · last error response_timeout · ETA once it starts</div></div>
+  <span class="watch" style="right:auto;left:1240px">Watch ONS-69</span></div>
+
+ <div class="grp"><h2>taichi</h2><span class="b">2 of 2 slots busy · 32 CPUs · 18 GiB free</span></div>
+ <div class="lane"><div class="ll"><div class="no">Slot 1</div><div class="st amb">Live proof · working</div></div>
+  <div class="job" style="left:270px;width:260px"><div class="h"><span class="mono">ONS-52</span><b>seed-security-updates</b><span class="mono">vm chain 9 of 13: k8s-up</span></div><div class="f"><span><b>52 min</b></span><span>640 k tok · $0.15</span></div></div>
+  <div class="job eta" style="left:531px;width:125px"></div>
+  <div class="job next" style="left:666px;width:230px"><div class="h"><span class="mono">ONS-61</span><b>live seed-proof</b></div><div class="f">next · ~40 min</div></div>
+  <span class="watch" style="right:auto;left:1240px">Watch ONS-52</span></div>
+ <div class="lane"><div class="ll"><div class="no">Slot 2</div><div class="st red">Build · stalled</div></div>
+  <div class="job stall" style="left:325px;width:205px"><div class="h"><span class="mono">ONS-37</span><b>canary-rebuild</b></div><div class="f"><span><b>41 min</b></span><span style="color:#c4382f">overdue · no event 14 min</span></div></div>
+  <div class="job next" style="left:541px;width:230px"><div class="h"><span class="mono">ONS-48</span><b>live k8s-up</b></div><div class="f">waits for this slot</div></div>
+  <span class="watch" style="right:auto;left:1240px">Watch ONS-37</span></div>
+
+ <div class="legend"><span><i class="sw" style="background:#fbf4e5;border:1.5px solid #c98a1a"></i>ran so far</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,#fff 0 4px,rgba(201,138,26,.3) 4px 5px);border:1.5px dashed #c98a1a"></i>estimated rest (median of past runs)</span><span><i class="sw" style="border:1.5px dashed #8a8f98"></i>next on this slot</span><span><i class="sw" style="border:1.5px solid #c4382f"></i>stalled or overdue</span></div>
+</div>
+</body></html>

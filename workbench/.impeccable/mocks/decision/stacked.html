@@ -1,0 +1,58 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Stacked workers</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&family=Bodoni+Moda:ital,wght@1,400&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:#fbfbf8;color:#1d1d1f;font:400 13px/1.45 "Instrument Sans",Helvetica,Arial,sans-serif}
+.bar{height:56px;background:#1d1d1f;color:#fff;display:flex;align-items:center;gap:16px;padding:0 20px}
+.proj{background:#2a2a2d;border-radius:6px;height:32px;padding:0 12px;display:flex;align-items:center;font-weight:600}
+.mono{font:500 11px "JetBrains Mono",monospace;color:#5d626b}
+main{padding:18px 24px}
+.wh{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid #1d1d1f;padding-bottom:8px;margin-bottom:12px}
+.wh h2{font:700 26px/1.1 "Instrument Sans";letter-spacing:-.02em}.wh .r{color:#5d626b}.wh .b{margin-left:auto;font-size:15px}.wh .b b{font-size:22px}
+.slots{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.s{border:1.5px solid #c98a1a;background:linear-gradient(#fbf4e5,#fff 70%);border-radius:6px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.s.st{border-color:#c4382f;background:#fff}.s.sa{border-style:dashed}
+.top{display:flex;justify-content:space-between;align-items:center}
+.no{font:700 11px "Instrument Sans";letter-spacing:.06em;text-transform:uppercase;color:#5d626b}
+.chip{font:700 10px "Instrument Sans";letter-spacing:.05em;text-transform:uppercase;background:#1d1d1f;color:#fff;border-radius:999px;padding:3px 9px}
+.chip.red{background:#fff;color:#c4382f;border:1px solid #c4382f}
+h3{font:600 15px "Instrument Sans"}h3 span{font:500 11px "JetBrains Mono";color:#5d626b;margin-right:4px}
+.m{display:grid;grid-template-columns:auto 1fr 1fr;gap:2px 16px;border-top:1px solid #e6e6e0;border-bottom:1px solid #e6e6e0;padding:8px 0}
+.m dt{font:700 10px "Instrument Sans";letter-spacing:.05em;text-transform:uppercase;color:#5d626b}
+.m dd b{font-size:17px;font-weight:700;display:block}.m dd i{font-style:normal;color:#5d626b;font-size:11.5px}
+.last{color:#5d626b;font-size:12.5px}
+.act{display:flex;gap:8px}.p{background:#1d1d1f;color:#fff;border-radius:8px;padding:6px 14px;font-weight:600}.g{border:1px solid #dcdcd7;border-radius:8px;padding:6px 12px;font-weight:600}
+.q{margin:12px 0 22px}.q h4{font:700 11px "Instrument Sans";letter-spacing:.06em;text-transform:uppercase;color:#5d626b;margin-bottom:4px}
+.row{display:grid;grid-template-columns:70px 220px 280px 1fr;gap:12px;padding:6px 2px;border-top:1px solid #e6e6e0}
+.ok{color:#2f6f4e;font-weight:600}.bl{font-weight:600}.red{color:#c4382f;font-weight:600}
+.ex{position:absolute;top:66px;right:24px;background:#fbf4e5;color:#8a5a06;border-radius:6px;padding:4px 10px}
+</style></head><body>
+<div class="bar"><div class="proj">ortus-nova-specs</div><span style="color:#b8b8bd">Home · Graph · Plan</span></div>
+<div class="ex">Example data</div>
+<main>
+<div class="wh"><h2>p1</h2><span class="r">control plane and worker</span><span class="b"><b>3</b> of 3 slots busy</span><span class="mono">22 CPUs · 21 GiB free</span></div>
+<div class="slots">
+ <div class="s"><div class="top"><span class="no">Slot 1</span><span class="chip">Build · working</span></div><h3><span>ONS-68</span>failure-routing</h3><div class="last">sortie · turn 4</div>
+  <dl class="m"><div><dt>Running</dt><dd><b>23 min</b></dd></div><div><dt>Tokens</dt><dd><b>1.8 M</b><i>$0.42</i></dd></div><div><dt>Finishes in</dt><dd><b>about 5 min</b><i>median of 37 runs</i></dd></div></dl>
+  <div class="last">edited internal/orchestrator/route.go · 20 s ago</div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div></div>
+ <div class="s"><div class="top"><span class="no">Slot 2</span><span class="chip">Review · working</span></div><h3><span>ONS-74</span>pr-repair-reactions</h3><div class="last">agentic-orchestration · turn 2</div>
+  <dl class="m"><div><dt>Running</dt><dd><b>6 min</b></dd></div><div><dt>Tokens</dt><dd><b>410 k</b><i>$0.09</i></dd></div><div><dt>Finishes in</dt><dd><b>about 10 min</b><i>median of 37 runs</i></dd></div></dl>
+  <div class="last">ran make -C dev/stage0 test · 1 min ago</div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div></div>
+ <div class="s sa"><div class="top"><span class="no">Slot 3</span><span class="chip" style="background:#fff;color:#1d1d1f;border:1px solid #dcdcd7">Build · starting, attempt 2</span></div><h3><span>ONS-69</span>workbench-platform-faults</h3><div class="last">agentic-orchestration</div>
+  <dl class="m"><div><dt>Running</dt><dd><b>1 min</b></dd></div><div><dt>Tokens</dt><dd><b>—</b></dd></div><div><dt>Finishes in</dt><dd><b>—</b><i>once the session starts</i></dd></div></dl>
+  <div class="last">last error: response_timeout · 40 s ago</div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div></div>
+</div>
+<div class="q"><h4>Next on p1</h4>
+ <div class="row"><span class="mono">ONS-70</span><b>health-checks</b><span>Build</span><span class="ok">Ready · next free slot</span></div>
+ <div class="row"><span class="mono">ONS-76</span><b>deploy-drains-host</b><span>Fix CI on PR #62</span><span class="ok">Ready</span></div>
+ <div class="row"><span class="mono">ONS-72</span><b>unfinished-work-handoff</b><span>Build</span><span class="bl">Blocked · after ONS-68</span></div></div>
+<div class="wh"><h2>taichi</h2><span class="r">worker, nested KVM</span><span class="b"><b>2</b> of 2 slots busy</span><span class="mono">32 CPUs · 18 GiB free</span></div>
+<div class="slots" style="grid-template-columns:repeat(3,1fr)">
+ <div class="s"><div class="top"><span class="no">Slot 1</span><span class="chip">Live proof · working</span></div><h3><span>ONS-52</span>seed-security-updates</h3><div class="last">homelab · vm chain 9 of 13: k8s-up</div>
+  <dl class="m"><div><dt>Running</dt><dd><b>52 min</b></dd></div><div><dt>Tokens</dt><dd><b>640 k</b><i>$0.15</i></dd></div><div><dt>Finishes in</dt><dd><b>about 25 min</b><i>vm chain median 38 min</i></dd></div></dl>
+  <div class="act"><span class="p">Watch</span><span class="g">Steer</span></div></div>
+ <div class="s st"><div class="top"><span class="no">Slot 2</span><span class="chip red">Build · stalled</span></div><h3><span>ONS-37</span>canary-rebuild</h3><div class="last">homelab · turn 3</div>
+  <dl class="m"><div><dt>Running</dt><dd><b>41 min</b></dd></div><div><dt>Tokens</dt><dd><b>2.3 M</b><i>$0.55</i></dd></div><div><dt>Finishes in</dt><dd><b class="red">overdue</b><i>75% finish within 24 min</i></dd></div></dl>
+  <div class="act"><span class="p">Watch</span><span class="g">Steer</span></div></div>
+</div>
+</main></body></html>

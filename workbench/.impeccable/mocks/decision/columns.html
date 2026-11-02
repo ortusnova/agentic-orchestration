@@ -1,0 +1,66 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Worker columns</title>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&family=JetBrains+Mono:wght@500&family=Bodoni+Moda:ital,wght@1,400&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:#fbfbf8;color:#1d1d1f;font:400 13px/1.45 "Instrument Sans",Helvetica,Arial,sans-serif}
+.bar{height:56px;background:#1d1d1f;color:#fff;display:flex;align-items:center;gap:16px;padding:0 20px}
+.proj{background:#2a2a2d;border-radius:6px;height:32px;padding:0 12px;display:flex;align-items:center;font-weight:600}
+.mono{font:500 11px "JetBrains Mono",monospace;color:#5d626b}
+main{display:grid;grid-template-columns:1fr 1fr;gap:0;height:844px}
+.col{padding:18px 22px;border-right:1px solid #dcdcd7}.col:last-child{border-right:0}
+.wh{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid #1d1d1f;padding-bottom:8px;margin-bottom:6px}
+.wh h2{font:700 26px/1.1 "Instrument Sans";letter-spacing:-.02em}.wh .b{margin-left:auto;font-size:15px}.wh .b b{font-size:22px}
+.host{color:#5d626b;margin-bottom:12px}
+.s{display:grid;grid-template-columns:54px 1fr auto;gap:4px 14px;padding:12px 0;border-bottom:1px solid #e6e6e0;align-items:start}
+.no{font:700 11px "Instrument Sans";letter-spacing:.06em;text-transform:uppercase;color:#5d626b;padding-top:3px}
+.t{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.t b{font:600 15px "Instrument Sans"}.t .mono{margin-right:2px}
+.chip{font:700 10px "Instrument Sans";letter-spacing:.05em;text-transform:uppercase;background:#1d1d1f;color:#fff;border-radius:999px;padding:2px 8px}
+.chip.red{background:#fff;color:#c4382f;border:1px solid #c4382f}.chip.w{background:#fff;color:#1d1d1f;border:1px solid #dcdcd7}
+.sub{color:#5d626b;grid-column:2}
+.track{grid-column:2;position:relative;height:8px;background:#f1f2f3;border-radius:999px;margin-top:6px}
+.fill{position:absolute;left:0;top:0;bottom:0;border-radius:999px;background:#c98a1a}
+.fill.over{background:#c4382f}
+.nums{grid-column:2;display:flex;gap:18px;color:#5d626b;font-variant-numeric:tabular-nums}.nums b{color:#1d1d1f}
+.nums .r{color:#c4382f}
+.act{grid-column:3;grid-row:1/span 4;display:flex;flex-direction:column;gap:6px}
+.p{background:#1d1d1f;color:#fff;border-radius:8px;padding:6px 14px;font-weight:600;text-align:center}.g{border:1px solid #dcdcd7;border-radius:8px;padding:6px 12px;font-weight:600;text-align:center}
+h4{font:700 11px "Instrument Sans";letter-spacing:.06em;text-transform:uppercase;color:#5d626b;margin:18px 0 4px}
+.row{display:grid;grid-template-columns:62px 1fr auto;gap:10px;padding:6px 0;border-top:1px solid #e6e6e0}
+.ok{color:#2f6f4e;font-weight:600}.bl{color:#5d626b}
+.ex{position:absolute;top:66px;left:50%;transform:translateX(-50%);background:#fbf4e5;color:#8a5a06;border-radius:6px;padding:3px 10px}
+</style></head><body>
+<div class="bar"><div class="proj">ortus-nova-specs</div><span style="color:#b8b8bd">Home · Graph · Plan</span></div>
+<div class="ex">Example data</div>
+<main>
+<section class="col">
+ <div class="wh"><h2>p1</h2><span class="b"><b>3</b> of 3 busy</span></div>
+ <div class="host">control plane and worker <span class="mono">· 22 CPUs · 21 GiB free</span></div>
+ <div class="s"><span class="no">Slot 1</span><div class="t"><span class="mono">ONS-68</span><b>failure-routing</b><span class="chip">Build · working</span></div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div>
+  <div class="sub">sortie · turn 4 · edited route.go 20 s ago</div><div class="track"><div class="fill" style="width:82%"></div></div>
+  <div class="nums"><span><b>23 min</b> running</span><span><b>about 5 min</b> left</span><span><b>1.8 M</b> tokens · $0.42</span></div></div>
+ <div class="s"><span class="no">Slot 2</span><div class="t"><span class="mono">ONS-74</span><b>pr-repair-reactions</b><span class="chip">Review · working</span></div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div>
+  <div class="sub">agentic-orchestration · turn 2 · ran make test 1 min ago</div><div class="track"><div class="fill" style="width:38%"></div></div>
+  <div class="nums"><span><b>6 min</b> running</span><span><b>about 10 min</b> left</span><span><b>410 k</b> tokens · $0.09</span></div></div>
+ <div class="s"><span class="no">Slot 3</span><div class="t"><span class="mono">ONS-69</span><b>workbench-platform-faults</b><span class="chip w">Build · starting, attempt 2</span></div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div>
+  <div class="sub">last error: session start response_timeout · 40 s ago</div><div class="track"></div>
+  <div class="nums"><span><b>1 min</b></span><span>ETA once the session starts</span></div></div>
+ <h4>Next on p1</h4>
+ <div class="row"><span class="mono">ONS-70</span><b>health-checks</b><span class="ok">Ready · next slot</span></div>
+ <div class="row"><span class="mono">ONS-76</span><b>deploy-drains-host · fix CI</b><span class="ok">Ready</span></div>
+ <div class="row"><span class="mono">ONS-72</span><b>unfinished-work-handoff</b><span class="bl">after ONS-68</span></div>
+</section>
+<section class="col">
+ <div class="wh"><h2>taichi</h2><span class="b"><b>2</b> of 2 busy</span></div>
+ <div class="host">worker, nested KVM <span class="mono">· 32 CPUs · 18 GiB free</span></div>
+ <div class="s"><span class="no">Slot 1</span><div class="t"><span class="mono">ONS-52</span><b>seed-security-updates</b><span class="chip">Live proof · working</span></div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div>
+  <div class="sub">homelab · vm chain 9 of 13: k8s-up · waiting for Longhorn</div><div class="track"><div class="fill" style="width:68%"></div></div>
+  <div class="nums"><span><b>52 min</b> running</span><span><b>about 25 min</b> left</span><span><b>640 k</b> tokens · $0.15</span></div></div>
+ <div class="s"><span class="no">Slot 2</span><div class="t"><span class="mono">ONS-37</span><b>canary-rebuild</b><span class="chip red">Build · stalled</span></div><div class="act"><span class="p">Watch</span><span class="g">Steer</span></div>
+  <div class="sub">homelab · turn 3 · no agent event for 14 min</div><div class="track"><div class="fill over" style="width:100%"></div></div>
+  <div class="nums"><span><b>41 min</b> running</span><span class="r"><b class="r">overdue</b> · 75% finish within 24 min</span><span><b>2.3 M</b> tokens · $0.55</span></div></div>
+ <h4>Next on taichi</h4>
+ <div class="row"><span class="mono">ONS-61</span><b>simplify-proof-fixture · live seed-proof</b><span class="ok">Ready · next slot</span></div>
+ <div class="row"><span class="mono">ONS-48</span><b>vm-upstream-mirrors · live k8s-up</b><span class="ok">Ready</span></div>
+ <div class="row"><span class="mono">ONS-53</span><b>seed-boot-fallback</b><span class="bl">after ONS-52</span></div>
+</section>
+</main></body></html>
