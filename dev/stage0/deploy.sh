@@ -11,6 +11,11 @@
 #     rebuilds and restarts Sortie, so it too waits until no agent runs. A
 #     Sortie checkout that is not behind plan-bench (a branch being tried)
 #     stays where it is.
+#   - While either waits, Sortie's dispatch is paused (drain.sh): the runs
+#     going finish and no new one starts, so the change waits for those runs
+#     only, never behind the queue of stories. Once it is applied, or put
+#     back, dispatch resumes. A Sortie without the pause is waited for as
+#     before, until it happens to run nothing.
 #   - A build that fails puts the previous commit back, and that commit is
 #     not tried again until another one merges (journalctl --user -u
 #     ortus-stage0-deploy says why).
@@ -30,6 +35,9 @@ fi
 failed=$STAGE0_HOME/deploy.failed
 sortie_failed=$STAGE0_HOME/deploy-sortie.failed
 say() { echo "deploy: $*" >&2; }
+# shellcheck source=drain.sh
+. "$(dirname "$0")/drain.sh"
+resume() { dispatch_resume || say "Sortie did not resume dispatch; trying again in a minute"; }
 
 exec 9> "$STAGE0_HOME/stage0.lock"
 flock -n 9 || { say "a stage0.sh runs; trying again in a minute"; exit 0; }
@@ -51,7 +59,11 @@ if [[ -n $src && -d $src ]]; then
     sortie_new=$sortie_old
   fi
 fi
-[[ $old == "$new" && $sortie_old == "$sortie_new" ]] && exit 0
+if [[ $old == "$new" && $sortie_old == "$sortie_new" ]]; then
+  # Nothing waits any more (a change that failed, say): dispatch again.
+  resume
+  exit 0
+fi
 
 changed=$(git -C "$LIVE" diff --name-only "$old" "$new")
 kit=$(grep -E '^(dev|acp-broker|smol-builder)/' <<< "$changed" || true)
@@ -60,13 +72,19 @@ update_sortie=()
 [[ $sortie_old != "$sortie_new" ]] && update_sortie=(--update-sortie)
 
 if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
-  busy=$(curl -sf "http://127.0.0.1:$STAGE0_SORTIE_PORT/api/v1/state" \
-    | python3 -c 'import json, sys; print(len(json.load(sys.stdin).get("running", [])))') || busy=0
+  why=()
+  [[ -n $kit ]] && why+=("kit ${new:0:8}")
+  [[ ${#update_sortie[@]} -gt 0 ]] && why+=("Sortie ${sortie_new:0:8}")
+  draining="dispatch paused"
+  dispatch_pause "deploy of ${why[*]}" || draining="Sortie did not pause dispatch"
+  busy=$(sortie_running) || busy=0
   if (( busy > 0 )); then
-    [[ -n $kit ]] && say "${new:0:8} changes the kit; waiting until no agent runs ($busy now)"
-    [[ ${#update_sortie[@]} -gt 0 ]] && say "Sortie ${sortie_new:0:8} merged; waiting until no agent runs ($busy now)"
+    [[ -n $kit ]] && say "${new:0:8} changes the kit; waiting until no agent runs ($busy now, $draining)"
+    [[ ${#update_sortie[@]} -gt 0 ]] && say "Sortie ${sortie_new:0:8} merged; waiting until no agent runs ($busy now, $draining)"
     exit 0
   fi
+else
+  resume
 fi
 
 git -C "$LIVE" checkout -q --detach "$new"
@@ -79,6 +97,7 @@ back() {
     echo "$sortie_new" > "$sortie_failed"
     git -C "$src" checkout -q --detach "$sortie_old"
   fi
+  resume
   exit 1
 }
 
@@ -86,6 +105,7 @@ if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
   [[ -n $kit ]] && say "${new:0:8} changes the kit: running stage0.sh"
   [[ ${#update_sortie[@]} -gt 0 ]] && say "Sortie ${sortie_new:0:8} merged: running stage0.sh --update-sortie"
   "$LIVE/dev/stage0/stage0.sh" "${update_sortie[@]}" || back "stage0.sh"
+  resume
 elif [[ -n $workbench && ${STAGE0_PROFILE:-control} == control ]]; then
   say "${new:0:8} changes the workbench: rebuilding it"
   (cd "$LIVE/workbench" && uv sync -q) || back "uv sync"

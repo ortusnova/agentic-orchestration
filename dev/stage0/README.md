@@ -13,7 +13,8 @@ dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
-dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
+dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, and the drain
+dev/stage0/dev-host-apply.sh [CMD...] # drain this host, apply a setup change (homelab: make dev-host), run stage0.sh, dispatch again
 dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/test-notify-channel.sh     # check the operator's channel and the tunnel to taichi's Sortie, with stubs
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
@@ -30,7 +31,7 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Workbench | unit `ortus-stage0-workbench`, `http://127.0.0.1:8793`, local mode; the password is in `workbench-password` |
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`; `podman-restart.service` brings it back after a reboot |
 | Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`) |
-| Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
+| Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put). Such a change drains the host first (see [Drain before a change](#drain-before-a-change)); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
 | Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker-tunnel@<worker>`) |
@@ -127,6 +128,43 @@ the pull request merges, Sortie moves the story to `Done`.
   the workflow does not list. A `stage0.env` written before these settings
   existed keeps working: `stage0.sh` fills in each missing one with its
   default. To change one, set it in `stage0.env` and run `stage0.sh` again.
+
+## Drain before a change
+
+A change that must not land under a running agent drains the host first
+(spec store `agent-platform/run-supervision`, "A pending deploy drains its
+host"): Sortie stops dispatching new runs, the runs already going finish,
+the change applies, and Sortie dispatches again. The change waits for the
+runs that were going when it arrived, never behind the queue of stories.
+On a busy taichi running 2 stories with 9 waiting, a kit merge starts no
+third run, applies when the 2 finish, and then the 9 are dispatched.
+
+- **Deploys.** `deploy.sh` pauses dispatch each minute a kit or Sortie
+  change waits, and resumes it once `stage0.sh` has run, or once the change
+  has failed and been put back.
+- **Host setup changes**, such as a smolvm bump. Run
+  `dev/stage0/dev-host-apply.sh` on the host instead of applying the change
+  by hand. It pauses dispatch, waits for the running runs (every
+  `STAGE0_DRAIN_POLL` seconds, default 15), runs the apply, runs
+  `stage0.sh` so that the pack and Sortie follow the new smolvm, and
+  resumes dispatch, also when a step fails. On taichi the apply is
+  homelab's `make dev-host` in `STAGE0_HOMELAB_SRC`; elsewhere, name it:
+  `dev/stage0/dev-host-apply.sh <command>`. It holds stage0.sh's lock
+  throughout, so no deploy runs in between.
+
+`drain.sh` asks Sortie for this with its control token:
+
+| Call | What Sortie does |
+| --- | --- |
+| `POST /api/v1/dispatch/pause` | starts no new run, and no retry; the running ones go on |
+| `POST /api/v1/dispatch/resume` | dispatches again |
+| `GET /api/v1/state` | `running` lists the runs still going |
+
+`$STAGE0_HOME/dispatch.paused` records that the kit paused dispatch, and
+why, until the resume. A Sortie without the pause (it answers with an
+error) is waited for as before: the change applies only when that Sortie
+happens to have no run going, and `journalctl --user -u ortus-stage0-deploy`
+says `Sortie did not pause dispatch`.
 
 ## Credentials
 
