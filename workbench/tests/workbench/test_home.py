@@ -413,93 +413,6 @@ def test_the_order_between_changes_ranks_the_change_that_comes_first(store):
     assert later["slack"] == 1 and o1["slack"] == 1 and later["rank"] > 1 and o1["rank"] > 1
 
 
-# What each released story is doing ---------------------------------------------------
-
-
-def released_plan(store, *keys):
-    store.plan([("ons", [])])
-    store.change("ons", breakdown(*(deliverable(k, kind="enabler") for k in keys)))
-
-
-def test_scenario_a_retry_keeps_its_place(store):
-    """ONS-10, ONS-11 and ONS-13 are released, and ONS-11's session start times out."""
-    released_plan(store, "s10", "s11", "s13")
-    fake = FakeSortie()
-    fake.plan_states = STATES
-    fake.issue("ons", kind="epic")
-    issues = {i: fake.issue(f"ons/s{i}", identifier=f"ONS-{i}") for i in (10, 11, 13)}
-    app = app_for(store, fake, sync_enabled=False)
-    with TestClient(app) as client:
-        sign_in(client)
-        settle(client)
-        rows = client.get(f"{P}/home").json()["released"]
-        assert [r["identifier"] for r in rows] == ["ONS-10", "ONS-11", "ONS-13"]
-        assert [r["state"] for r in rows] == ["waiting", "waiting", "waiting"]
-
-        issues[10].update(state="In Progress", runtime={"status": "running", "turn_count": 1})
-        fake.run("ONS-10", "s1", started_at="2026-11-02T10:00:00Z")
-        issues[11].update(state="In Progress", runtime={"status": "retrying", "attempt": 2})
-        fake.run("ONS-11", "s2")
-        fake.end("ONS-11", retry_attempt=2, error="response_timeout")
-        settle(client)
-        home = client.get(f"{P}/home").json()
-        rows = home["released"]
-        assert [r["identifier"] for r in rows] == ["ONS-10", "ONS-11", "ONS-13"]
-        assert [r["state"] for r in rows] == ["working", "starting", "waiting"]
-        assert rows[0]["turn"] == 1 and rows[0]["started_at"] == 1793613600.0
-        assert (rows[1]["attempt"], rows[1]["error"]) == (2, "response_timeout")
-        # The slots in use are a figure of their own, not rows of the list.
-        assert home["health"]["busy"] == 1 and home["health"]["slots"] == 3
-
-
-def test_scenario_a_story_in_review(store):
-    """ONS-23 opened ortusnova/homelab#97 and Sortie moved it to In Review."""
-    released_plan(store, "s22", "s23")
-    fake = FakeSortie()
-    fake.plan_states = STATES
-    fake.issue("ons", kind="epic")
-    fake.issue("ons/s22", identifier="ONS-22")
-    s23 = fake.issue("ons/s23", identifier="ONS-23", state="In Progress", runtime={"status": "running", "turn_count": 5})
-    fake.run("ONS-23", "s1", turn_count=5)
-    app = app_for(store, fake, sync_enabled=False)
-    with TestClient(app) as client:
-        sign_in(client)
-        settle(client)
-        before = client.get(f"{P}/home").json()
-        assert [r["state"] for r in before["released"]] == ["waiting", "working"]
-
-        fake.end("ONS-23")
-        s23.update(state="In Review", runtime=None, pr="ortusnova/homelab#97")
-        settle(client)
-        home = client.get(f"{P}/home").json()
-        assert home["version"] > before["version"]
-        row = next(r for r in home["released"] if r["identifier"] == "ONS-23")
-        assert row["state"] == "in_review"
-        assert row["pr"] == {"ref": "ortusnova/homelab#97", "url": "https://github.com/ortusnova/homelab/pull/97"}
-
-        # Done, it leaves the list; the others keep their place.
-        s23.update(state="Done", terminal=True)
-        settle(client)
-        assert [r["identifier"] for r in client.get(f"{P}/home").json()["released"]] == ["ONS-22"]
-
-
-def test_a_story_released_later_is_listed_after_the_others(store):
-    released_plan(store, "s5", "s10")
-    fake = FakeSortie()
-    fake.plan_states = STATES
-    fake.issue("ons", kind="epic")
-    early = fake.issue("ons/s5", identifier="ONS-5", state="Backlog")
-    fake.issue("ons/s10", identifier="ONS-10")
-    app = app_for(store, fake, sync_enabled=False)
-    with TestClient(app) as client:
-        sign_in(client)
-        settle(client)
-        assert [r["identifier"] for r in client.get(f"{P}/home").json()["released"]] == ["ONS-10"]
-        early.update(state="Todo")
-        settle(client)
-        assert [r["identifier"] for r in client.get(f"{P}/home").json()["released"]] == ["ONS-10", "ONS-5"]
-
-
 # Waiting is reported as stuck (agent-platform/run-supervision) ----------------------
 
 # The health the scenario below serves, which the frontend's test renders:
@@ -509,20 +422,19 @@ PULLS = ["ortusnova/homelab#91", "ortusnova/homelab#92", "ortusnova/homelab#93",
          "ortusnova/homelab#94", "ortusnova/sortie#30"]
 
 
-def row(key, state, **extra):
-    return {"key": key, "identifier": extra.pop("identifier", None), "state": state, "pr": None, "question": None,
-            "reason": None, **extra}
+def released_plan(store, *keys):
+    store.plan([("ons", [])])
+    store.change("ons", breakdown(*(deliverable(k, kind="enabler") for k in keys)))
 
 
-def pull(ref):
-    return {"ref": ref, "url": f"https://example.test/{ref}"}
+def story(key, identifier, tracker_state="In Review", pr=None, runtime=None):
+    return {"plan_key": key, "kind": "story", "runtime": runtime,
+            "tracker": {"identifier": identifier, "state": tracker_state, "terminal": False, "pr": pr}}
 
 
 def test_free_slots_while_stories_wait_is_stuck_not_idle():
-    released = [row("ons/a", "in_review", pr=pull("o/r#1")), row("ons/b", "in_review", pr=pull("o/r#1")),
-                row("ons/c", "in_review", pr=pull("o/r#2"))]
-    nodes = [{"plan_key": r["key"], "tracker": {"state": "In Review"}} for r in released]
-    waits = waits_of(released, nodes, state())
+    nodes = [story("ons/a", "T-1", pr="o/r#1"), story("ons/b", "T-2", pr="o/r#1"), story("ons/c", "T-3", pr="o/r#2")]
+    waits = waits_of(nodes, STATES, set(), state())
     h = health(waits=waits)
     assert h["verdict"] == "stuck"
     assert h["reasons"] == [{"code": "waiting", "text": "3 stories wait on 2 pull requests in review", "key": None}]
@@ -530,22 +442,27 @@ def test_free_slots_while_stories_wait_is_stuck_not_idle():
                                                "o/r#2 in review, for ons/c: a reviewer reviews it"]
     # A story ready for a slot, or no free slot, is not stuck on the waits.
     assert health(waits=waits, runway=1)["verdict"] == "will_idle"
-    assert health(waits=waits, state=state(["T-1", "T-2", "T-3"]))["verdict"] != "stuck"
+    assert health(waits=waits, state=state(["T-4", "T-5", "T-6"]))["verdict"] != "stuck"
+
+
+def test_stories_that_wait_for_a_slot_run_or_are_done_wait_on_nothing():
+    nodes = [story("ons/todo", "T-1", tracker_state="Todo"), story("ons/backlog", "T-2", tracker_state="Backlog"),
+             story("ons/run", "T-3", tracker_state="In Progress", runtime={"status": "running"}),
+             story("ons/retry", "T-4", tracker_state="In Progress"), story("ons/done", "T-5", pr="o/r#1")]
+    s = state(["T-3"], retrying=[{"issue_identifier": "T-4", "attempt": 2}])
+    assert waits_of(nodes, STATES, {"ons/done"}, s) == []
 
 
 def test_each_kind_of_wait_names_who_acts_on_it():
     s = state(["T-5"], budget_exhausted=[{"issue_identifier": "T-6", "reason": "token_budget"}],
               parked=[{"issue_identifier": "T-4", "reason": "agent_blocked", "statement": "Which repo?"}])
     s["running"][0].update(held=True, hold_reason="permission_request", holder="human")
-    released = [row("ons/r", "in_review", pr=pull("o/r#1")), row("ons/m", "in_review", pr=pull("o/r#2")),
-                row("ons/d", "in_review", pr=pull("o/r#3")),
-                row("ons/q", "needs_you", identifier="T-4", question="Which repo?"),
-                row("ons/h", "held", identifier="T-5", reason="permission request"),
-                row("ons/b", "held", identifier="T-6", reason="token budget"),
-                row("ons/w", "working", identifier="T-7")]
-    states = {"ons/r": "In Review", "ons/m": "Merging", "ons/d": "Awaiting deploy"}
-    nodes = [{"plan_key": r["key"], "tracker": {"state": states.get(r["key"], "In Progress")}} for r in released]
-    waits = waits_of(released, nodes, s)
+    nodes = [story("ons/r", "T-1", pr="o/r#1"), story("ons/m", "T-2", tracker_state="Merging", pr="o/r#2"),
+             story("ons/d", "T-3", tracker_state="Awaiting deploy", pr="o/r#3"),
+             story("ons/q", "T-4", tracker_state="In Progress"), story("ons/h", "T-5", tracker_state="In Progress"),
+             story("ons/b", "T-6", tracker_state="In Progress"),
+             story("ons/w", "T-7", tracker_state="In Progress", runtime={"status": "running"})]
+    waits = waits_of(nodes, STATES, set(), s)
     assert [(w["kind"], w["who"]) for w in waits] == [
         ("review", "a reviewer"), ("merge", "a maintainer"), ("deploy", "the operator"),
         ("question", "a person"), ("budget", "the operator"), ("hold", "a person")]

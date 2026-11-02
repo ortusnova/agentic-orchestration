@@ -8,6 +8,7 @@ status, Sortie's state, and the last sync. Nothing here writes anywhere.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 from typing import Any, Iterable
@@ -16,8 +17,8 @@ import networkx as nx
 
 from planlib import milestones as ms
 
+from .delivery import pull_url
 from .questions import statement_of
-from .released import ReleaseOrder, released_keys, released_list
 
 # Slack, in stories, up to which an item is "soon" rather than "later".
 SOON = 4
@@ -99,38 +100,77 @@ WAIT_KINDS = {
 }
 
 
-def waits_of(released: list[dict[str, Any]], nodes: list[dict[str, Any]],
-             state: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """What the released stories wait on, each thing once with the stories
-    that wait on it and who acts on it. Stories that share a pull request
-    wait on it together."""
-    tracker_state = {n["plan_key"]: ((n.get("tracker") or {}).get("state") or "").lower() for n in nodes}
-    held_running = {r["issue_identifier"]: r for r in (state or {}).get("running") or []
-                    if isinstance(r, dict) and r.get("held") and r.get("issue_identifier")}
+def _by_ident(entries: Any) -> dict[str, dict[str, Any]]:
+    return {e["issue_identifier"]: e for e in entries or [] if isinstance(e, dict) and e.get("issue_identifier")}
+
+
+def _number(identifier: str) -> int:
+    m = re.search(r"(\d+)$", identifier)
+    return int(m.group(1)) if m else 0
+
+
+def _waits_on(node: dict[str, Any], state: dict[str, Any] | None, statements: dict[str, str],
+              plan_states: dict[str, str] | None) -> tuple[str, dict[str, Any] | None, str | None] | None:
+    """What one released story waits on while no agent works on it, as
+    (kind, pull request, reason); None when it waits for a slot or an agent
+    works on it."""
+    t = node.get("tracker") or {}
+    ident = t.get("identifier") or ""
+    rt = node.get("runtime") or {}
+    running = _by_ident((state or {}).get("running")).get(ident)
+    budget = _by_ident((state or {}).get("budget_exhausted")).get(ident)
+    parked = _by_ident((state or {}).get("parked")).get(ident)
+    if ident in statements or parked is not None:
+        statement = statements.get(ident) or statement_of(parked)
+        return "question", None, statement.strip() or None
+    if running and running.get("held"):
+        return "hold", None, _words(running.get("hold_reason") or "") or "held"
+    if budget is not None or rt.get("status") == "budget_held":
+        return "budget", None, _words((budget or {}).get("reason") or "") or "budget exhausted"
+    if running is not None or _by_ident((state or {}).get("retrying")).get(ident) \
+            or rt.get("status") in ("running", "retrying"):
+        return None
+    ref = t.get("pr") or None
+    pr = {"ref": ref, "url": pull_url(ref) or None} if ref else None
+    name = (t.get("state") or "").lower()
+    release = ((plan_states or {}).get("release") or "").lower()
+    if "review" in name or (pr and name != release):
+        return ("deploy" if "deploy" in name else "merge" if "merg" in name else "review"), pr, None
+    return None
+
+
+def waits_of(nodes: list[dict[str, Any]], plan_states: dict[str, str] | None, settled: set[str],
+             state: dict[str, Any] | None, statements: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    """What the stories released to Sortie and not yet ``settled`` wait on,
+    each thing once with the stories that wait on it and who acts on it.
+    Stories that share a pull request wait on it together. A story is
+    released when its issue left the backlog or it runs; ``statements`` holds
+    the open questions by tracker identifier."""
+    statements = statements or {}
+    backlog = ((plan_states or {}).get("backlog") or "").lower()
+    held_running = {i: r for i, r in _by_ident((state or {}).get("running")).items() if r.get("held")}
+    stories = [n for n in nodes if n.get("kind") == "story" and n["plan_key"] not in settled and n.get("tracker")
+               and not n["tracker"].get("terminal")
+               and (n.get("runtime") or not backlog or (n["tracker"].get("state") or "").lower() != backlog)]
+    stories.sort(key=lambda n: (_number(n["tracker"].get("identifier") or ""), n["tracker"].get("identifier") or "",
+                                n["plan_key"]))
     waits: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in released:
-        story = {"key": row["key"], "identifier": row.get("identifier")}
-        pr, held = row.get("pr"), None
-        if row["state"] == "in_review":
-            name = tracker_state.get(row["key"], "")
-            kind = "deploy" if "deploy" in name else "merge" if "merg" in name else "review"
-            group = pr["ref"] if pr else row["key"]
-            reason = None
-        elif row["state"] == "needs_you":
-            kind, group, reason = "question", row["key"], row.get("question")
-        elif row["state"] == "held":
-            held = held_running.get(row.get("identifier") or "")
-            kind, group, reason = ("hold" if held else "budget"), row["key"], row.get("reason")
-        else:
+    for n in stories:
+        found = _waits_on(n, state, statements, plan_states)
+        if found is None:
             continue
+        kind, pr, reason = found
+        ident = n["tracker"].get("identifier")
+        group = pr["ref"] if pr else n["plan_key"]
         w = waits.get((kind, group))
         if w is None:
             who = WAIT_KINDS[kind][2]
+            held = held_running.get(ident or "")
             if kind == "hold" and held and held.get("holder") and held["holder"] != "human":
                 who = held["holder"]
             w = waits[(kind, group)] = {"kind": kind, "pr": pr, "reason": reason, "stories": [], "who": who,
                                         "does": WAIT_KINDS[kind][3]}
-        w["stories"].append(story)
+        w["stories"].append({"key": n["plan_key"], "identifier": ident})
     out = sorted(waits.values(), key=lambda w: list(WAIT_KINDS).index(w["kind"]))
     for w in out:
         w["text"] = _wait_text(w)
@@ -532,13 +572,11 @@ def timeline(milestones: list[dict[str, Any]], goal: str | None, items: list[dic
 def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fields: dict[str, dict[str, Any]],
                planning: dict[str, Any], plan_states: dict[str, str] | None, tracker_known: bool, valid: bool,
                errors: int, health_inputs: dict[str, Any], history: History | None = None,
-               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None,
-               asked: dict[str, dict[str, Any]] | None = None, release_order: ReleaseOrder | None = None) -> dict[str, Any]:
+               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The home document. ``graph`` is the last valid plan graph; ``nodes`` the
     merged graph's nodes, with tracker state and plan fields; ``questions``
     the open questions of its stories, ranked, which come before everything
-    else that needs a person; ``asked`` the same questions by tracker
-    identifier; ``release_order`` the order the stories were released in."""
+    else that needs a person."""
     estimates = estimates or {}
     questions = questions or []
     done, dropped = tracker_states(nodes, plan_states)
@@ -551,12 +589,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
                  and n["plan_key"] not in running_keys and n["plan_key"] not in done)
     remaining = sum(1 for n in stories if n["plan_key"] not in done and n["plan_key"] not in dropped)
 
-    finished = done | dropped
-    order = (release_order.update(released_keys(nodes, plan_states, fields, finished))
-             if release_order is not None else None)
-    released = released_list(nodes, plan_states, fields, finished, health_inputs.get("state"), asked, order)
-
-    waits = waits_of(released, nodes, health_inputs.get("state"))
+    waits = waits_of(nodes, plan_states, done | dropped, health_inputs.get("state"), health_inputs.get("statements"))
     health = execution_health(runway=runway, remaining=remaining, key_of=key_of, waits=waits, **health_inputs)
     if history is not None:
         history.add(health["busy"], health["runway"])
@@ -569,7 +602,6 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "story_progress": "live" if health_inputs["reachable"] else ("last_known" if tracker_known else "unknown"),
         "health": health,
         "questions": questions,
-        "released": released,
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],
