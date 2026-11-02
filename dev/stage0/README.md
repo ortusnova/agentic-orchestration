@@ -15,7 +15,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, and the drain
 dev/stage0/dev-host-apply.sh [CMD...] # drain this host, apply a setup change (homelab: make dev-host), run stage0.sh, dispatch again
-dev/stage0/test-review-gate.sh        # check the review gate against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-review-gate.sh        # check the review gate and the fix runs against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -65,6 +65,26 @@ the pull request merges, Sortie moves the story to `Done`.
   Sortie a person still merges those. `test-review-gate.sh` checks all of
   this against Sortie's own loader, exit and merge code: it needs the
   `sortie/` submodule, or `SORTIE_SRC` naming a Sortie checkout.
+
+- **CI failures and merge conflicts.** Both workflows turn on Sortie's
+  `ci_failure` and `merge_conflicts` reactions (spec store
+  `agent-platform/run-supervision`). A pull request whose CI fails, or that
+  conflicts with its base after another merge, gets a fix run on the
+  `review` rule with the workflows' fix prompt: it merges `origin/<base>`
+  in, never rebases or rewrites a pushed commit, fixes the cause on the
+  branch, including a CI or toolchain setting the change exposed (an old Go
+  is raised to the latest stable release), and checks the criteria again.
+  Sortie pushes its commits, and `auto_merge` merges once CI passes. A pull
+  request that still fails after `max_retries` fix runs (2 for CI, 1 for a
+  conflict) is a stopped failure: Sortie escalates it, comments on the
+  story, and runs no further fix until a new commit lands or a person
+  answers it. Neither watch has a window. Sortie's CI provider reads the
+  checks of one repository, `github.project`: on p1 that is
+  `agentic-orchestration`, so a `sortie` pull request gets no CI fix run
+  (its CI reads fail and back off, and its failing CI only holds its
+  merge) until Sortie reads each pull request's own repository; the homelab
+  profile reads `homelab`.
+  `test-review-gate.sh` checks the fix runs too.
 
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
