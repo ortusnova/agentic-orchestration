@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/cp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
@@ -44,9 +43,6 @@ type job struct {
 	key   string
 	flows *flows.Job
 	log   *slog.Logger
-	// inputEnv holds the image's environment values (config
-	// smolvm.images env_files), KEY=VALUE, set before the machine starts.
-	inputEnv []string
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -224,27 +220,11 @@ func (j *job) execute(dir string) (string, string) {
 		return failed("%v", err)
 	}
 	r := j.offer.Job.Requires
-	img := j.d.cfg.Smolvm.Images[j.offer.Run.Image]
-	user := j.d.cfg.Smolvm.User
-	if img.User != "" {
-		user = img.User
-	}
-	mounts, err := j.mounts(img)
-	if err != nil {
-		return failed("host folders: %v", err)
-	}
-	if j.inputEnv, err = imageEnv(img); err != nil {
-		return failed("%v", err)
-	}
 	spec := machine.Spec{
-		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
+		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: j.d.cfg.Smolvm.User,
 		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
 		Labels: map[string]string{"worker-daemon.job": j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt())},
 		Share:  share, Forwards: forwards,
-		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
-	}
-	if img.LibDir != "" {
-		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
 	}
 	m, err := j.d.backend.Create(ctx, spec)
 	if err != nil {
@@ -264,15 +244,6 @@ func (j *job) execute(dir string) (string, string) {
 		return failed("workspace seed: %v", err)
 	}
 	_ = os.Remove(seedFile)
-
-	for i, script := range img.Setup {
-		if err := j.setup(ctx, m, script); err != nil {
-			if ctx.Err() != nil {
-				return failed("%v", context.Cause(ctx))
-			}
-			return failed("setup %d: %v", i+1, err)
-		}
-	}
 
 	code, runErr := j.runAgent(ctx, m)
 	if ctx.Err() != nil {
@@ -419,70 +390,7 @@ func (j *job) agentEnv(m machine.Machine) []string {
 	}
 	env = append(env, "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
 		MCPURLEnv+"=http://"+m.GuestAddr(protocol.FlowMCP)+"/")
-	return append(env, j.inputEnv...)
-}
-
-// CapabilityNested is the capability a job requires to get nested
-// virtualization in its machine.
-const CapabilityNested = "nested"
-
-// mounts are the image's host folders for this job. A per-job folder is
-// Host/<job>, created now and kept after the job, so what the job left
-// there outlives its machine.
-func (j *job) mounts(img config.Image) ([]machine.Mount, error) {
-	var out []machine.Mount
-	for _, mt := range img.Mounts {
-		host := mt.Host
-		if mt.PerJob {
-			id := j.id()
-			if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\:`) {
-				return nil, fmt.Errorf("job %q cannot name a folder", id)
-			}
-			host = filepath.Join(mt.Host, id)
-			if err := os.MkdirAll(host, 0o755); err != nil { // #nosec G301 -- the guest user writes it as this user; it holds no secret
-				return nil, err
-			}
-		}
-		if _, err := os.Stat(host); err != nil {
-			return nil, err
-		}
-		out = append(out, machine.Mount{Host: host, Guest: mt.Guest, ReadOnly: mt.ReadOnly})
-	}
-	return out, nil
-}
-
-// imageEnv returns the image's plain values and reads the values of
-// its files, each sorted by name. A file's value is never logged; an
-// error names the variable and the file only.
-func imageEnv(img config.Image) ([]string, error) {
-	var env []string
-	for _, name := range slices.Sorted(maps.Keys(img.Env)) {
-		env = append(env, name+"="+img.Env[name])
-	}
-	for _, name := range slices.Sorted(maps.Keys(img.EnvFiles)) {
-		b, err := os.ReadFile(img.EnvFiles[name]) // #nosec G304 -- the operator names the file
-		if err != nil {
-			return nil, fmt.Errorf("%s: cannot read %s", name, img.EnvFiles[name])
-		}
-		env = append(env, name+"="+strings.TrimSuffix(string(b), "\n"))
-	}
-	return env, nil
-}
-
-// setup runs one of the image's setup scripts in the machine, in the
-// workspace, with the agent's environment.
-func (j *job) setup(ctx context.Context, m machine.Machine, script string) error {
-	var errOut bytes.Buffer
-	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script}, Env: j.agentEnv(m), Workdir: machine.GuestWorkspace,
-		Stdout: io.Discard, Stderr: &limited{w: &errOut, n: 64 << 10}})
-	switch {
-	case err != nil:
-		return err
-	case code != 0:
-		return fmt.Errorf("exited with status %d: %s", code, tailString(strings.TrimSpace(errOut.String()), 2048))
-	}
-	j.log.Info("setup ran")
-	return nil
+	return env
 }
 
 // runAgent runs the agent with its standard streams on the stdio flow

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"net"
-	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -69,18 +68,12 @@ func CreateArgs(spec Spec) ([]string, error) {
 	if spec.User != "" {
 		args = append(args, "--user", spec.User, "--init", "chown "+spec.User+" "+GuestWorkspace)
 	}
-	if spec.Nested {
-		args = append(args, "--nested")
-	}
 	var paths []string
 	if spec.Share != "" {
 		paths = append(paths, spec.Share)
 	}
 	for _, f := range spec.Forwards {
 		paths = append(paths, f.HostSocket)
-	}
-	for _, m := range spec.Mounts {
-		paths = append(paths, m.Host, m.Guest)
 	}
 	for _, p := range paths {
 		if p == "" || strings.Contains(p, ":") {
@@ -89,13 +82,6 @@ func CreateArgs(spec Spec) ([]string, error) {
 	}
 	if spec.Share != "" {
 		args = append(args, "-v", spec.Share+":"+GuestShare)
-	}
-	for _, m := range spec.Mounts {
-		v := m.Host + ":" + m.Guest
-		if m.ReadOnly {
-			v += ":ro"
-		}
-		args = append(args, "-v", v)
 	}
 	for _, f := range spec.Forwards {
 		args = append(args, "--mount-socket", f.HostSocket+":"+guestSocket(f.Name))
@@ -125,24 +111,14 @@ func ForwardArgv(f Forward) []string {
 	return []string{"socat", "TCP-LISTEN:" + strconv.Itoa(f.GuestPort) + ",bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:" + guestSocket(f.Name)}
 }
 
-func (s *Smolvm) run(ctx context.Context, env, args []string) error {
+func (s *Smolvm) run(ctx context.Context, args []string) error {
 	cmd := exec.CommandContext(ctx, s.Binary, args...) // #nosec G204 -- argv, no shell
-	cmd.Env = withEnv(env)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("smolvm %s %s: %w: %s", args[0], args[1], err, tail(stderr.String()))
 	}
 	return nil
-}
-
-// withEnv is the daemon's environment with env added, or nil, the
-// daemon's own, when env is empty.
-func withEnv(env []string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	return append(os.Environ(), env...)
 }
 
 func tail(s string) string {
@@ -160,24 +136,24 @@ func (s *Smolvm) Create(ctx context.Context, spec Spec) (Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.run(ctx, spec.HostEnv, args); err != nil {
+	if err := s.run(ctx, args); err != nil {
 		return nil, err
 	}
-	m := &smolvmMachine{s: s, name: spec.Name, env: spec.HostEnv, addrs: map[string]string{}}
+	m := &smolvmMachine{s: s, name: spec.Name, addrs: map[string]string{}}
 	fail := func(err error) (Machine, error) {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		_ = m.Delete(dctx)
 		return nil, err
 	}
-	if err := s.run(ctx, m.env, machineArgs("start", "--name", spec.Name)); err != nil {
+	if err := s.run(ctx, machineArgs("start", "--name", spec.Name)); err != nil {
 		return fail(err)
 	}
 	if err := s.waitReady(ctx, m); err != nil {
 		return fail(err)
 	}
 	for _, f := range spec.Forwards {
-		if err := s.run(ctx, m.env, append(append(machineArgs("exec", "--name", spec.Name, "-d"), "--"), ForwardArgv(f)...)); err != nil {
+		if err := s.run(ctx, append(append(machineArgs("exec", "--name", spec.Name, "-d"), "--"), ForwardArgv(f)...)); err != nil {
 			return fail(err)
 		}
 		m.addrs[f.Name] = net.JoinHostPort("127.0.0.1", strconv.Itoa(f.GuestPort))
@@ -215,7 +191,6 @@ func (s *Smolvm) waitReady(ctx context.Context, m *smolvmMachine) error {
 type smolvmMachine struct {
 	s     *Smolvm
 	name  string
-	env   []string
 	addrs map[string]string
 }
 
@@ -225,7 +200,6 @@ func (m *smolvmMachine) GuestAddr(forward string) string { return m.addrs[forwar
 
 func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
 	cmd := exec.CommandContext(ctx, m.s.Binary, ExecArgs(m.name, e)...) // #nosec G204 -- argv, no shell
-	cmd.Env = withEnv(m.env)
 	cmd.Stdout, cmd.Stderr = e.Stdout, e.Stderr
 	cmd.WaitDelay = 5 * time.Second
 	if err := StartStdin(cmd, e.Stdin); err != nil {
@@ -243,9 +217,9 @@ func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
 }
 
 func (m *smolvmMachine) Stop(ctx context.Context) error {
-	return m.s.run(ctx, m.env, machineArgs("stop", "--name", m.name))
+	return m.s.run(ctx, machineArgs("stop", "--name", m.name))
 }
 
 func (m *smolvmMachine) Delete(ctx context.Context) error {
-	return m.s.run(ctx, m.env, machineArgs("delete", "-f", "--name", m.name))
+	return m.s.run(ctx, machineArgs("delete", "-f", "--name", m.name))
 }

@@ -16,9 +16,7 @@ STAGE0_EDGE_BUNDLES_URL=${STAGE0_EDGE_BUNDLES_URL:-http://127.0.0.1:$STAGE0_SORT
 STAGE0_EDGE_USAGE_URL=${STAGE0_EDGE_USAGE_URL:-http://127.0.0.1:$STAGE0_SORTIE_PORT/api/v1/flows/usage}
 
 # A worker's name is the identity Sortie knows it by: the file name of its
-# settings in $STAGE0_WORKERS, which hold WORKER_HOST and EDGE_PORT, or
-# LOCAL=1 and EDGE_PORT for p1's own worker, which dials its edge port on
-# p1's loopback and needs no tunnel.
+# settings in $STAGE0_WORKERS, which hold WORKER_HOST and EDGE_PORT.
 EDGE_WORKER_NAME='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 
 # worker_names: each worker host's name, one per line, sorted.
@@ -64,30 +62,4 @@ render_edge_config() {
 EOF
   )
   mv "$out.tmp" "$out"
-}
-
-# worker_is_local NAME: the worker runs on p1 and has no tunnel.
-worker_is_local() {
-  [[ $(worker_setting "$1" LOCAL) == 1 ]]
-}
-
-# tunnel_workers: each worker host's name that p1 opens a tunnel to.
-tunnel_workers() {
-  local name
-  for name in $(worker_names); do
-    worker_is_local "$name" || echo "$name"
-  done
-}
-
-# edge_port NAME: the worker's edge port, or the next free one for a new
-# worker. Adding the same worker again keeps its port.
-edge_port() {
-  local port
-  if [[ -e $STAGE0_WORKERS/$1.env ]]; then
-    worker_setting "$1" EDGE_PORT
-    return
-  fi
-  port=$STAGE0_EDGE_FIRST_PORT
-  while grep -qx "EDGE_PORT=$port" "$STAGE0_WORKERS"/*.env 2>/dev/null; do port=$((port + 1)); done
-  echo "$port"
 }

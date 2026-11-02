@@ -48,8 +48,14 @@ case $cmd in
     name=${2:-${host#*@}}
     [[ $host =~ ^[A-Za-z0-9._@-]+$ ]] || die "HOST must be a plain SSH destination: $host"
     [[ $name =~ $EDGE_WORKER_NAME ]] || die "NAME must be letters, digits, '.', '_' or '-': $name"
-    [[ $name == p1 ]] && die "p1 is the control plane: stage0.sh runs its worker, with no tunnel"
-    port=$(edge_port "$name")
+    [[ $name == p1 ]] && die "p1 is the control plane, not a worker host"
+    port=''
+    if [[ -e $STAGE0_WORKERS/$name.env ]]; then
+      port=$(worker_setting "$name" EDGE_PORT)
+    else
+      port=$STAGE0_EDGE_FIRST_PORT
+      while grep -qx "EDGE_PORT=$port" "$STAGE0_WORKERS"/*.env 2>/dev/null; do port=$((port + 1)); done
+    fi
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" true || die "ssh $host does not work without a prompt"
     # The egress CA's certificate, so the worker's machines trust nono's
     # interception. A certificate, not a credential: its key stays on p1.
@@ -75,7 +81,6 @@ case $cmd in
     [[ $# == 1 ]] || usage
     name=$1
     [[ $name =~ $EDGE_WORKER_NAME && -e $STAGE0_WORKERS/$name.env ]] || die "no worker host $name"
-    worker_is_local "$name" && die "$name is p1's own worker, which stage0.sh runs"
     systemctl --user disable -q --now "ortus-stage0-worker-tunnel@$name.service" 2>/dev/null || true
     rm -f "$STAGE0_WORKERS/$name.env"
     apply
@@ -84,9 +89,7 @@ case $cmd in
   list)
     [[ $# == 0 ]] || usage
     for name in $(worker_names); do
-      host=$(worker_setting "$name" WORKER_HOST)
-      worker_is_local "$name" && host=local
-      printf '%s\t%s\tedge port %s\n' "$name" "$host" "$(worker_setting "$name" EDGE_PORT)"
+      printf '%s\t%s\tedge port %s\n' "$name" "$(worker_setting "$name" WORKER_HOST)" "$(worker_setting "$name" EDGE_PORT)"
     done
     ;;
   *) usage ;;

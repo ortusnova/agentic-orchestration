@@ -39,7 +39,7 @@ func readProfile(t *testing.T) egressProfile {
 }
 
 // workflowEgress reads the hosts p1's workflow allows and the hosts of
-// each credential it binds, from WORKFLOW.md's environment.remote.
+// each credential it binds, from WORKFLOW.md's environment.smolvm.
 func workflowEgress(t *testing.T) (hosts []string, creds map[string][]string) {
 	t.Helper()
 	b, err := os.ReadFile("../WORKFLOW.md")
@@ -47,7 +47,7 @@ func workflowEgress(t *testing.T) (hosts []string, creds map[string][]string) {
 		t.Fatal(err)
 	}
 	creds = map[string][]string{}
-	item := regexp.MustCompile(`^\s+- "?([a-z0-9.*-]+)"?\s*$`)
+	item := regexp.MustCompile(`^\s+- ([a-z0-9.-]+)\s*$`)
 	cred := regexp.MustCompile(`^\s+- \{name: ([a-z0-9_]+), .*hosts: \[([^\]]*)\]`)
 	section := ""
 	for line := range strings.SplitSeq(string(b), "\n") {
