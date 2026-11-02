@@ -14,6 +14,7 @@ dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
+dev/stage0/test-review-gate.sh        # check the review gate against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -44,9 +45,29 @@ seeds it with the story's repository (see below). It runs the agent behind
 acp-broker, then pushes the issue branch and opens the pull request. When
 the pull request merges, Sortie moves the story to `Done`.
 
+- **Review and merge.** Every story's pull request goes through the
+  criteria gate, whatever its `review` value (spec store
+  `agent-platform/run-supervision`, design D5). The build rule
+  (`build`, `claude-label` or `claude-title`) hops to the `review` rule
+  (`gate: criteria`, stage label `sortie-stage:review`), a new run in a new
+  agent session. The review checks each acceptance criterion with evidence,
+  may add fix commits, which Sortie pushes, and never rewrites a pushed
+  commit. When it passes, Sortie's `auto_merge` squashes the pull request
+  once CI passes, and merge completion moves the story to `Done`: no person
+  is involved. A criterion it cannot settle, such as one that conflicts
+  with a design rule, stops it `blocked`: the pull request stays open, and
+  Sortie parks the story with the review's question, which the workbench
+  shows. Branch protection that requires an approving review would keep
+  every pull request from merging; the kit's repositories must not require
+  one. Sortie merges a `review: human` story after a review only from the
+  Sortie commit that lets its gate do so (`planReviewGate`); with an older
+  Sortie a person still merges those. `test-review-gate.sh` checks all of
+  this against Sortie's own loader, exit and merge code: it needs the
+  `sortie/` submodule, or `SORTIE_SRC` naming a Sortie checkout.
+
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
-  then it runs Claude Code.
+  then its build runs Claude Code. The review always runs opencode.
   `pack/agent-acp` picks one from `SORTIE_RULE`. Both use the operator's
   Claude subscription. No other model provider is configured.
 - **opencode 2.** The pack runs opencode 2.2.1 (smol-builder's base layer)
