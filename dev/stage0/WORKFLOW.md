@@ -1,6 +1,7 @@
 ---
-# Stage 0 of agent-platform-workers (spec store design D13): Sortie under plan
-# control on p1, co-located smolvm, GitHub as the forge. dev/stage0/stage0.sh
+# Stage 1 of agent-platform-workers (spec store design D13, D18): the one
+# Sortie, under plan control on p1, for every repository, under the remote
+# kind; GitHub is the forge. dev/stage0/stage0.sh
 # renders the ${STAGE0_*} placeholders; secrets stay $VAR references, read from
 # Sortie's environment (dev/stage0/run-sortie.sh), never written here.
 tracker:
@@ -79,14 +80,32 @@ dispatch:
       match:
         title: ["[claude]"]
 
+# Every story runs on a worker (worker-daemon), p1's or a worker host's,
+# chosen by Sortie's matcher from what its job requires, never from a host
+# name (spec store agent-platform/one-sortie). A worker reaches p1's edge at
+# 127.0.0.1:${STAGE0_EDGE_WORKER_PORT} on its own loopback: p1's worker
+# directly, a worker host's through the tunnel p1 opens to it. The flows go
+# through the edge; egress is nono on p1, which holds the credentials and
+# allows only the hosts below (egress-profile.json). acp-broker on p1 carries
+# each session, so the workbench can watch and steer it.
 environment:
-  kind: smolvm
+  kind: remote
   host_prefix: [acp-broker, -http, 127.0.0.1:0, -viewer-token-file, "${STAGE0_HOME}/viewer-token", --]
-  smolvm:
-    pack: ${STAGE0_PACK}
-    cpus: 4
-    memory_mib: 8192
-    storage_gib: 20
+  remote:
+    backend: smolvm
+    # The stage-0 pack; each worker maps the name to its file
+    # (worker-config.sh).
+    image: stage0.smolmachine
+    requires: {cpu: 4, mem_gib: 8, disk_gib: 20}
+    flows:
+      stdio: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/stdio"}
+      egress: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}"}
+      mcp: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/mcp"}
+      bundles: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/bundles"}
+      usage: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/usage"}
+    # Every repository's hosts: nono allows a job only these and the hosts of
+    # the credentials it holds. homelab's are a first list from the chain's
+    # pins; the pilot replaces it with what a chain needed (homelab-pilot).
     allow_hosts:
       - models.opencode.ai
       - registry.npmjs.org
@@ -94,12 +113,33 @@ environment:
       - sum.golang.org
       # proxy.golang.org serves module zips by redirect to Google Cloud Storage.
       - storage.googleapis.com
+      - codeload.github.com
+      - "*.githubusercontent.com"
+      - ghcr.io
+      - registry-1.docker.io
+      - auth.docker.io
+      - production.cloudflare.docker.com
+      # Docker Hub's blob CDN redirects here too (ONS-22, 2026-11-01).
+      - production.cloudfront.docker.com
+      - quay.io
+      - "*.quay.io"
+      - registry.k8s.io
+      - "*.pkg.dev"
+      - cdimage.debian.org
+      - deb.debian.org
+      - security.debian.org
+      - pypi.org
+      - files.pythonhosted.org
+      - charts.jetstack.io
+      - charts.longhorn.io
+      - cloudnative-pg.github.io
+      - kubernetes.github.io
     credentials:
       - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
     pass_env: [IS_SANDBOX]
     # A story runs in the repository its plan node names (the Huly label
-    # sortie-repository:<name>), else in sortie. homelab is listed so plan
-    # sync accepts homelab stories, and closed: the homelab Sortie runs them.
+    # sortie-repository:<name>), else in sortie. Every one is dispatched here:
+    # no other Sortie polls the project.
     repositories:
       - name: sortie
         url: ${STAGE0_REPO_URL}
@@ -111,12 +151,19 @@ environment:
         base: ${STAGE0_AO_REPO_BASE}
         provider: github
         project: ${STAGE0_AO_REPO_PROJECT}
+      # What a homelab job needs, which replaces the homelab Sortie's smolvm
+      # settings: nested KVM for the seed and Talos VMs, the sandbox's 8 vCPU
+      # and 20 GiB, and a 200 GiB disk. The homelab pack, its user builder,
+      # its guest kernel, its shared folders, the vm key and what the hooks
+      # did are the worker's (homelab-inputs.sh): a worker with homelab's
+      # dev host declares nested, any other does not.
       - name: homelab
         url: ${STAGE0_HOMELAB_REPO_URL}
         base: ${STAGE0_HOMELAB_REPO_BASE}
         provider: github
         project: ${STAGE0_HOMELAB_REPO_PROJECT}
-        dispatch: false
+        image: homelab.smolmachine
+        requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 200}
     default_repository: sortie
 ---
 You are working on story **{{ .issue.identifier }}**: {{ .issue.title }}

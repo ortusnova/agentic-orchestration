@@ -1,19 +1,25 @@
 # Stage 0 kit
 
-Stage 0 of the Ortus Nova spec store's `agent-platform-workers` (design D13,
-D15) on one Linux host. It runs a persistent Sortie under plan control with
-co-located smolvm, the plan workbench, acp-broker and the local Huly. GitHub
-is the forge. On p1 it also runs the stage-1 edge (design D18): the edge,
-nono and one SSH tunnel per worker host ([below](#the-stage-1-edge-p1)).
-Everything is rootless: systemd user units and Huly's podman containers.
+Stages 0 and 1 of the Ortus Nova spec store's `agent-platform-workers`
+(design D13, D15, D18). On p1 it runs the one Sortie, under plan control,
+which dispatches every repository under the `remote` kind, with the plan
+workbench, acp-broker and the local Huly; the stage-1 edge: the edge, nono
+and one SSH tunnel per worker host ([below](#the-stage-1-edge-p1)); and p1's
+own worker daemon. On each worker host, taichi first, it runs only a worker
+daemon ([below](#worker-hosts-taichi)). Where a job runs is the matcher's
+choice, from what the job requires (spec store `agent-platform/one-sortie`).
+GitHub is the forge. Everything is rootless: systemd user units and Huly's
+podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
-dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
+dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm packs
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
+STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daemon only
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
+dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -24,14 +30,15 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Part | Where |
 | --- | --- |
 | Settings | `~/.local/share/ortus-nova/stage0/stage0.env`, written on the first run |
-| Sortie | unit `ortus-stage0-sortie`, `127.0.0.1:7680`, workflow rendered from `WORKFLOW.md` |
+| Sortie | unit `ortus-stage0-sortie`, `127.0.0.1:7680`, workflow rendered from `WORKFLOW.md`: the `remote` kind, every repository |
 | Workbench | unit `ortus-stage0-workbench`, `http://127.0.0.1:8793`, local mode; the password is in `workbench-password` |
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`; `podman-restart.service` brings it back after a reboot |
-| Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`) |
-| Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
+| Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`); each worker builds its own |
+| p1's worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (rendered by `worker-config.sh`); it dials the edge at `127.0.0.1:7700` on p1 with no tunnel, and the edge names it `p1` |
+| Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit, `worker-daemon/` included, runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker-tunnel@<worker>`) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker`, `-worker-tunnel@<worker>`) |
 
 ## How a story runs
 
@@ -39,10 +46,15 @@ The workbench registers the spec store (`STAGE0_STORE`), which follows its
 upstream on its own, so a merged plan change reaches it within a minute. About a second
 after a change or an approval it syncs the plan on its own, and an approved story whose
 blockers are approved is released to `Todo`; the workbench then asks Sortie
-to poll at once. Sortie creates a VM from the pack and
-seeds it with the story's repository (see below). It runs the agent behind
-acp-broker, then pushes the issue branch and opens the pull request. When
-the pull request merges, Sortie moves the story to `Done`.
+to poll at once. Sortie offers the story's job to the workers; the matcher
+gives it to a worker whose declaration meets what the job requires (see
+Repositories below), whichever host it is on. That worker creates a machine
+from its pack, seeds it from the bundle Sortie serves, and runs the agent,
+whose session Sortie drives over the stdio flow behind acp-broker on p1. The
+worker returns the issue branch as a bundle; Sortie pushes it and opens the
+pull request. When the pull request merges, Sortie moves the story to
+`Done`. A homelab story released after a Sortie story merged is dispatched
+by the same Sortie, like any other.
 
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
@@ -67,29 +79,34 @@ the pull request merges, Sortie moves the story to `Done`.
 - **Session start.** `agent.read_timeout_ms` is 60 s: a fresh VM's agent
   can take over 15 s to answer at session start, past Sortie's 5 s
   default. Turns are bounded by `stall_timeout_ms` and `turn_timeout_ms`.
-- **Parallel agents.** `STAGE0_MAX_AGENTS` in `stage0.env` (default 3) caps
-  agents at once; each VM takes 4 vCPU and 8 GiB. All of them share one
-  Claude subscription and its rate limits.
+- **Parallel agents.** `STAGE0_MAX_AGENTS` in p1's `stage0.env` (default 3)
+  caps agents at once, on every worker together; on a worker it is the
+  daemon's run slots. All of them share one Claude subscription and its rate
+  limits.
 - **Repositories.** A story runs in the repository its plan node names
   (plan sync keeps the Huly label `sortie-repository:<name>`), else in
-  `sortie`, the default. The workflow lists three:
+  `sortie`, the default. The workflow lists three, all dispatched by p1's
+  Sortie; no other Sortie polls the project. Each names what its job
+  requires, never a host:
 
-  | Name | Settings | Default | Dispatched here |
-  | --- | --- | --- | --- |
-  | `sortie` | `STAGE0_REPO_*` | yes | yes |
-  | `agentic-orchestration` | `STAGE0_AO_REPO_*` | no | yes |
-  | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | no: the homelab Sortie runs these stories |
+  | Name | Settings | Default | Image | Requires |
+  | --- | --- | --- | --- | --- |
+  | `sortie` | `STAGE0_REPO_*` | yes | `stage0.smolmachine` | 4 CPUs, 8 GiB, 20 GiB of disk |
+  | `agentic-orchestration` | `STAGE0_AO_REPO_*` | no | `stage0.smolmachine` | 4 CPUs, 8 GiB, 20 GiB of disk |
+  | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | `homelab.smolmachine` | `nested`, 8 CPUs, 20 GiB, 200 GiB of disk |
 
-  `homelab` is listed only so that plan sync accepts its stories; this
-  Sortie leaves them alone. Plan sync refuses a story naming a repository
-  the workflow does not list. A `stage0.env` written before these settings
+  A worker declares `nested` only when it has homelab's inputs, so any
+  worker may take a sortie story and any worker with homelab's dev host a
+  homelab one. Plan sync refuses a story naming a repository the workflow
+  does not list. A `stage0.env` written before these settings
   existed keeps working: `stage0.sh` fills in each missing one with its
   default. To change one, set it in `stage0.env` and run `stage0.sh` again.
 
 ## Credentials
 
-`run-sortie.sh` reads each credential at start and keeps it in memory. The
-VMs see only smolvm placeholders.
+`run-sortie.sh` reads each credential at start and keeps it in memory. A
+job's machine sees only Sortie's placeholders, which nono on p1 replaces
+([below](#where-the-credentials-live)).
 
 | Credential | Source |
 | --- | --- |
@@ -110,9 +127,9 @@ design D18; no worker change then). Only the control profile runs it.
 | Part | Where |
 | --- | --- |
 | Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); nothing listens on the LAN, and the host gets no SSH access to p1 |
-| Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker host on p1's loopback, from `127.0.0.1:7701` up, and nothing else |
+| Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker on p1's loopback: `127.0.0.1:7700` for p1's own worker, which needs no tunnel, and one per worker host from `127.0.0.1:7701` up, and nothing else |
 | nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
-| Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port; `dev/stage0/worker-host.sh list` |
+| Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port, or `LOCAL=1` for p1's own worker (`stage0.sh` writes it); `dev/stage0/worker-host.sh list` |
 
 What the edge does with a request on a worker's port:
 
@@ -183,55 +200,82 @@ a stand-in for nono; `make -C dev/stage0 test-live` runs the two nono
 scenarios on p1 against the pinned nono, the credential on p1 and
 `api.anthropic.com`, on ports of its own.
 
-## The homelab profile (taichi)
+## Worker hosts (taichi)
 
-A second Sortie on a homelab dev host runs only homelab stories (spec store
-`run-homelab-through-sortie`, design D5-D12). It polls the same Huly project
-as p1's Sortie. p1's Sortie lists `homelab` closed to dispatch; this one
-lists only `homelab`, with no default, so every other story stays p1's.
+A worker host runs only a worker daemon (`worker-daemon/`, its
+[operator guide](../../worker-daemon/docs/operator-guide.md)). It runs no
+Sortie, polls no tracker and holds no credential: its jobs' model and forge
+requests get theirs from nono on p1. taichi's homelab Sortie, the second
+Sortie of stage 0, is retired: p1's Sortie dispatches homelab too.
 
 ```sh
-# On p1, once: Huly on the homelab host's loopback, through a remote SSH forward.
-dev/stage0/huly-tunnel.sh taichi
-# On taichi, once homelab's `make dev-host` has run there:
-STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
-dev/stage0/stage0.sh                          # later runs read it from stage0.env
+# On p1, once: the host's tunnel and identity, and the egress CA's certificate.
+dev/stage0/worker-host.sh add brian@taichi
+# On the host: the first run writes stage0.env with the profile.
+STAGE0_PROFILE=worker dev/stage0/stage0.sh
+dev/stage0/stage0.sh            # later runs read it from stage0.env
 ```
 
 | Part | Where |
 | --- | --- |
-| Sortie | unit `ortus-stage0-sortie` on taichi, `127.0.0.1:7680`, workflow rendered from `WORKFLOW-homelab.md` |
-| Huly | p1's, at `http://127.0.0.1:8087` on taichi through unit `ortus-stage0-huly-tunnel@taichi` on p1. Nothing listens on the LAN, and taichi gets no SSH access to p1. While p1 sleeps, taichi's Sortie cannot reach the tracker and retries |
-| homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC` (default `~/dev/homelab`); every `stage0.sh` run moves it to the latest `origin/master` |
-| Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The workflow creates its machines with `user: builder` (the spec store's `smolvm-machine-shape` story); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. A pack no Sortie machine was created from is deleted |
-| Machines | 8 vCPU, 20 GiB, a 200 GiB disk at `/workspace`, nested KVM, `virtio-net`, homelab's guest kernel (`SMOLVM_LIB_DIR`), at most `STAGE0_MAX_AGENTS` (2) at once |
-| Host inputs | Five shared folders, smolvm's ceiling on taichi beside Sortie's own: read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per workspace, `~/.local/state/homelab/sortie-recorder/<issue>`, the flight recorder's folder, which Sortie keeps after the machine is gone. The vm age key, copied alone into `$STAGE0_HOME/inputs/vm-age`, reaches the machines as `HOMELAB_VM_AGE_KEY` (`pass_env`), and `after_create` writes it where sops looks |
+| Worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (`worker-config.sh`), state in `$STAGE0_HOME/worker`. It dials p1's edge at `http://127.0.0.1:7700`, the end of p1's tunnel, and the edge names it by that tunnel |
+| Live kit | as on p1, `$STAGE0_HOME/kit` follows `origin/main` (`ortus-stage0-deploy.timer`); a change to the kit runs `stage0.sh` once the daemon runs no job. A worker host builds no Sortie and follows no `plan-bench` merge |
+| Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
+| Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
 
-Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
-and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without
-them.
+### homelab's inputs
 
-| File | What |
+With homelab's dev host (`make dev-host` in homelab) and its checkout at
+`STAGE0_HOMELAB_SRC` (default `~/dev/homelab`), `stage0.sh` gives the
+worker the homelab image (`homelab-inputs.sh`) and the worker declares
+`nested`. Without them it declares no `nested`, so the matcher gives it no
+homelab job. What a homelab job gets is what the homelab Sortie gave its
+machines (spec store `run-homelab-through-sortie`, design D5-D12):
+
+| Part | Where |
 | --- | --- |
-| `github-token` | a fine-grained token limited to `ortusnova/homelab`: Contents and Pull requests, read and write |
-| `claude-oauth-token` | a `claude setup-token` token; `anthropic-token.py --setup-token-only` reads only it |
+| homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master` |
+| Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The daemon runs its commands as `builder` (`smolvm.images`); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. While no job runs, the packs it replaced are deleted |
+| Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 200 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
+| Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone. Five, beside the daemon's share: smolvm's ceiling on taichi |
+| vm key | copied alone into `$STAGE0_HOME/inputs/vm-age`; reaches every command in the machine as `HOMELAB_VM_AGE_KEY` (`env_files`), never logged |
+| Setup | what the homelab workflow's hooks did, before the agent starts: the vm key where sops looks, `guest-start.sh` (the flight recorder, and swap at `/storage/swapfile`), and `scripts/vmhost/prepare.sh` |
 
 The recorder folders stay until you delete them:
-`rm -rf ~/.local/state/homelab/sortie-recorder/<issue>` once an issue's
+`rm -rf ~/.local/state/homelab/sortie-recorder/<job>` once a job's
 evidence is no longer needed.
 
-To remove the profile: on taichi, `systemctl --user disable --now
-ortus-stage0-sortie`, delete each `sortie-*` machine, then
+### From the homelab profile
+
+A host on the retired homelab profile keeps its Sortie until a person moves
+it: `stage0.sh`, the deploy timer's too, refuses the homelab profile and
+says how. Once p1 runs this kit's `main` (its Sortie lists homelab open to
+dispatch) and `worker-host.sh add` has run for the host:
+
+```sh
+STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on taichi
+```
+
+It rewrites `stage0.env` to the worker profile, stops taichi's Sortie and
+removes its unit, and starts the worker daemon. The homelab Sortie's
+workspaces stay in `$STAGE0_HOME/workspaces`; delete each `sortie-*`
+machine it left with `smolvm machine delete --name <name>`. Its two
+credential files, `github-token` and `claude-oauth-token`, are no longer
+read: delete them and revoke the tokens. p1's `stage0.sh` closes the Huly
+tunnel it kept for taichi's Sortie (`ortus-stage0-huly-tunnel@taichi`).
+
+To remove a worker host: on the host, `systemctl --user disable --now
+ortus-stage0-worker ortus-stage0-deploy.timer`, then
 `git -C ~/dev/homelab worktree remove ~/.local/share/ortus-nova/stage0/homelab`
 and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
-`dev/stage0/huly-tunnel.sh --remove taichi`.
+`dev/stage0/worker-host.sh remove <worker>`.
 
 ## Remove it
 
 ```sh
-for w in $(dev/stage0/worker-host.sh list | cut -f1); do dev/stage0/worker-host.sh remove "$w"; done
-systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono
-smolvm machine ls   # delete each sortie-* VM: smolvm machine delete --name <name>
+for w in $(dev/stage0/worker-host.sh list | grep -v '	local	' | cut -f1); do dev/stage0/worker-host.sh remove "$w"; done
+systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono ortus-stage0-worker
+smolvm machine ls   # delete each wd-* machine: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.service && systemctl --user daemon-reload
 rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces and the pack
 ```
