@@ -116,6 +116,11 @@ type Smolvm struct {
 	// pack's.
 	User string `json:"user"`
 
+	// Nested, when false, keeps this worker from declaring nested
+	// virtualization although the host offers it, so the control plane
+	// gives it no job that requires nested. Default: what the host offers.
+	Nested *bool `json:"nested"`
+
 	// Images holds what a job of an image reference gets on this host
 	// beyond its pack: its user, guest kernel, host folders, environment
 	// values read from files, and setup commands.

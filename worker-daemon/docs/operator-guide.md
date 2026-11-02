@@ -90,6 +90,7 @@ the start instead of being ignored.
 | `smolvm.packs` | no | | Maps an image reference (`run.image`) to an absolute pack path. |
 | `smolvm.pack_dir` | no | | Also resolves an image reference ending in `.smolmachine` to the file of that base name here. |
 | `smolvm.user` | no | the pack's | The user commands run as in the machine; it is given `/workspace`. |
+| `smolvm.nested` | no | what the host offers | `false` keeps the worker from declaring nested virtualization, so it gets no job that requires `nested`: for a host without the inputs of the images that need it. |
 | `smolvm.images` | no | | Maps an image reference to what this host gives each of its jobs beyond the pack. See [Host inputs of an image](#host-inputs-of-an-image). |
 | `usage_commands` | no | | Maps an agent kind, the base name of `run.command`, to the command run in the machine after each run to read its token usage; `*` covers every other kind. See [Token usage](#token-usage). |
 | `log_level` | no | `info` | `debug`, `info`, `warn` or `error`. Logs go to standard error and never carry a token. |

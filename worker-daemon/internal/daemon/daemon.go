@@ -200,7 +200,7 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	if d.backendOK.Load() {
 		backends = append(backends, d.backend.Name())
 	}
-	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested, Backends: backends,
+	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
 		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s)}
 }
 

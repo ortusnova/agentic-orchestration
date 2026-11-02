@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
@@ -148,6 +149,27 @@ func TestFailedSetupFailsTheJob(t *testing.T) {
 	for _, e := range h.machine("ONS-7", 1).Execs() {
 		if len(e.Argv) > 1 && e.Argv[1] == "fake-agent" {
 			t.Error("the agent ran after a failed setup")
+		}
+	}
+}
+
+// A host that offers nested virtualization declares it, unless its
+// configuration withholds it: a worker without the inputs of the images
+// that need nested takes none of their jobs.
+func TestNestedDeclaration(t *testing.T) {
+	host := hostinfo.Snapshot{OS: "linux", Arch: "amd64", KVM: true, Nested: true, CPUs: 8, MemAvailableGiB: 40, DiskAvailableGiB: 200}
+	for _, tc := range []struct {
+		nested any
+		want   bool
+	}{{nil, true}, {true, true}, {false, false}} {
+		s := defaults()
+		s.noStart = true
+		if tc.nested != nil {
+			s.nested = tc.nested
+		}
+		h := newHarness(t, s)
+		if d := h.d.Declaration(host); d.Nested != tc.want {
+			t.Errorf("smolvm.nested %v: declared nested %v, want %v", tc.nested, d.Nested, tc.want)
 		}
 	}
 }
