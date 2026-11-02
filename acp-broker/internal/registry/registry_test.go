@@ -178,3 +178,40 @@ func TestList_NewestFirstAndSkipsDeafSockets(t *testing.T) {
 		t.Errorf("record of a live process was removed: %v", err)
 	}
 }
+
+// A registry directory deep enough that KEY.PID.sock would not fit in a
+// socket address (it happened on p1 once PIDs reached seven digits) gets a
+// short, stable path in the runtime directory instead.
+func TestSocketPathFitsASocketAddress(t *testing.T) {
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+
+	short := SocketPath("/run/reg", "planning-d8481392", 1745717)
+	if short != "/run/reg/planning-d8481392.1745717.sock" {
+		t.Fatalf("a short path changed: %s", short)
+	}
+
+	deep := "/home/brian/.local/share/ortus-nova/stage0/sessions/ortus-nova-specs/registry"
+	got := SocketPath(deep, "planning-d8481392", 1745717)
+	if len(got) > maxSocketPath() {
+		t.Fatalf("socket path is %d bytes, over %d: %s", len(got), maxSocketPath(), got)
+	}
+	if filepath.Dir(got) != runtimeDir {
+		t.Fatalf("long path not moved to the runtime directory: %s", got)
+	}
+	if again := SocketPath(deep, "planning-d8481392", 1745717); again != got {
+		t.Fatalf("not stable: %s then %s", got, again)
+	}
+	if other := SocketPath(deep, "planning-d8481392", 1745718); other == got {
+		t.Fatalf("two brokers share a socket path: %s", got)
+	}
+
+	// The broker listens there for real.
+	ln, err := net.Listen("unix", got)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", got, err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
