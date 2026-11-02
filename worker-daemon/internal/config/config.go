@@ -139,6 +139,10 @@ type Image struct {
 	// Mounts are host folders shared with the machine.
 	Mounts []Mount `json:"mounts"`
 
+	// Env holds plain values, no secret, for every command the daemon
+	// runs in the machine.
+	Env map[string]string `json:"env"`
+
 	// EnvFiles maps a variable to a file on this host whose content,
 	// less its final newline, is the variable's value in every command
 	// the daemon runs in the machine. Read at each job's start; never
@@ -298,6 +302,14 @@ func (img Image) validate(field string) error {
 			if g == r || strings.HasPrefix(g, r+"/") || strings.HasPrefix(r, g+"/") {
 				return fieldError(f+".guest", fmt.Sprintf("%s overlaps %s, which the daemon gives every machine", m.Guest, r))
 			}
+		}
+	}
+	for name := range img.Env {
+		if !envNamePattern.MatchString(name) {
+			return fieldError(field+".env", fmt.Sprintf("%q is not a variable name", name))
+		}
+		if _, dup := img.EnvFiles[name]; dup {
+			return fieldError(field+".env."+name, "is in env_files too")
 		}
 	}
 	for name, path := range img.EnvFiles {

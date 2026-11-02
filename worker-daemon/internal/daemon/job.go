@@ -233,7 +233,7 @@ func (j *job) execute(dir string) (string, string) {
 	if err != nil {
 		return failed("host folders: %v", err)
 	}
-	if j.inputEnv, err = readEnvFiles(img); err != nil {
+	if j.inputEnv, err = imageEnv(img); err != nil {
 		return failed("%v", err)
 	}
 	spec := machine.Spec{
@@ -451,10 +451,14 @@ func (j *job) mounts(img config.Image) ([]machine.Mount, error) {
 	return out, nil
 }
 
-// readEnvFiles reads the image's environment values, sorted by name. A
-// value is never logged; an error names the variable and the file only.
-func readEnvFiles(img config.Image) ([]string, error) {
+// imageEnv returns the image's plain values and reads the values of
+// its files, each sorted by name. A file's value is never logged; an
+// error names the variable and the file only.
+func imageEnv(img config.Image) ([]string, error) {
 	var env []string
+	for _, name := range slices.Sorted(maps.Keys(img.Env)) {
+		env = append(env, name+"="+img.Env[name])
+	}
 	for _, name := range slices.Sorted(maps.Keys(img.EnvFiles)) {
 		b, err := os.ReadFile(img.EnvFiles[name]) // #nosec G304 -- the operator names the file
 		if err != nil {

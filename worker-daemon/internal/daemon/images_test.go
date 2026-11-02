@@ -38,6 +38,7 @@ func imageInputs(t *testing.T, setupScript string) (setup, string) {
 			{"host": filepath.Join(host, "sources"), "guest": "/home/builder/.cache/homelab-sources", "read_only": true},
 			{"host": filepath.Join(host, "recorder"), "guest": "/var/log/homelab-recorder", "per_job": true},
 		},
+		"env":       map[string]string{"NODE_EXTRA_CA_CERTS": "/etc/egress-ca.crt"},
 		"env_files": map[string]string{"HOMELAB_VM_AGE_KEY": key},
 		"setup":     []string{setupScript},
 	}}
@@ -99,6 +100,9 @@ func TestImageInputsReachTheJob(t *testing.T) {
 		}
 		if len(e.Argv) > 1 && e.Argv[1] == "fake-agent" {
 			agentAt = i
+			if !slices.Contains(e.Env, "NODE_EXTRA_CA_CERTS=/etc/egress-ca.crt") {
+				t.Error("the agent's environment has no NODE_EXTRA_CA_CERTS")
+			}
 			if !slices.Contains(e.Env, "HOMELAB_VM_AGE_KEY="+testVMKey) {
 				t.Error("the agent's environment has no HOMELAB_VM_AGE_KEY")
 			}

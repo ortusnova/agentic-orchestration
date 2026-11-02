@@ -127,6 +127,7 @@ guest kernel. The control plane names none of it; it names the image, and
       { "host": "/home/brian/.cache/homelab-sources", "guest": "/home/builder/.cache/homelab-sources", "read_only": true },
       { "host": "/home/brian/.local/state/homelab/sortie-recorder", "guest": "/var/log/homelab-recorder", "per_job": true }
     ],
+    "env": { "NODE_EXTRA_CA_CERTS": "/usr/local/share/ca-certificates/ortus-egress.crt" },
     "env_files": { "HOMELAB_VM_AGE_KEY": "/home/brian/.local/share/ortus-nova/stage0/inputs/vm-age/keys.txt" },
     "setup": ["sudo /opt/homelab-sandbox/guest-start.sh \"$(id -u)\""]
   }
@@ -138,6 +139,7 @@ guest kernel. The control plane names none of it; it names the image, and
 | `user` | The user commands run as for this image, instead of `smolvm.user`. |
 | `lib_dir` | `SMOLVM_LIB_DIR` for every smolvm call on the job's machine: the guest kernel it boots. |
 | `mounts` | Host folders shared with the machine, at `guest`, read-only with `read_only`. With `per_job`, the job gets `host/<job>`, created when it starts and kept after it ends. A guest path may not overlap `/workspace` or `/run/worker`. |
+| `env` | Plain values, no secret, in the same environment, such as `NODE_EXTRA_CA_CERTS`. |
 | `env_files` | Each variable's value is the content of its file, less the final newline, read when the job starts. It is in the environment of every command the daemon runs in the machine (setup, the agent, the usage command) and never logged. |
 | `setup` | Shell scripts run in order in `/workspace`, with the agent's environment, after the workspace is seeded and before the agent starts. One that fails fails the attempt, with its standard error in the reason. |
 

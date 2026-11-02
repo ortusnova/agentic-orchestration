@@ -85,6 +85,8 @@ func TestParseImages(t *testing.T) {
 		"over workspace":  {`{"mounts":[{"host":"/c","guest":"/workspace/x"}]}`, "mounts[0].guest"},
 		"over the share":  {`{"mounts":[{"host":"/c","guest":"/run"}]}`, "mounts[0].guest"},
 		"bad variable":    {`{"env_files":{"A-B":"/f"}}`, "env_files"},
+		"bad plain name":  {`{"env":{"1A":"x"}}`, "env"},
+		"env twice":       {`{"env":{"A":"x"},"env_files":{"A":"/f"}}`, "env.A"},
 		"relative file":   {`{"env_files":{"A":"f"}}`, "env_files.A"},
 		"relative kernel": {`{"lib_dir":"k"}`, "lib_dir"},
 		"empty setup":     {`{"setup":[" "]}`, "setup[0]"},
