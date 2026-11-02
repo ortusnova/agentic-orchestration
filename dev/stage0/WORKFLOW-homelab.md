@@ -176,7 +176,9 @@ environment:
       - cloudnative-pg.github.io
       - kubernetes.github.io
     credentials:
-      - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
+      # Read at each launch (Sortie's command source); the homelab profile
+      # reads only the setup token (claude-oauth-token).
+      - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com], command: "${STAGE0_KIT}/anthropic-token.py --setup-token-only"}
     # Only homelab, and no default: an issue without a repository is p1's
     # (design D6).
     repositories:

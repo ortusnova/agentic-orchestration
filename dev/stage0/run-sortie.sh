@@ -12,8 +12,9 @@
 #                            harnesses: the freshest live token that
 #                            anthropic-token.py finds (a `claude setup-token`
 #                            token, else opencode's or Claude Code's OAuth
-#                            login). Its expiry goes to $STAGE0_HOME/token-expiry,
-#                            which ortus-stage0-token.timer watches.
+#                            login). Sortie reads it again at each launch
+#                            (the workflow's command source); this start
+#                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
 # The homelab profile reads exactly $STAGE0_HOME/github-token and
 # $STAGE0_HOME/claude-oauth-token, and falls back to neither gh nor a login.
@@ -52,7 +53,6 @@ token_args=()
 [[ $STAGE0_PROFILE == homelab ]] && token_args=(--setup-token-only)
 CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py" "${token_args[@]}") \
   || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
-"$(dirname "$0")/anthropic-token.py" "${token_args[@]}" --expiry > "$STAGE0_HOME/token-expiry"
 # homelab's guest kernel: smolvm boots machines on the libkrunfw in this folder.
 if [[ -n ${STAGE0_SMOLVM_LIB_DIR:-} ]]; then export SMOLVM_LIB_DIR=$STAGE0_SMOLVM_LIB_DIR; fi
 # homelab's vm age key, a test fixture (design D3): the workflow's pass_env

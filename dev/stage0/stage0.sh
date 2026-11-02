@@ -285,7 +285,7 @@ fi
 say "Rendering Sortie's workflow"
 workflow=$KIT/WORKFLOW.md
 [[ $STAGE0_PROFILE == homelab ]] && workflow=$KIT/WORKFLOW-homelab.md
-python3 "$ROOT/dev/forge/render.py" "$workflow" "$STAGE0_HOME/sortie/WORKFLOW.md"
+STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$workflow" "$STAGE0_HOME/sortie/WORKFLOW.md"
 "$KIT/run-sortie.sh" validate >/dev/null || die "Sortie refused the workflow: $KIT/run-sortie.sh validate"
 
 say "Installing the user units"
