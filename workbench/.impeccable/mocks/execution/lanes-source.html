@@ -69,6 +69,12 @@ button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
 .primary{background:var(--ink);color:#fff;border:0;border-radius:8px;height:38px;padding:0 16px;font-weight:600}
 .ghost{background:#fff;border:1px solid var(--line);border-radius:8px;height:38px;padding:0 14px;font-weight:600}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+.notice{background:var(--amber-tint);color:var(--amber-ink);border-radius:6px;padding:7px 12px;margin:8px 0 4px var(--label)}
+.drain{position:absolute;top:0;bottom:0;width:0;border-left:1.5px dashed var(--rule);z-index:2}
+.drain span{position:absolute;top:2px;left:6px;white-space:nowrap;font:700 10px var(--sans);letter-spacing:.05em;text-transform:uppercase;background:var(--paper);padding:1px 4px}
+.fault{position:absolute;z-index:3;top:18px;left:0;right:0;height:60px;border:1.5px solid var(--alert);border-radius:6px;background:#fff;display:flex;align-items:center;gap:14px;padding:0 14px}
+.fault span{color:var(--mute)}.fault .ghost{margin-left:auto;height:32px}
+.later li.ready{color:var(--done)}.later li.ready i{background:var(--done)}
 </style></head><body>
 <header class="bar"><div class="proj">ortus-nova-specs</div><nav class="tabs"><a class="on">Home</a><a>Graph</a><a>Plan</a></nav>
  <div class="seg" role="tablist"><button role="tab" data-state="now" aria-selected="true">Now <small>real, 11:20 UTC</small></button><button role="tab" data-state="busy" aria-selected="false">Busy <small>example</small></button></div></header>
@@ -78,28 +84,50 @@ button.job:hover{box-shadow:0 8px 20px -12px rgba(20,22,26,.4)}
 // Axis: one hour back to two hours ahead. ETA = the median successful run on that
 // Sortie (p1 10 min, taichi 17 min; a vm chain 38 min). Tokens: no run has reported any yet.
 const FROM=-60, TO=120, pct=m=>((Math.max(FROM,Math.min(TO,m))-FROM)/(TO-FROM)*100);
+const STATES=[["working","Working"],["stuck","Something stuck"],["drain","Draining for a deploy"],["dry","Out of approved work"]];
 const DATA={
- now:{workers:[
-  {name:"p1",role:"control plane and worker",host:"22 CPUs · 39 GiB of 62 GiB free",slots:[{},{},{}],
-   freeNote:"4 pull requests wait for a review agent that does not run yet",
-   later:[["unowned","ONS-67 repeat-stop","review and merge sortie#28"],["unowned","ONS-47 one-sortie","review #60, then the cutover"],["unowned","ONS-74 pr-repair-reactions","review #64"],["unowned","ONS-76 deploy-drains-host","review #62"],["you","ONS-75, ONS-73","UI to look at; your merge approves"],["blocked","ONS-68 failure-routing","after ONS-67"],["blocked","ONS-20","after ONS-19"]]},
-  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 63 GiB of 91 GiB free",slots:[{},{}],
-   freeNote:"its next stories wait on ONS-34's live proof",
-   outside:[{id:"ONS-34",title:"image-archive",phase:"Live proof",started:85,eta:null,by:"hl-ons-34-proof · started by an agent session on p1, not Sortie",last:"vm CI acceptance, one app at a time",tokens:null}],
-   later:[["blocked","ONS-52, 61, 48","live proofs after ONS-34"],["blocked","ONS-37 canary-rebuild","after ONS-34 · critical path"],["you","ONS-55 proof-cadence","waits on your 3.3 answer"],["held","ONS-49, 50, 51","16 of 16 sessions used on a refused push; token fixed"]]}]},
- busy:{example:true,workers:[
-  {name:"p1",role:"control plane and worker",host:"22 CPUs · 21 GiB of 62 GiB free",slots:[
-   {state:"working",job:{id:"ONS-68",title:"failure-routing",phase:"Build",repo:"sortie",started:23,eta:5,tokens:"1.8 M",cost:"$0.42",turn:4,last:"edited internal/orchestrator/route.go",ago:"20 s"},next:[{id:"ONS-70",title:"health-checks",est:10}]},
-   {state:"working",job:{id:"ONS-74",title:"pr-repair-reactions",phase:"Review",repo:"agentic-orchestration",started:6,eta:10,tokens:"410 k",cost:"$0.09",turn:2,last:"ran make -C dev/stage0 test",ago:"1 min"},next:[{id:"ONS-76",title:"fix CI on #62",est:10}]},
-   {state:"starting",job:{id:"ONS-69",title:"workbench-platform-faults",phase:"Build",repo:"agentic-orchestration",started:1,eta:null,attempt:2,tokens:null,last:"last error: session start response_timeout",ago:"40 s"},next:[]}],
+ working:{workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 18 GiB of 62 GiB free",slots:[
+   {state:"working",job:{id:"ONS-68",title:"failure-routing",phase:"Build",repo:"sortie",started:23,eta:5,tokens:"1.8 M",cost:"$0.42",last:"edited internal/orchestrator/route.go",ago:"20 s"},next:[{id:"ONS-70",title:"health-checks",est:10},{id:"ONS-72",title:"unfinished-work-handoff",est:10}]},
+   {state:"working",job:{id:"ONS-74",title:"pr-repair-reactions",phase:"Review",repo:"agentic-orchestration",started:6,eta:10,tokens:"410 k",cost:"$0.09",last:"checking criterion 2: ran make -C dev/stage0 test",ago:"1 min"},next:[{id:"ONS-76",title:"deploy-drains-host · review",est:10}]},
+   {state:"working",job:{id:"ONS-79",title:"ui-review-sortie",phase:"Build",repo:"sortie",started:12,eta:8,tokens:"950 k",cost:"$0.21",last:"go test ./internal/plan -run UIReview",ago:"35 s"},next:[{id:"ONS-77",title:"control-plane-images",est:24}]}],
+   later:[["blocked","ONS-80 ui-review-workbench","after ONS-79"],["ready","ONS-81 worker-activity-view","approved; next free slot after the queue above"]]},
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 22 GiB of 91 GiB free",slots:[
+   {state:"working",job:{id:"ONS-52",title:"seed-security-updates",phase:"Live proof",repo:"homelab",step:"vm chain 9 of 13: k8s-up",started:52,eta:25,tokens:"640 k",cost:"$0.15",last:"k8s-up: waiting for Longhorn",ago:"2 min"},next:[{id:"ONS-53",title:"seed-boot-fallback",est:17}]},
+   {state:"working",job:{id:"ONS-61",title:"simplify-proof-fixture",phase:"Review",repo:"homelab",started:8,eta:9,tokens:"380 k",cost:"$0.08",last:"criterion 3: make seed-proof ENV=vm queued",ago:"40 s"},next:[{id:"ONS-48",title:"vm-upstream-mirrors · live proof",est:38}]}],
+   later:[["blocked","ONS-62, ONS-63","after ONS-61"],["blocked","ONS-54 vm-acceptance","after ONS-52, ONS-53 · critical path"]]}]},
+ stuck:{workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 20 GiB of 62 GiB free",slots:[
+   {state:"stalled",job:{id:"ONS-68",title:"failure-routing",phase:"Build",repo:"sortie",started:41,eta:0,overdue:true,tokens:"2.3 M",cost:"$0.55",last:"no agent event since turn 3; the supervisor asked it for its status",ago:"14 min"},next:[{id:"ONS-70",title:"health-checks",est:10}]},
+   {state:"working",job:{id:"ONS-76",title:"deploy-drains-host",phase:"Fix CI",repo:"agentic-orchestration",started:4,eta:8,tokens:"220 k",cost:"$0.05",last:"CI failed on Go 1.26.1; raising go.work to 1.27.3",ago:"30 s"},next:[]},
+   {state:"working",job:{id:"ONS-74",title:"pr-repair-reactions",phase:"Review",repo:"agentic-orchestration",started:9,eta:7,tokens:"520 k",cost:"$0.12",last:"criterion 1 met; checking 2",ago:"1 min"},next:[{id:"ONS-79",title:"ui-review-sortie",est:20}]}],
    later:[["blocked","ONS-72 unfinished-work-handoff","after ONS-68"]]},
-  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 18 GiB of 91 GiB free",slots:[
-   {state:"working",job:{id:"ONS-52",title:"seed-security-updates",phase:"Live proof",repo:"homelab",step:"vm chain 9 of 13: k8s-up",started:52,eta:25,tokens:"640 k",cost:"$0.15",last:"k8s-up: waiting for Longhorn",ago:"2 min"},next:[{id:"ONS-61",title:"live seed-proof",est:40}]},
-   {state:"stalled",job:{id:"ONS-37",title:"canary-rebuild",phase:"Build",repo:"homelab",started:41,eta:0,overdue:true,tokens:"2.3 M",cost:"$0.55",turn:3,last:"no agent event since turn 3",ago:"14 min"},next:[{id:"ONS-48",title:"live k8s-up",est:40}]}],
-   later:[["blocked","ONS-53 seed-boot-fallback","after ONS-52"]]}]}};
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 41 GiB of 91 GiB free",slots:[
+   {fault:"GitHub refused the push: the token may not change .github/workflows",act:"Give taichi's GitHub token Workflows: Read and write, then press Done",holds:"ONS-49, ONS-50, ONS-51"},
+   {state:"working",job:{id:"ONS-52",title:"seed-security-updates",phase:"Live proof",repo:"homelab",step:"vm chain 4 of 13: seed",started:18,eta:20,tokens:"210 k",cost:"$0.05",last:"seed: converging Authentik",ago:"1 min"},next:[{id:"ONS-53",title:"seed-boot-fallback",est:17}]}],
+   later:[["held","ONS-49, 50, 51","held by the fault above; they use no sessions while held"],["you","ONS-55 proof-cadence","asks for the 3.3 proof cadence"]]}]},
+ drain:{workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 30 GiB of 62 GiB free",drain:{at:9,label:"deploy: kit a1f3c09 (agentic-orchestration#71)"},
+   notice:"Draining for the kit deploy: no new runs start on p1; the deploy applies when the two running finish, about 9 min, then the queue resumes.",slots:[
+   {state:"working",job:{id:"ONS-70",title:"health-checks",phase:"Build",repo:"sortie",started:14,eta:3,tokens:"1.1 M",cost:"$0.26",last:"go test ./internal/health",ago:"15 s"},next:[{id:"ONS-72",title:"unfinished-work-handoff",est:10}]},
+   {state:"working",job:{id:"ONS-79",title:"ui-review-sortie",phase:"Review",repo:"sortie",started:5,eta:9,tokens:"300 k",cost:"$0.07",last:"criterion 1: plan sync keeps sortie-review:ui",ago:"50 s"},next:[{id:"ONS-77",title:"control-plane-images",est:24}]},
+   {drained:true}],
+   later:[]},
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 22 GiB of 91 GiB free",slots:[
+   {state:"working",job:{id:"ONS-53",title:"seed-boot-fallback",phase:"Build",repo:"homelab",started:11,eta:6,tokens:"700 k",cost:"$0.16",last:"tests/test_seed_boot_fallback.py: 14 passed",ago:"25 s"},next:[{id:"ONS-54",title:"vm-acceptance",est:40}]},
+   {state:"working",job:{id:"ONS-48",title:"vm-upstream-mirrors",phase:"Live proof",repo:"homelab",step:"vm chain 11 of 13: k8s-verify",started:33,eta:6,tokens:"260 k",cost:"$0.06",last:"k8s-verify: pulls go through the seed",ago:"1 min"},next:[]}],
+   later:[["blocked","ONS-63 record-the-boundary","after ONS-62"]]}]},
+ dry:{workers:[
+  {name:"p1",role:"control plane and worker",host:"22 CPUs · 44 GiB of 62 GiB free",slots:[
+   {state:"working",job:{id:"ONS-77",title:"control-plane-images",phase:"Review",repo:"agentic-orchestration",started:7,eta:9,tokens:"450 k",cost:"$0.10",last:"criterion 1: images build in CI",ago:"40 s"},next:[]},
+   {dry:"Nothing approved is ready for p1."},{dry:""}],
+   later:[["you","Approve next","ONS-82 homelab-instance, ONS-83 upstream-conversations: on the plan"]]},
+  {name:"taichi",role:"worker, nested KVM",host:"32 CPUs · 70 GiB of 91 GiB free",slots:[
+   {dry:"Nothing approved is ready for taichi."},{dry:""}],
+   later:[["you","ONS-55 proof-cadence","asks you for the 3.3 proof cadence; 2 stories wait on it"],["you","Approve next","promote-fleet-to-metal: 7 stories, design questions Q1 to Q6"]]}]}};
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const dur=m=>m>=60?`${Math.floor(m/60)} h ${String(m%60).padStart(2,"0")}`:`${m} min`;
-let state="now", jobs={};
+let state="working", jobs={};
 function bars(key,job,cls){
  jobs[key]=job; const l=pct(-job.started), r=pct(0), clipped=job.started>-FROM;
  const ran=`<button class="job ${cls} ${job.eta?'ran':''}" data-job="${key}" style="left:${l}%;width:calc(${r-l}% - 1px)" title="Watch ${esc(job.id)}">
@@ -113,22 +141,25 @@ function lane(w,s,i,firstFree){
  const j=s.job, label=j?`<div class="no">Slot ${i+1}</div><div class="st ${s.state}">${esc(j.phase)} · ${s.state==="starting"?"starting, attempt "+j.attempt:s.state}</div>
   <button class="jt" data-job="${w.name}:${i}"><span class="id">${esc(j.id)}</span> <b>${esc(j.title)}</b></button>
   <div class="jm"><b>${dur(j.started)}</b> · ${j.tokens?esc(j.tokens)+' tok':'tokens not reported'} · ${j.overdue?'<b class="alarm">overdue</b>':j.eta?'<b>~'+j.eta+' min</b> left':'ETA once it starts'}</div>`
-  :`<div class="no">Slot ${i+1}</div><div class="st free">Free</div>${i===firstFree?`<p class="${w.freeNote.startsWith('4')?'alarm':''}">${esc(w.freeNote)}</p>`:''}`;
- let t="";if(s.job){t=bars(`${w.name}:${i}`,s.job,s.state==="working"?"":s.state)+nexts(s.job.eta||0,s.next||[])}
+  :s.fault?`<div class="no">Slot ${i+1}</div><div class="st stalled">Held by a fault</div><p class="alarm">${esc(s.fault)}</p>`
+  :s.drained?`<div class="no">Slot ${i+1}</div><div class="st free">Kept free</div><p>for the deploy</p>`
+  :`<div class="no">Slot ${i+1}</div><div class="st free">Free</div>${s.dry?`<p>${esc(s.dry)}</p>`:''}`;
+ let t="";if(s.job){t=bars(`${w.name}:${i}`,s.job,s.state==="working"?"":s.state)+nexts(Math.max(s.job.eta||0,w.drain?w.drain.at:0),s.next||[])}
+ if(s.fault)t=`<div class="fault"><b>Needs you:</b> ${esc(s.act)}<span>Holds ${esc(s.holds)}</span><a class="ghost" href="#">Done</a></div>`;
  return `<div class="lane"><div class="ll">${label}</div><div class="lt">${t}</div></div>`;
 }
 function worker(w){
  const busy=w.slots.filter(s=>s.job).length;
- const out=(w.outside||[]).map((j,k)=>`<div class="lane"><div class="ll"><div class="no">Not Sortie's</div><div class="st working">${esc(j.phase)} · running</div><p>${esc(j.by)}</p></div><div class="lt">${bars(`${w.name}:o${k}`,j,"outside")}</div></div>`).join("");
+ const out=([]||w.outside||[]).map((j,k)=>`<div class="lane"><div class="ll"><div class="no">Not Sortie's</div><div class="st working">${esc(j.phase)} · running</div><p>${esc(j.by)}</p></div><div class="lt">${bars(`${w.name}:o${k}`,j,"outside")}</div></div>`).join("");
  const later=w.later.length?`<div class="later"><h4>Then on ${esc(w.name)}</h4><ul>${w.later.map(([k,a,b])=>`<li class="${k}"><i></i><b>${esc(a)}</b><small>${esc(b)}</small></li>`).join("")}</ul></div>`:"";
  return `<section class="worker"><div class="wh"><h2>${esc(w.name)}</h2><span class="busy"><b>${busy}</b> of ${w.slots.length} slots busy</span><span class="host">${esc(w.role)} · ${esc(w.host)}</span></div>
-  <div class="track"><div class="nowline" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(0)/100})"></div>${w.slots.map((s,i)=>lane(w,s,i,w.slots.findIndex(x=>!x.job))).join("")}${out}</div>${later}</section>`;
+  ${w.notice?`<p class="notice">${esc(w.notice)}</p>`:''}<div class="track">${w.drain?`<div class="drain" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(w.drain.at)/100})"><span>${esc(w.drain.label)}</span></div>`:''}<div class="nowline" style="left:calc(var(--label) + (100% - var(--label)) * ${pct(0)/100})"></div>${w.slots.map((s,i)=>lane(w,s,i,w.slots.findIndex(x=>!x.job))).join("")}${out}</div>${later}</section>`;
 }
 function render(){jobs={};const d=DATA[state];
- const ticks=[[-60,"−1 h"],[-30,"−30"],[0,"NOW 11:20"],[30,"+30"],[60,"+1 h"],[90,"+90"],[120,"+2 h"]].map(([m,t])=>`<span class="tick ${m===0?'n':m===120?'end':m===-60?'first':''}" style="left:${pct(m)}%">${t}</span>`).join("");
- document.getElementById("app").innerHTML=(d.example?`<p class="example">Example data, to show running slots. <b>Now</b> is the real state.</p>`:"")+`<div class="axis">${ticks}</div>`+d.workers.map(worker).join("")+
+ const ticks=[[-60,"−1 h"],[-30,"−30"],[0,"NOW"],[30,"+30"],[60,"+1 h"],[90,"+90"],[120,"+2 h"]].map(([m,t])=>`<span class="tick ${m===0?'n':m===120?'end':m===-60?'first':''}" style="left:${pct(m)}%">${t}</span>`).join("");
+ document.getElementById("app").innerHTML=`<p class="example">Example data: how the lanes read once one Sortie runs everything and review counts as work in a slot.</p>`+`<div class="axis">${ticks}</div>`+d.workers.map(worker).join("")+
  `<div class="legend"><span><i class="sw" style="background:var(--amber-tint);border:1.5px solid var(--amber)"></i>run so far</span><span><i class="sw" style="background:repeating-linear-gradient(135deg,#fff 0 4px,rgba(201,138,26,.3) 4px 5px);border:1.5px dashed var(--amber)"></i>estimated rest</span><span><i class="sw" style="border:1.5px dashed var(--slate)"></i>next on this slot</span><span><i class="sw" style="border:1.5px solid var(--alert)"></i>stalled or overdue</span><span>Click a bar to watch or steer its agent.</span></div>`;}
-const TX=[["me","› sortie: run (attempt 1)"],["","Reading the story's spec and acceptance criteria."],["tool","read internal/orchestrator/exit.go"],["","Routing each stopped failure by its signature's class."],["tool","edit internal/orchestrator/route.go (+84 −3)"],["tool","go test ./internal/orchestrator -run Route   ok 2.1s"]];
+const TX=[["me","Example transcript: the real panel streams this agent's session."],["","Reading the story's spec and acceptance criteria."],["tool","read internal/orchestrator/exit.go"],["","Routing each stopped failure by its signature's class."],["tool","edit internal/orchestrator/route.go (+84 −3)"],["tool","go test ./internal/orchestrator -run Route   ok 2.1s"]];
 function open(key){const j=jobs[key],[w]=key.split(":"),el=document.getElementById("session");
  el.innerHTML=`<div class="sh"><div><b>${esc(j.id)} ${esc(j.title)}</b><p>${esc(w)} · ${esc(j.phase)}${j.repo?' · '+esc(j.repo):''}</p></div><button class="ghost" data-close>Close</button></div>
  <dl class="facts"><div><dt>Running</dt><dd>${dur(j.started)}</dd></div><div><dt>Tokens</dt><dd>${j.tokens?esc(j.tokens):'—'}<small>${j.tokens?esc(j.cost):'not reported'}</small></dd></div><div><dt>Finishes in</dt><dd>${j.overdue?'<span style="color:var(--alert)">overdue</span>':j.eta?'~'+j.eta+' min':'—'}<small>${j.eta?'median of past runs':''}</small></dd></div><div><dt>Last event</dt><dd>${esc(j.ago||'—')}<small>${esc(j.last)}</small></dd></div></dl>
