@@ -15,7 +15,8 @@
 #                      design D5-D12). No workbench and no Huly: it reaches
 #                      p1's Huly through the tunnel huly-tunnel.sh opens on p1.
 #                      It reads exactly two credential files, github-token and
-#                      claude-oauth-token, and falls back to nothing.
+#                      claude-oauth-token, and falls back to nothing; and,
+#                      with an operator channel, notify-credential.
 #
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
 #   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack
@@ -106,6 +107,10 @@ STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
 STAGE0_HOMELAB_SRC=$HOME/dev/homelab
 # Agents at once; each homelab machine takes 8 vCPU and 20 GiB (design D11).
 STAGE0_MAX_AGENTS=2
+# The operator's channel for every question (README.md): slack, discord, telegram or
+# webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600.
+STAGE0_NOTIFY_KIND=
+STAGE0_NOTIFY_CHAT_ID=
 EOF
   )
 fi
@@ -141,6 +146,12 @@ STAGE0_MAX_AGENTS=3
 # host's tunnel ends on, on that host's loopback.
 STAGE0_NONO_PORT=7690
 STAGE0_EDGE_WORKER_PORT=7700
+# The operator's channel for every question (README.md): slack, discord, telegram or
+# webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
+# where people reach the workbench, for the link in each question.
+STAGE0_NOTIFY_KIND=
+STAGE0_NOTIFY_CHAT_ID=
+STAGE0_WORKBENCH_PUBLIC_URL=http://127.0.0.1:8793
 EOF
   )
 fi
@@ -181,6 +192,16 @@ done
 # shellcheck source=huly-restart-policy.sh
 . "$KIT/huly-restart-policy.sh"
 smolvm_version_ok > /dev/null || die "Sortie needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
+STAGE0_NOTIFY_KIND=${STAGE0_NOTIFY_KIND:-}
+STAGE0_NOTIFY_ENTRY=$(notify_entry "$STAGE0_NOTIFY_KIND" "${STAGE0_NOTIFY_CHAT_ID:-}") || die "fix the channel in $ENV_FILE"
+export STAGE0_NOTIFY_ENTRY
+if [[ -n $STAGE0_NOTIFY_KIND ]]; then
+  notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
+else
+  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+fi
 if [[ $STAGE0_PROFILE == homelab ]]; then
   # Exactly these two files, mode 0600, and nothing to fall back to (design D10).
   for f in github-token claude-oauth-token; do

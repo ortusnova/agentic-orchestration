@@ -36,6 +36,8 @@ var stage0Values = map[string]string{
 	"STAGE0_MAX_AGENTS":     "3",
 	"STAGE0_HOMELAB_MOUNTS": "[]",
 	"STAGE0_HULY_URL":       "http://127.0.0.1:8087",
+	// No operator channel; stage0_notify_test.go renders each kind.
+	"STAGE0_NOTIFY_ENTRY": "",
 }
 
 var stage0Placeholder = regexp.MustCompile(`\$\{(STAGE0_[A-Z_]+)\}`)

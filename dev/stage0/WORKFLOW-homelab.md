@@ -47,10 +47,13 @@ github:
   api_key: $STAGE0_GITHUB_TOKEN
 
 # Comments on the story, so the operator sees in Huly why a run stopped,
-# and that Sortie merged its pull request or could not.
+# and that Sortie merged its pull request or could not. Then the operator's
+# channel, when stage0.env names one (notify-channel.sh): each question for a
+# person, with its credential read from $STAGE0_HOME/notify-credential.
 notifications:
   - kind: tracker_comment
     events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge]
+${STAGE0_NOTIFY_ENTRY}
 
 server:
   port: ${STAGE0_SORTIE_PORT}

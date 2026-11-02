@@ -14,7 +14,8 @@ dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
-dev/stage0/test-review-gate.sh        # check the review gate against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-review-gate.sh        # check the review gate and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-notify-channel.sh     # check the operator's channel and the tunnel to taichi's Sortie, with stubs
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -117,10 +118,64 @@ VMs see only smolvm placeholders.
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie reads it at each launch (the workflows' `command` source), so a refreshed login reaches the next run with no restart. The homelab profile reads only `claude-oauth-token` |
 | Huly | a login with the dev account in `stage0.env` |
+| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
+
+## The operator's channel
+
+Every question for a person reaches the workbench from both Sorties, and
+the operator's channel (spec store `agent-platform/run-supervision`, "A
+person is alerted, wherever the question is held"). The channel and its
+credential are the operator's choice: any kind Sortie's notifications have.
+
+| Where | What it sends |
+| --- | --- |
+| Both workflows, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`) and a merge that needs a person (`escalation.auto_merge`) |
+| The workbench on p1, which reads the questions of p1's Sortie and of each homelab host's | each open question within one poll, with the story, the Sortie that holds it, and a link to the project's home on `STAGE0_WORKBENCH_PUBLIC_URL`, where it is answered; then again every 4 hours while it stays open, and never once it is answered or released |
+
+To set the channel, on p1 and on each homelab host (taichi):
+
+1. Choose the kind in `$STAGE0_HOME/stage0.env`:
+
+   ```sh
+   STAGE0_NOTIFY_KIND=slack        # slack, discord, telegram or webhook
+   STAGE0_NOTIFY_CHAT_ID=          # telegram only: the chat id, or @channel
+   STAGE0_WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev   # p1 only: the links in each question
+   ```
+
+2. Write the credential, and nothing else, into `$STAGE0_HOME/notify-credential`
+   yourself; no script writes it:
+
+   ```sh
+   (umask 077; printf '%s\n' 'https://hooks.slack.com/services/…' > ~/.local/share/ortus-nova/stage0/notify-credential)
+   ```
+
+   | Kind | The file holds |
+   | --- | --- |
+   | `slack` | the incoming webhook URL |
+   | `discord` | the channel webhook URL |
+   | `telegram` | the bot's token (and `STAGE0_NOTIFY_CHAT_ID` names the chat) |
+   | `webhook` | the URL that receives Sortie's and the workbench's JSON |
+
+3. Run `dev/stage0/stage0.sh` again. It renders the entry into the
+   workflow and refuses a credential file that is missing, not yours, or
+   not mode 0600; `run-sortie.sh` and the workbench refuse it too. Sortie
+   reads it into its own environment only (`SORTIE_NOTIFY_SECRET`); the
+   workbench reads the file itself. With no `STAGE0_NOTIFY_KIND`, the
+   questions show on the workbench only, and `stage0.sh` says so.
+
+The workbench reaches a homelab host's Sortie through the tunnel
+`huly-tunnel.sh` opens ([below](#the-homelab-profile-taichi)): a local
+forward from p1's loopback (`127.0.0.1:7681` for the first host) to the
+host's Sortie, and that Sortie's control token copied to
+`$STAGE0_HOME/sorties/<name>.token` (mode 0600). Its questions say "on
+taichi's Sortie", and an answer goes to the Sortie that holds the question.
+To check it, park a homelab story on taichi: within one refresh it is first
+under **Needs a person** on the workbench, and the channel has it with the
+link.
 
 ## The stage-1 edge (p1)
 
@@ -217,12 +272,15 @@ dev/stage0/huly-tunnel.sh taichi
 # On taichi, once homelab's `make dev-host` has run there:
 STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
 dev/stage0/stage0.sh                          # later runs read it from stage0.env
+# On p1, once taichi's Sortie runs: the workbench gets its token and reads its questions.
+dev/stage0/huly-tunnel.sh taichi
 ```
 
 | Part | Where |
 | --- | --- |
 | Sortie | unit `ortus-stage0-sortie` on taichi, `127.0.0.1:7680`, workflow rendered from `WORKFLOW-homelab.md` |
 | Huly | p1's, at `http://127.0.0.1:8087` on taichi through unit `ortus-stage0-huly-tunnel@taichi` on p1. Nothing listens on the LAN, and taichi gets no SSH access to p1. While p1 sleeps, taichi's Sortie cannot reach the tracker and retries |
+| Questions | p1's workbench reads and answers the questions of taichi's Sortie through the same unit: a local forward from `127.0.0.1:7681` on p1 (the next free port from 7681 for each further host; `$STAGE0_HOME/tunnels/<host>.env`) to taichi's `127.0.0.1:7680`, and taichi's `sortie-token`, copied to `$STAGE0_HOME/sorties/taichi.token` on p1 (`sorties/taichi.env` holds the address). Its questions also reach the operator's channel from taichi's own workflow ([The operator's channel](#the-operators-channel)) |
 | homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC` (default `~/dev/homelab`); every `stage0.sh` run moves it to the latest `origin/master` |
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The workflow creates its machines with `user: builder` (the spec store's `smolvm-machine-shape` story); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. A pack no Sortie machine was created from is deleted |
 | Machines | 8 vCPU, 20 GiB, a 200 GiB disk at `/workspace`, nested KVM, `virtio-net`, homelab's guest kernel (`SMOLVM_LIB_DIR`), at most `STAGE0_MAX_AGENTS` (2) at once |
@@ -230,7 +288,8 @@ dev/stage0/stage0.sh                          # later runs read it from stage0.e
 
 Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
 and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without
-them.
+them. With `STAGE0_NOTIFY_KIND` set, a third, `notify-credential`, the
+operator's channel ([The operator's channel](#the-operators-channel)).
 
 | File | What |
 | --- | --- |

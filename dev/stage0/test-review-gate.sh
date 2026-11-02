@@ -23,8 +23,12 @@ src=$(cd "$src" && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-printf '{"Replace":{"%s":"%s"}}\n' \
-  "$src/internal/orchestrator/stage0_review_test.go" "$KIT/sortie-test/stage0_review_test.go" > "$tmp/overlay.json"
+# Every test file of sortie-test/, as if it were in the orchestrator package.
+replace=''
+for f in "$KIT"/sortie-test/*_test.go; do
+  replace+="${replace:+,}\"$src/internal/orchestrator/$(basename "$f")\":\"$f\""
+done
+printf '{"Replace":{%s}}\n' "$replace" > "$tmp/overlay.json"
 
 cd "$src"
 STAGE0_KIT=$KIT GOWORK=off go test -count=1 -overlay "$tmp/overlay.json" -run '^TestStage0_' ./internal/orchestrator "$@"
