@@ -13,17 +13,18 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
-	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/ws"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/stdio"
 )
 
 // Access is where one flow is and the token that admits a job to it.
@@ -109,8 +110,12 @@ func statusError(flow, path string, resp *http.Response) error {
 }
 
 // FetchSeed writes the workspace seed at seedPath on the bundles flow
-// to w.
+// to w; an empty seedPath is the attempt's own,
+// /jobs/{job}/attempts/{attempt}/seed.
 func (j *Job) FetchSeed(ctx context.Context, seedPath string, w io.Writer) error {
+	if seedPath == "" {
+		seedPath = protocol.SeedPath(j.ID, j.Attempt)
+	}
 	if !strings.HasPrefix(seedPath, "/") {
 		return fmt.Errorf("flows: seed_path %q is not a path", seedPath)
 	}
@@ -129,11 +134,27 @@ func (j *Job) FetchSeed(ctx context.Context, seedPath string, w io.Writer) error
 // BundleContentType is the media type of a git bundle.
 const BundleContentType = "application/x-git-bundle"
 
-// UploadResult sends the bundle of the run's commits on the bundles
-// flow.
-func (j *Job) UploadResult(ctx context.Context, bundle io.Reader) error {
+// Result is what the worker returns when the agent's session ended.
+type Result struct {
+	// Bundle is the bundle of the issue branch; nil when the machine
+	// has no issue branch, and the part is then left out.
+	Bundle io.Reader
+	// PR is the agent's .sortie/pr.json; nil leaves the part out.
+	PR []byte
+}
+
+// UploadResult returns the result on the bundles flow: POST
+// /jobs/{job}/attempts/{attempt}/result, multipart/form-data with the
+// part bundle and the optional part pr.
+func (j *Job) UploadResult(ctx context.Context, res Result) error {
 	path := protocol.ResultPath(j.ID, j.Attempt)
-	resp, err := j.request(ctx, protocol.FlowBundles, http.MethodPut, path, bundle, BundleContentType)
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		pw.CloseWithError(writeResult(mw, res))
+	}()
+	resp, err := j.request(ctx, protocol.FlowBundles, http.MethodPost, path, pr, mw.FormDataContentType())
+	_ = pr.Close()
 	if err != nil {
 		return err
 	}
@@ -144,7 +165,35 @@ func (j *Job) UploadResult(ctx context.Context, bundle io.Reader) error {
 	return nil
 }
 
-// PostUsage sends the run's token usage on the usage flow.
+func writeResult(mw *multipart.Writer, res Result) error {
+	part := func(name, file, contentType string) (io.Writer, error) {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, name, file))
+		h.Set("Content-Type", contentType)
+		return mw.CreatePart(h)
+	}
+	if res.Bundle != nil {
+		w, err := part(protocol.ResultBundlePart, "result.bundle", BundleContentType)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(w, res.Bundle); err != nil {
+			return err
+		}
+	}
+	if res.PR != nil {
+		w, err := part(protocol.ResultPRPart, "pr.json", "application/json")
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(res.PR); err != nil {
+			return err
+		}
+	}
+	return mw.Close()
+}
+
+// PostUsage sends the attempt's token totals on the usage flow.
 func (j *Job) PostUsage(ctx context.Context, u protocol.Usage) error {
 	b, err := json.Marshal(u)
 	if err != nil {
@@ -162,52 +211,20 @@ func (j *Job) PostUsage(ctx context.Context, u protocol.Usage) error {
 	return nil
 }
 
-// DialStdio opens the job's stdio stream, a WebSocket.
-func (j *Job) DialStdio(ctx context.Context) (*ws.Conn, error) {
+// DialStdio opens the job's stdio stream: GET
+// /jobs/{job}/attempts/{attempt} with Upgrade: sortie-stdio/1. A ws or
+// wss flow URL is dialled as http or https.
+func (j *Job) DialStdio(ctx context.Context) (*stdio.Conn, error) {
 	a := j.Flows[protocol.FlowStdio]
-	u := Join(a.URL, protocol.AttemptSuffix(j.ID, j.Attempt))
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	}
+	u := Join(httpScheme(a.URL), protocol.AttemptSuffix(j.ID, j.Attempt))
 	h := http.Header{}
 	if !a.Token.Empty() {
 		h.Set("Authorization", "Bearer "+a.Token.Reveal())
 	}
 	h.Set(protocol.ProtocolHeader, strconv.Itoa(protocol.Version))
-	c, err := ws.Dial(ctx, u.String(), h, j.TLS)
+	c, err := stdio.Dial(ctx, u.String(), h, j.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("flows: stdio: %w", err)
 	}
 	return c, nil
-}
-
-// StdioWriter sends each write as one binary message.
-type StdioWriter struct{ C *ws.Conn }
-
-func (w StdioWriter) Write(p []byte) (int, error) {
-	if err := w.C.WriteMessage(ws.OpBinary, p); err != nil {
-		return 0, err
-	}
-	return len(p), nil
-}
-
-// PumpStdin copies each message from c to w until c closes, then
-// closes w.
-func PumpStdin(c *ws.Conn, w io.WriteCloser) error {
-	defer func() { _ = w.Close() }()
-	for {
-		_, msg, err := c.ReadMessage()
-		if errors.Is(err, ws.ErrClosed) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if _, err := w.Write(msg); err != nil {
-			return err
-		}
-	}
 }
