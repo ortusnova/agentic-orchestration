@@ -496,3 +496,74 @@ def test_a_story_released_later_is_listed_after_the_others(store):
         early.update(state="Todo")
         settle(client)
         assert [r["identifier"] for r in client.get(f"{P}/home").json()["released"]] == ["ONS-10", "ONS-5"]
+
+
+# The home view counts what milestone work waits on (agent-platform/workbench-home) --
+
+
+RHTS, RDW = "run-homelab-through-sortie", "record-delivered-work"
+PILOT, IMAGE = f"{RHTS}/homelab-pilot", f"{RHTS}/homelab-image"
+MODEL, BY, UI = (f"{RDW}/{d}" for d in ("delivered-model", "delivered-by", "delivered-ui"))
+
+
+def waited_store(store, *, later=False, by_hand=False):
+    """homelab-pilot is M1's gate and depends on delivered-by, which depends
+    on delivered-model. Their change is in no milestone, or only in M2; or
+    every such dependency is added to M1 by hand."""
+    store.plan([(RDW, []), (RHTS, [RDW]), ("ops", [])])
+    store.change(RDW, breakdown(deliverable("delivered-model", kind="enabler"),
+                                deliverable("delivered-by", ["delivered-model"], kind="enabler"),
+                                deliverable("delivered-ui", ["delivered-by"], kind="enabler")))
+    store.change(RHTS, breakdown(deliverable("homelab-image", kind="enabler"),
+                                 deliverable("homelab-pilot", ["homelab-image", BY], kind="enabler")))
+    store.change("ops", breakdown(deliverable("rack", kind="enabler")))
+    m1 = [{"change": RHTS}] + ([{"story": BY}, {"story": MODEL}] if by_hand else [])
+    m2 = [{"change": "ops"}] + ([{"change": RDW}] if later else [])
+    store.milestones([milestone("m1", m1, gate=PILOT, title="M1: pilot"),
+                      milestone("m2", m2, ["m1"], goal=True, title="M2: metal")])
+
+
+def test_a_dependency_outside_every_milestone_counts_with_the_milestone_that_waits_on_it(store):
+    waited_store(store)
+    home = home_of(store, {MODEL: "ready"}, done={IMAGE})
+    m1, m2 = home["milestones"]
+    # Through delivered-by, M1 waits on delivered-model too; nothing in M1 waits on delivered-ui.
+    assert m1["waits_on"] == [MODEL, BY]
+    assert m1["progress"]["stories"] == {"done": 1, "total": 4}
+    assert m1["changes"] == [RHTS, RDW]
+    assert m2["waits_on"] == [] and m2["progress"]["stories"]["total"] == 1
+    items = items_by_key(home)
+    by = items[BY]
+    assert by["milestone"] == "m1" and by["change"] == RDW and by["label"] == "delivered-by"
+    assert by["reason"] == "not_approved" and by["column"] == "approve"
+    assert UI not in items
+    # It lies on the critical path to M1's gate, named with its own change.
+    path = home["critical_path"]["stories"]
+    assert [s["key"] for s in path] == [MODEL, BY, PILOT]
+    assert path[1]["change"] == RDW and path[1]["waited_on"] and not path[2]["waited_on"]
+    assert BY in {b["key"] for b in home["timeline"]["spans"][0]["blockers"]}
+
+
+def test_a_dependency_in_a_later_milestone_counts_in_the_earlier_one_only(store):
+    waited_store(store, later=True)
+    home = home_of(store, {MODEL: "ready", UI: "ready"})
+    m1, m2 = home["milestones"]
+    assert m1["waits_on"] == [MODEL, BY] and m1["progress"]["stories"]["total"] == 4
+    # M2 keeps its own story and delivered-ui, not what M1 counts.
+    assert m2["waits_on"] == [] and m2["progress"]["stories"]["total"] == 2
+    assert items_by_key(home)[BY]["milestone"] == "m1"
+
+
+def test_the_totals_equal_those_of_the_plan_with_each_dependency_added_by_hand(make_store):
+    for later in (False, True):
+        auto, hand = make_store(f"auto-{later}"), make_store(f"hand-{later}")
+        waited_store(auto, later=later)
+        waited_store(hand, later=later, by_hand=True)
+        a, h = home_of(auto, done={IMAGE, MODEL}), home_of(hand, done={IMAGE, MODEL})
+        assert [m["waits_on"] for m in h["milestones"]] == [[], []]
+        assert [(m["progress"], m["changes"], m["done"]) for m in a["milestones"]] == \
+            [(m["progress"], m["changes"], m["done"]) for m in h["milestones"]]
+        assert a["critical_path"]["stories"] == [{**s, "waited_on": s["key"] == BY} for s in h["critical_path"]["stories"]]
+        assert a["timeline"] == h["timeline"]
+        assert [(i["key"], i["milestone"], i["rank"]) for i in a["not_ready"]] == \
+            [(i["key"], i["milestone"], i["rank"]) for i in h["not_ready"]]

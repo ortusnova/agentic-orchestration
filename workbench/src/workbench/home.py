@@ -508,7 +508,8 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
             "milestone": nxt["id"], "gate": nxt.get("gate"),
             "stories": [{"key": k, "label": k.split("/", 1)[1], "title": (by_key.get(k) or {}).get("title") or k,
                          "change": k.split("/", 1)[0], "needs": reason_of.get(k),
-                         "running": k in running_keys, "estimate": estimates.get(k)}
+                         "running": k in running_keys, "estimate": estimates.get(k),
+                         "waited_on": k in nxt["waits_on"]}
                         for k in out["critical_path"]],
         }
     milestones = []
@@ -517,7 +518,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
             "id": m["id"], "title": m["title"], "short": _short(m), "goal": m["id"] == out["goal"],
             "next": m["id"] == out["next"], "done": m["done"], "implicit": m["implicit"],
             "depends_on": m["depends_on"], "gate": m.get("gate"), "changes": m["changes"],
-            "progress": m["progress"],
+            "waits_on": m["waits_on"], "progress": m["progress"],
         })
     return {
         **base,
