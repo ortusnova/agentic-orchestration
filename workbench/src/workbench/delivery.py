@@ -83,6 +83,39 @@ class GitHubClient:
             return {**out, "state": "closed", "url": url, "reason": "it was closed without merging"}
         return {**out, "state": "unknown", "url": url, "reason": f"GitHub reports the state {body.get('state')!r}"}
 
+    async def ensure_pull(self, owner: str, repo: str, head: str, base: str, title: str, body: str) -> dict[str, Any]:
+        """The pull request from branch ``head`` into ``base``: the one GitHub
+        has, open or closed, or else a new one. Returns its ``url``,
+        ``number``, and whether it was ``created``; raises GitHubError."""
+        path = f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}/pulls"
+        found = await self._call("GET", path, params={"head": f"{owner}:{head}", "state": "all", "per_page": "1"})
+        if isinstance(found, list) and found:
+            return {"url": found[0].get("html_url"), "number": found[0].get("number"), "created": False}
+        made = await self._call("POST", path, json={"title": title, "head": head, "base": base, "body": body})
+        if not isinstance(made, dict):
+            raise GitHubError("GitHub answered the new pull request with no object")
+        return {"url": made.get("html_url"), "number": made.get("number"), "created": True}
+
+    async def _call(self, method: str, path: str, **kw: Any) -> Any:
+        try:
+            r = await self._client.request(method, path, **kw)
+        except httpx.HTTPError as exc:
+            raise GitHubError(f"GitHub is unreachable: {str(exc) or type(exc).__name__}") from exc
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if r.status_code >= 400:
+            message = (body.get("message") if isinstance(body, dict) else None) or r.reason_phrase
+            raise GitHubError(f"GitHub answered {r.status_code}: {message}")
+        if body is None:
+            raise GitHubError(f"GitHub answered {r.status_code} without JSON")
+        return body
+
+
+class GitHubError(Exception):
+    pass
+
 
 def commit_url(pull_html_url: str, sha: str) -> str | None:
     """The merge commit's page, beside the pull request's: .../owner/repo/commit/<sha>."""

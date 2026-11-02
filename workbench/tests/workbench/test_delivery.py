@@ -310,7 +310,7 @@ def test_the_store_schema_that_predates_it_is_upgraded(store):
     assert {e.deliverable for e in errs} == {"homelab-image", "taichi-instance"}
     assert all("unknown field delivered_by" in e.message for e in errs)
 
-    assert upgrade_schemas(store.root) == ["openspec/schemas/planning/breakdown.schema.json"]
+    assert upgrade_schemas(store.root).paths == ["openspec/schemas/planning/breakdown.schema.json"]
     assert planlib.validate(store.root, show=specs_on_disk).ok
 
 

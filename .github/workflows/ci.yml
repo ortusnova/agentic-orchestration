@@ -29,10 +29,15 @@ jobs:
       fail-fast: false
       matrix:
         module: [acp-broker, smol-builder, worker-daemon]
+    env:
+      # The worker daemon's end-to-end tests build Sortie from the sortie/
+      # submodule; with it checked out they must run, not skip.
+      WORKER_DAEMON_E2E_NO_SKIP: ${{ matrix.module == 'worker-daemon' && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          submodules: ${{ matrix.module == 'worker-daemon' }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work

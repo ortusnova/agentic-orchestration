@@ -24,6 +24,7 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/stdio"
 )
 
 // Guest loopback ports of the forwarders.
@@ -248,8 +249,11 @@ func (j *job) execute(dir string) (string, string) {
 	if ctx.Err() != nil {
 		return failed("%v", context.Cause(ctx))
 	}
-	exportNote, exportErr := j.export(ctx, m, share, seed)
+	// Usage goes before the result: once the control plane has the
+	// result it finishes the attempt, and a later report could find the
+	// attempt's flows closed. The result goes before the report.
 	j.reportUsage(ctx, m)
+	exportNote, exportErr := j.returnResult(ctx, m, share, seed)
 	switch {
 	case runErr != nil:
 		return failed("agent: %v", runErr)
@@ -360,6 +364,9 @@ func (j *job) seedWorkspace(ctx context.Context, m machine.Machine) (seed, error
 		{"git", "-C", ws, "fetch", "-q", "--update-head-ok", bundle, "+refs/*:refs/*"},
 		{"git", "-C", ws, "symbolic-ref", "HEAD", "refs/heads/" + s.Branch},
 		{"git", "-C", ws, "reset", "-q", "--hard"},
+		// The agent's control directory, with .sortie/pr.json, is
+		// returned beside the bundle, never committed by git add -A.
+		{"sh", "-c", `mkdir -p "$1/.git/info" && echo /.sortie >> "$1/.git/info/exclude"`, "sh", ws},
 	} {
 		if _, err := j.guest(ctx, m, argv...); err != nil {
 			return seed{}, err
@@ -386,8 +393,9 @@ func (j *job) agentEnv(m machine.Machine) []string {
 	return env
 }
 
-// runAgent runs the agent with its standard input and output on the
-// stdio flow, until it exits.
+// runAgent runs the agent with its standard streams on the stdio flow
+// until it exits, and then sends its exit status, the stream's last
+// frame.
 func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 	run := j.offer.Run
 	if run.Command == "" {
@@ -399,12 +407,18 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 	}
 	defer func() { _ = conn.Close() }()
 	stdin, stdinW := io.Pipe()
-	go func() { _ = flows.PumpStdin(conn, stdinW) }()
+	go func() {
+		if err := pumpStdin(conn, stdinW); err != nil && ctx.Err() == nil {
+			j.log.Warn("stdio input ended", slog.String("error", err.Error()))
+		}
+	}()
 	var stderr bytes.Buffer
 	j.log.Info("agent starting", slog.String("command", run.Command))
 	code, err := m.Exec(ctx, machine.Exec{
 		Argv: append([]string{run.Command}, run.Args...), Env: j.agentEnv(m), Workdir: machine.GuestWorkspace,
-		Stdin: stdin, Stdout: flows.StdioWriter{C: conn}, Stderr: &limited{w: &stderr, n: 64 << 10},
+		Stdin:  stdin,
+		Stdout: stdio.Writer{C: conn, Type: stdio.Stdout},
+		Stderr: io.MultiWriter(&limited{w: &stderr, n: 64 << 10}, lenient{stdio.Writer{C: conn, Type: stdio.Stderr}}),
 	})
 	_ = stdin.Close()
 	if err == nil {
@@ -413,35 +427,131 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 	if code != 0 && stderr.Len() > 0 {
 		j.log.Info("agent standard error", slog.String("tail", tailString(stderr.String(), 2048)))
 	}
+	if ctx.Err() == nil {
+		if xerr := conn.WriteFrame(stdio.Exit, stdio.ExitPayload(code)); xerr != nil {
+			j.log.Warn("the agent's exit did not reach the stdio flow", slog.String("error", xerr.Error()))
+		}
+	}
 	return code, err
 }
 
-// export returns the commits the run added to the seeded branch as a
-// bundle on the bundles flow.
-func (j *job) export(ctx context.Context, m machine.Machine, share string, s seed) (string, error) {
+// pumpStdin feeds the agent's standard input from the stream's I frames
+// and closes it at C, at the stream's end, or at a frame the control
+// plane does not send.
+func pumpStdin(c *stdio.Conn, w *io.PipeWriter) error {
+	for {
+		typ, payload, err := c.ReadFrame()
+		switch {
+		case errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed):
+			return w.Close()
+		case err != nil:
+			w.CloseWithError(err)
+			return err
+		case typ == stdio.StdinClosed:
+			return w.Close()
+		case typ != stdio.Stdin:
+			err := fmt.Errorf("unexpected stdio frame type %q from the control plane", typ)
+			w.CloseWithError(err)
+			return err
+		}
+		if _, err := w.Write(payload); err != nil {
+			return nil
+		}
+	}
+}
+
+// lenient drops what its writer refuses, so that the loss of standard
+// error on the stream does not stop the agent's diagnostics in the log.
+type lenient struct{ w io.Writer }
+
+func (l lenient) Write(p []byte) (int, error) {
+	_, _ = l.w.Write(p)
+	return len(p), nil
+}
+
+// guestPRFile is the agent's pull request suggestion, returned beside
+// the bundle.
+const guestPRFile = machine.GuestWorkspace + "/.sortie/pr.json"
+
+// returnResult returns the issue branch on the bundles flow: a bundle of
+// refs/heads/<branch> that leaves out the seed's commits (a branch with
+// nothing new is bundled as its tip alone), and the agent's
+// .sortie/pr.json beside it when there is one. The bundle part is left
+// out when the machine has no issue branch.
+func (j *job) returnResult(ctx context.Context, m machine.Machine, share string, s seed) (string, error) {
 	ws := machine.GuestWorkspace
-	out, err := j.guest(ctx, m, "git", "-C", ws, "rev-parse", "--verify", "refs/heads/"+s.Branch)
+	var res flows.Result
+	note := ""
+	var out bytes.Buffer
+	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"git", "-C", ws, "rev-parse", "-q", "--verify", "refs/heads/" + s.Branch + "^{commit}"},
+		Stdout: &out, Stderr: io.Discard})
+	if err != nil {
+		return "", fmt.Errorf("git: %w", err)
+	}
+	tip := strings.TrimSpace(out.String())
+	switch {
+	case code != 0 || tip == "":
+		j.log.Info("the machine has no issue branch; returning no bundle", slog.String("branch", s.Branch))
+		note = "no issue branch " + s.Branch + " in the machine"
+	default:
+		exclude := s.Tips
+		note = "returned the new commits of " + s.Branch
+		if tip == s.Tip {
+			parents, err := j.guest(ctx, m, "git", "-C", ws, "rev-parse", tip+"^@")
+			if err != nil {
+				return "", err
+			}
+			exclude = strings.Fields(parents)
+			note = "no new commits on " + s.Branch + "; returned its tip"
+		}
+		argv := []string{"git", "-C", ws, "bundle", "create", "-q", machine.GuestShare + "/result.bundle", "refs/heads/" + s.Branch}
+		if len(exclude) > 0 {
+			argv = append(append(argv, "--not"), exclude...)
+		}
+		if _, err := j.guest(ctx, m, argv...); err != nil {
+			return "", err
+		}
+		f, err := os.Open(filepath.Join(share, "result.bundle")) // #nosec G304 -- the job's own directory
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = f.Close() }()
+		res.Bundle = f
+	}
+	pr, err := j.readPR(ctx, m)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(out) == s.Tip {
-		j.log.Info("no new commits to export", slog.String("branch", s.Branch))
-		return "no new commits on " + s.Branch, nil
-	}
-	argv := []string{"git", "-C", ws, "bundle", "create", "-q", machine.GuestShare + "/result.bundle", "refs/heads/" + s.Branch, "--not"}
-	if _, err := j.guest(ctx, m, append(argv, s.Tips...)...); err != nil {
+	res.PR = pr
+	if err := j.flows.UploadResult(ctx, res); err != nil {
 		return "", err
 	}
-	f, err := os.Open(filepath.Join(share, "result.bundle")) // #nosec G304 -- the job's own directory
-	if err != nil {
-		return "", err
+	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", res.Bundle != nil), slog.Bool("pr", pr != nil))
+	if pr != nil {
+		note += ", with .sortie/pr.json"
 	}
-	defer func() { _ = f.Close() }()
-	if err := j.flows.UploadResult(ctx, f); err != nil {
-		return "", err
+	return note, nil
+}
+
+// readPR returns the agent's .sortie/pr.json, or nil when it wrote
+// none. One over 64 KiB fails the return, as the control plane would
+// refuse it.
+func (j *job) readPR(ctx context.Context, m machine.Machine) ([]byte, error) {
+	var out bytes.Buffer
+	script := `test -f "$1" || exit 3; exec cat "$1"`
+	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestPRFile},
+		Stdout: &limited{w: &out, n: protocol.MaxPRFile + 1}, Stderr: io.Discard})
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("reading .sortie/pr.json: %w", err)
+	case code == 3:
+		return nil, nil
+	case code != 0:
+		return nil, fmt.Errorf("reading .sortie/pr.json: exit status %d", code)
+	case out.Len() > protocol.MaxPRFile:
+		return nil, errors.New(".sortie/pr.json exceeds 64 KiB")
 	}
-	j.log.Info("bundle exported", slog.String("branch", s.Branch))
-	return "exported the new commits of " + s.Branch, nil
+	return out.Bytes(), nil
 }
 
 // usageAnswer is what a usage command prints.
@@ -450,23 +560,21 @@ type usageAnswer struct {
 	OutputTokens     *int64 `json:"output_tokens"`
 	CacheReadTokens  *int64 `json:"cache_read_tokens"`
 	CacheWriteTokens *int64 `json:"cache_write_tokens"`
+	Model            string `json:"model"`
 }
 
 // readUsage runs the agent kind's usage command and returns the usage
-// the daemon reports. A run that made model requests and whose amount
-// cannot be read reports spend with the amount unknown, never zero.
-func (j *job) readUsage(ctx context.Context, m machine.Machine) protocol.Usage {
-	u := protocol.Usage{Job: j.id(), Attempt: j.attempt(), ModelRequests: j.egress.Requests()}
-	unknown := func(why string) protocol.Usage {
-		if u.ModelRequests == 0 {
-			zero := int64(0)
-			u.SpendOccurred, u.AmountKnown = false, true
-			u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens = &zero, &zero, &zero, &zero
-			u.Reason = "no model requests; " + why
-			return u
+// the daemon reports and why it is what it is. A run that made model
+// requests and whose amount cannot be read reports "measured": false:
+// spend occurred, amount unknown, never zero. A run that made no model
+// request and whose amount cannot be read spent nothing: zero, measured.
+func (j *job) readUsage(ctx context.Context, m machine.Machine) (protocol.Usage, string) {
+	requests := j.egress.Requests()
+	unknown := func(why string) (protocol.Usage, string) {
+		if requests == 0 {
+			return protocol.Usage{Measured: true}, "no model requests; " + why
 		}
-		u.SpendOccurred, u.AmountKnown, u.Reason = true, false, why
-		return u
+		return protocol.Usage{Measured: false}, why
 	}
 	argv := j.d.cfg.UsageCommand(j.offer.Run.Command)
 	if len(argv) == 0 {
@@ -485,19 +593,29 @@ func (j *job) readUsage(ctx context.Context, m machine.Machine) protocol.Usage {
 	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &a); err != nil || a.InputTokens == nil || a.OutputTokens == nil {
 		return unknown("usage command printed no input_tokens and output_tokens")
 	}
-	u.AmountKnown = true
-	u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens = a.InputTokens, a.OutputTokens, a.CacheReadTokens, a.CacheWriteTokens
-	u.SpendOccurred = *a.InputTokens > 0 || *a.OutputTokens > 0 || u.ModelRequests > 0
-	return u
+	u := protocol.Usage{InputTokens: *a.InputTokens, OutputTokens: *a.OutputTokens, Model: a.Model, Measured: true}
+	if a.CacheReadTokens != nil {
+		u.CacheReadTokens = *a.CacheReadTokens
+	}
+	if a.CacheWriteTokens != nil {
+		u.CacheWriteTokens = *a.CacheWriteTokens
+	}
+	for _, n := range []int64{u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens} {
+		if n < 0 {
+			return unknown("usage command printed a negative count")
+		}
+	}
+	return u, "read by the usage command"
 }
 
 func (j *job) reportUsage(ctx context.Context, m machine.Machine) {
-	u := j.readUsage(ctx, m)
+	u, why := j.readUsage(ctx, m)
 	if err := j.flows.PostUsage(ctx, u); err != nil {
 		j.log.Error("usage not delivered", slog.String("error", err.Error()))
 		return
 	}
-	j.log.Info("usage reported", slog.Bool("spend_occurred", u.SpendOccurred), slog.Bool("amount_known", u.AmountKnown), slog.Int64("model_requests", u.ModelRequests))
+	j.log.Info("usage reported", slog.Bool("measured", u.Measured), slog.Int64("input_tokens", u.InputTokens),
+		slog.Int64("output_tokens", u.OutputTokens), slog.Int64("model_requests", j.egress.Requests()), slog.String("why", why))
 }
 
 // limited keeps the first n bytes written and drops the rest.
