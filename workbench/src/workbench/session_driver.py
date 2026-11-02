@@ -241,6 +241,10 @@ class Driver:
         self.options = options
         public = public_options(options)
         write_json(self.runtime / "config.json", {"options": public, "ready": self.ready.is_set()})
+        if not self.ready.is_set():
+            # While the choices are applied the agent passes through a new
+            # model's default thinking level: the session shows neither yet.
+            return
         current = {o["category"]: o["currentValue"] for o in public}
         self.save(model=current.get(MODEL), thought_level=current.get(THOUGHT_LEVEL))
 
