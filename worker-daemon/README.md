@@ -13,7 +13,7 @@ One static binary per platform: `linux/amd64`, `linux/arm64`,
 ```sh
 make build          # bin/worker-daemon
 make cross          # one binary per platform
-make test           # every scenario, against the fake control plane
+make test           # every scenario, against the fake control plane and Sortie's data plane
 make lint
 worker-daemon version
 worker-daemon run -config /etc/worker-daemon/config.json
@@ -34,4 +34,4 @@ does, and the flows on the wire.
 | `internal/protocol` | The wire types. |
 | `internal/secret` | A token type that never prints. |
 | `internal/hostinfo` | Memory, disk, KVM and nested virtualization, per OS. |
-| `internal/ws` | The WebSocket the stdio flow uses. |
+| `internal/stdio` | The framed stream of the stdio flow (`sortie-stdio/1`). |

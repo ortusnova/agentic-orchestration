@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,8 +80,12 @@ func TestAgainstAFakeControlPlane(t *testing.T) {
 }
 
 // Scenario: One job end to end. The fake receives the agent's stdio on
-// stdio, its model traffic on egress, its tool calls on mcp, and a
-// bundle on bundles, before the report.
+// stdio, its model traffic on egress, its tool calls on mcp, and the
+// result on bundles, before the report.
+//
+// Scenario: One attempt over the wire, against the fake: the seed, the
+// agent's stdio in frames ending with X, usage, then the result with
+// pr, each with its own token, and the report last.
 func TestOneJobEndToEnd(t *testing.T) {
 	h := newHarness(t, defaults())
 	h.offer("ONS-7", 1, nil)
@@ -88,14 +93,42 @@ func TestOneJobEndToEnd(t *testing.T) {
 
 	ev := h.fake.Events()
 	report := indexOf(ev, 0, is("report", "ONS-7", 1))
-	for _, kind := range []string{"seed", "stdio", "stdio-out", "egress", "mcp", "bundle", "usage"} {
+	for _, kind := range []string{"seed", "stdio", "stdio-O", "stdio-E", "stdio-X", "egress", "mcp", "usage", "result"} {
 		if i := indexOf(ev, 0, is(kind, "ONS-7", 1)); i < 0 || i > report {
 			t.Errorf("no %s event for ONS-7 before the report: %s", kind, h.describe())
+		}
+	}
+	// X is the stream's last frame, and the result comes after it.
+	exit := indexOf(ev, 0, is("stdio-X", "ONS-7", 1))
+	for i, e := range ev {
+		if e.Job == "ONS-7" && (e.Kind == "stdio-O" || e.Kind == "stdio-E") && i > exit {
+			t.Errorf("a %s frame came after X: %s", e.Kind, h.describe())
+		}
+	}
+	if r := indexOf(ev, 0, is("result", "ONS-7", 1)); r < exit {
+		t.Errorf("the result came before the agent's exit: %s", h.describe())
+	}
+	if code, ok := h.fake.Exit("ONS-7", 1); !ok || code != 0 || h.fake.StreamBroken("ONS-7", 1) {
+		t.Errorf("exit = %d, %v; broken = %v; want X with status 0", code, ok, h.fake.StreamBroken("ONS-7", 1))
+	}
+	for _, e := range ev {
+		if e.Kind == "bad-protocol" || ((e.Kind == "seed" || e.Kind == "usage" || e.Kind == "result" || e.Kind == "stdio" || e.Kind == "bundles") && e.Status == 401) {
+			t.Errorf("a flow request was refused: %s %d", e.Kind, e.Status)
 		}
 	}
 	out := h.fake.StdioOutput("ONS-7", 1)
 	if !strings.Contains(out, "agent got: hello agent\n") || !strings.Contains(out, "done\n") {
 		t.Errorf("stdio output = %q, want the agent's answer to the prompt", out)
+	}
+	if e := h.fake.StdioError("ONS-7", 1); !strings.Contains(e, "agent: working") {
+		t.Errorf("stdio error = %q, want the agent's standard error in E frames", e)
+	}
+	res, ok := h.fake.Result("ONS-7", 1)
+	if !ok || !strings.HasPrefix(res.ContentType, "multipart/form-data") {
+		t.Fatalf("result = %+v, %v; want a multipart result", res, ok)
+	}
+	if string(res.PR) != testPR {
+		t.Errorf("pr part = %q, want the agent's .sortie/pr.json", res.PR)
 	}
 	var sawModel bool
 	for _, e := range ev {
@@ -114,7 +147,7 @@ func TestOneJobEndToEnd(t *testing.T) {
 	// The bundle holds the agent's commit on the issue branch, on top of
 	// the seed.
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "result.bundle"), h.fake.Result("ONS-7", 1), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "result.bundle"), res.Bundle, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	heads, err := exec.Command("git", "bundle", "list-heads", filepath.Join(dir, "result.bundle")).CombinedOutput()
@@ -124,13 +157,131 @@ func TestOneJobEndToEnd(t *testing.T) {
 	if lines := strings.Split(strings.TrimSpace(string(heads)), "\n"); len(lines) != 1 || !strings.HasSuffix(lines[0], " refs/heads/sortie/ONS-7") {
 		t.Errorf("bundle heads = %q, want only refs/heads/sortie/ONS-7", heads)
 	}
+	if prereqs := bundlePrerequisites(res.Bundle); len(prereqs) == 0 {
+		t.Error("the bundle carries the seed's commits; want them left out")
+	}
 	ws := h.machine("ONS-7", 1).HostPath("/workspace")
 	log, err := exec.Command("git", "-C", ws, "log", "--format=%s", "sortie/ONS-7").Output()
 	if err != nil || string(log) != "agent work\nseed\n" {
 		t.Errorf("workspace log = %q, %v; want the agent's commit on the seed", log, err)
 	}
+	files, err := exec.Command("git", "-C", ws, "show", "--name-only", "--format=", "sortie/ONS-7").Output()
+	if err != nil || !strings.Contains(string(files), "work.txt") || strings.Contains(string(files), ".sortie") {
+		t.Errorf("the agent's commit holds %q, %v; want work.txt, never .sortie", files, err)
+	}
 	if !h.machine("ONS-7", 1).Deleted() {
 		t.Error("the machine was not deleted after the report")
+	}
+}
+
+// bundlePrerequisites returns the commits a bundle needs and leaves
+// out: the header lines that start with "-".
+func bundlePrerequisites(b []byte) []string {
+	head, _, _ := bytes.Cut(b, []byte("\n\n"))
+	var out []string
+	for line := range strings.SplitSeq(string(head), "\n") {
+		if sha, ok := strings.CutPrefix(line, "-"); ok {
+			out = append(out, strings.Fields(sha)[0])
+		}
+	}
+	return out
+}
+
+func bundleHeads(t *testing.T, b []byte) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "b.bundle")
+	if err := os.WriteFile(f, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "bundle", "list-heads", f).CombinedOutput()
+	if err != nil {
+		t.Fatalf("list-heads: %v: %s", err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func resultOf(t *testing.T, h *harness) fakecp.Result {
+	t.Helper()
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	ev := h.fake.Events()
+	if r, rep := indexOf(ev, 0, is("result", "ONS-7", 1)), indexOf(ev, 0, is("report", "ONS-7", 1)); r < 0 || r > rep {
+		t.Fatalf("want the result before the report: %s", h.describe())
+	}
+	res, ok := h.fake.Result("ONS-7", 1)
+	if !ok {
+		t.Fatalf("no result: %s", h.describe())
+	}
+	return res
+}
+
+// A run that adds no commit returns the issue branch's tip alone, the
+// smallest bundle git makes of it.
+func TestResultWithoutNewCommits(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, map[string]string{"AGENT_GIT": "none"})
+	res := resultOf(t, h)
+	ws := h.machine("ONS-7", 1).HostPath("/workspace")
+	tip, err := exec.Command("git", "-C", ws, "rev-parse", "sortie/ONS-7").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heads := bundleHeads(t, res.Bundle); heads != strings.TrimSpace(string(tip))+" refs/heads/sortie/ONS-7" {
+		t.Errorf("bundle heads = %q, want the seed's tip of refs/heads/sortie/ONS-7", heads)
+	}
+	if string(res.PR) != testPR {
+		t.Errorf("pr part = %q", res.PR)
+	}
+	if r := h.reports("ONS-7", 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded {
+		t.Errorf("reports = %+v, want one success", r)
+	}
+}
+
+// The bundle part is left out when the machine has no issue branch; the
+// result is still returned, with pr.
+func TestResultWithoutIssueBranch(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, map[string]string{"AGENT_GIT": "no-branch"})
+	res := resultOf(t, h)
+	if res.Bundle != nil {
+		t.Errorf("the result carries a bundle of %d bytes; want the part left out", len(res.Bundle))
+	}
+	if string(res.PR) != testPR {
+		t.Errorf("pr part = %q", res.PR)
+	}
+}
+
+// The X frame carries the agent's exit status, a failure too, and the
+// result is still returned before the failure report.
+func TestExitStatusOnTheStream(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, map[string]string{"AGENT_EXIT": "9"})
+	resultOf(t, h)
+	if code, ok := h.fake.Exit("ONS-7", 1); !ok || code != 9 {
+		t.Errorf("exit = %d, %v; want X with status 9", code, ok)
+	}
+	if r := h.reports("ONS-7", 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeFailed || !strings.Contains(r[0].Reason, "status 9") {
+		t.Errorf("reports = %+v, want one failure naming status 9", r)
+	}
+}
+
+// I frames are the agent's standard input and C closes it: an agent that
+// copies its input until the end exits once C comes.
+func TestInputClosedEndsTheInput(t *testing.T) {
+	h := newHarness(t, defaults())
+	self, _ := os.Executable()
+	h.fake.Offer(fakecp.Job{
+		ID: "ONS-7", Attempt: 1,
+		Requires: protocol.Requires{CPU: 1, MemGiB: 1, DiskGiB: 1},
+		Run:      protocol.Run{Backend: "smolvm", Image: testImage, Command: self, Args: []string{"fake-echo"}, Env: map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null"}},
+		Seed:     seedBundle(t, "sortie/ONS-7"), StdioInput: []string{"one\n", "two\n", strings.Repeat("x", 3<<20) + "\n"},
+	})
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	want := "one\ntwo\n" + strings.Repeat("x", 3<<20) + "\n"
+	if out := h.fake.StdioOutput("ONS-7", 1); out != want {
+		t.Errorf("stdio output is %d bytes, want the %d bytes of input back", len(out), len(want))
+	}
+	if code, ok := h.fake.Exit("ONS-7", 1); !ok || code != 0 {
+		t.Errorf("exit = %d, %v; want X with status 0", code, ok)
 	}
 }
 
@@ -227,7 +378,7 @@ func TestTheGuestSeesNoJobToken(t *testing.T) {
 				tokens = t
 			}
 		}
-		return tokens != nil && h.fake.Count("stdio-out", "ONS-7", 1) > 0
+		return tokens != nil && h.fake.Count("stdio-O", "ONS-7", 1) > 0
 	})
 	// While the job runs: the daemon's state directory, sockets aside.
 	stateFiles := readTree(t, h.cfg.StateDir)
@@ -311,8 +462,8 @@ func TestALostLeaseStopsTheJob(t *testing.T) {
 	if n := h.fake.Count("report", "ONS-7", 1); n != 0 {
 		t.Errorf("sent %d reports for attempt 1 after losing its lease", n)
 	}
-	if n := h.fake.Count("bundle", "ONS-7", 1) + h.fake.Count("usage", "ONS-7", 1); n != 0 {
-		t.Errorf("sent %d bundle or usage requests after losing the lease", n)
+	if n := h.fake.Count("result", "ONS-7", 1) + h.fake.Count("usage", "ONS-7", 1); n != 0 {
+		t.Errorf("sent %d result or usage requests after losing the lease", n)
 	}
 }
 
@@ -326,20 +477,50 @@ func usageOf(t *testing.T, h *harness) protocol.Usage {
 	return u
 }
 
-// Scenario: Usage unreadable. The usage command fails after a run that
-// made model requests: the daemon reports spend occurred with the
-// amount unknown.
+// usageBody returns the JSON object the worker posted on usage.
+func usageBody(t *testing.T, h *harness) map[string]any {
+	t.Helper()
+	for _, e := range h.fake.Events() {
+		if e.Kind == "usage" && e.Job == "ONS-7" && e.Status == 204 {
+			var m map[string]any
+			if err := json.Unmarshal(e.Body, &m); err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}
+	}
+	t.Fatalf("no usage reported: %s", h.describe())
+	return nil
+}
+
+// The usage body has exactly the fields the usage flow takes.
+func TestUsageBodyFields(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, nil)
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	var keys []string
+	for k := range usageBody(t, h) {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	want := []string{"cache_read_tokens", "cache_write_tokens", "input_tokens", "measured", "model", "output_tokens"}
+	if !slices.Equal(keys, want) {
+		t.Errorf("usage fields = %v, want %v", keys, want)
+	}
+}
+
+// Scenario: Unknown amount. A run made model requests and its usage
+// cannot be read: the worker posts "measured": false.
 func TestUsageUnreadable(t *testing.T) {
 	for _, mode := range []string{"fail", "garbled"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t, defaults())
 			h.offer("ONS-7", 1, map[string]string{"USAGE_MODE": mode})
-			u := usageOf(t, h)
-			if !u.SpendOccurred || u.AmountKnown || u.ModelRequests < 1 {
-				t.Errorf("usage = %+v, want spend occurred, amount unknown", u)
+			if u := usageOf(t, h); u.Measured {
+				t.Errorf("usage = %+v, want measured false: spend occurred, amount unknown", u)
 			}
-			if u.InputTokens != nil || u.OutputTokens != nil {
-				t.Errorf("usage carries token amounts %v %v; want none, never zero", u.InputTokens, u.OutputTokens)
+			if m := usageBody(t, h); m["measured"] != false {
+				t.Errorf("usage body = %v, want \"measured\": false", m)
 			}
 		})
 	}
@@ -348,19 +529,36 @@ func TestUsageUnreadable(t *testing.T) {
 		s.noUsage = true
 		h := newHarness(t, s)
 		h.offer("ONS-7", 1, nil)
-		if u := usageOf(t, h); !u.SpendOccurred || u.AmountKnown {
-			t.Errorf("usage = %+v, want spend occurred, amount unknown", u)
+		if u := usageOf(t, h); u.Measured {
+			t.Errorf("usage = %+v, want measured false", u)
 		}
 	})
+}
+
+// A run that made no model request and whose usage cannot be read spent
+// nothing: zero, measured.
+func TestUsageNoModelRequests(t *testing.T) {
+	s := defaults()
+	s.noUsage = true
+	h := newHarness(t, s)
+	self, _ := os.Executable()
+	h.fake.Offer(fakecp.Job{
+		ID: "ONS-7", Attempt: 1,
+		Requires: protocol.Requires{CPU: 1, MemGiB: 1, DiskGiB: 1},
+		Run:      protocol.Run{Backend: "smolvm", Image: testImage, Command: self, Args: []string{"fake-echo"}, Env: map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null"}},
+		Seed:     seedBundle(t, "sortie/ONS-7"), StdioInput: []string{"hi\n"},
+	})
+	if u := usageOf(t, h); !u.Measured || u.InputTokens != 0 || u.OutputTokens != 0 {
+		t.Errorf("usage = %+v, want zero, measured", u)
+	}
 }
 
 func TestUsageReadable(t *testing.T) {
 	h := newHarness(t, defaults())
 	h.offer("ONS-7", 1, nil)
 	u := usageOf(t, h)
-	if !u.AmountKnown || !u.SpendOccurred || u.InputTokens == nil || *u.InputTokens != 1200 || *u.OutputTokens != 300 ||
-		u.CacheReadTokens == nil || *u.CacheReadTokens != 50 || u.Job != "ONS-7" || u.Attempt != 1 {
-		t.Errorf("usage = %+v, want 1200 in, 300 out, 50 cache read", u)
+	if !u.Measured || u.InputTokens != 1200 || u.OutputTokens != 300 || u.CacheReadTokens != 50 || u.CacheWriteTokens != 0 || u.Model != "claude-test" {
+		t.Errorf("usage = %+v, want 1200 in, 300 out, 50 cache read, model claude-test, measured", u)
 	}
 }
 

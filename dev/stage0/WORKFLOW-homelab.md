@@ -25,8 +25,19 @@ huly:
   epic_type: Epic
   story_type: Story
 
-# A story is done when its pull request merges, whoever merges it.
+# As on p1: Sortie merges a story's pull request once its review (the review
+# rule below) has passed and CI has passed, whatever the story's review value
+# (agent-platform/run-supervision). A story is done when its pull request
+# merges, whoever merges it.
 reactions:
+  auto_merge:
+    provider: github
+    strategy: squash
+    require_ci: true
+    delete_branch: true
+    escalation: none
+    poll_interval_ms: 30000
+    watch_window_ms: 0
   merge_completion:
     provider: github
     target_state: Done
@@ -35,10 +46,11 @@ reactions:
 github:
   api_key: $STAGE0_GITHUB_TOKEN
 
-# Comments on the story, so the operator sees in Huly why a run stopped.
+# Comments on the story, so the operator sees in Huly why a run stopped,
+# and that Sortie merged its pull request or could not.
 notifications:
   - kind: tracker_comment
-    events: [session.failed, session.stopped, budget.held]
+    events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge]
 
 server:
   port: ${STAGE0_SORTIE_PORT}
@@ -85,14 +97,25 @@ agent:
   # stall and turn timeouts above, not by this.
   read_timeout_ms: 60000
 
+# As on p1: every story is built, then reviewed in a new session by the
+# review rule, whatever its review label.
 dispatch:
   rules:
     - name: claude-label
       match:
         labels: [claude-code]
+      next: review
     - name: claude-title
       match:
         title: ["[claude]"]
+      next: review
+    - name: build
+      match: {}
+      next: review
+    - name: review
+      stage: sortie-stage:review
+      gate: criteria
+      on_fail: escalate
 
 environment:
   kind: smolvm
@@ -165,6 +188,53 @@ environment:
         provider: github
         project: ${STAGE0_HOMELAB_REPO_PROJECT}
 ---
+{{- if eq .stage.current "review" -}}
+You are reviewing the pull request of story **{{ .issue.identifier }}**: {{ .issue.title }}
+
+{{ if .issue.description }}{{ .issue.description }}{{ end }}
+{{- if .park }}
+
+A person released this story ({{ .park.gesture }}). You stopped earlier{{ if .park.statement }}: {{ .park.statement }}{{ else }}.{{ end }}
+Comments posted since you stopped, oldest first; answer them before you go on:
+{{ range .park.comments }}
+- {{ .author }} ({{ .created_at }}): {{ .body }}
+{{- else }}
+(none)
+{{- end }}
+{{- end }}
+
+Another agent session built this story; you did not, and its session is
+over. The repository is checked out in the current directory, on the
+story's branch, which Sortie has pushed and opened a pull request for. Read
+its `AGENTS.md` first and follow it.
+
+Check every acceptance criterion above, and every scenario of each
+requirement the story covers, against the commits on this branch that its
+base branch (`origin/<base>`) does not have. Settle each one with evidence:
+the file and line that meets it, the test that proves it, and the command
+you ran with its result. Run the repository's checks for what the branch
+changed. The builder's own claims and its `.sortie/pr.json` are not
+evidence.
+
+When a criterion is not met and you can meet it, fix it: add commits on top
+of the branch, in conventional commits, with no AI attribution, and run the
+checks again. Never rewrite a commit that is already pushed: do not amend,
+rebase, squash, reset, or drop any commit that `origin/<branch>` holds. Do
+not push and do not open a pull request: Sortie pushes your new commits
+after the run. Only committed work leaves this machine.
+
+When every criterion holds, end your last message with each criterion, its
+verdict, and its evidence, and write no `.sortie/status`: the review passes,
+and Sortie merges the pull request once CI passes.
+
+When a criterion cannot be settled, because it conflicts with a documented
+design rule or with another criterion, or because only a person can decide
+it, stop with `blocked` in `.sortie/status`. Say on the lines after it which
+criterion, what it conflicts with (name the file or the design decision),
+and the question a person has to answer. Sortie keeps the pull request open,
+and the workbench shows your question. Never write `needs-human-review` or
+`no-change-needed` in this review.
+{{- else -}}
 You are working on story **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}
@@ -187,12 +257,15 @@ story.
 
 The story's spec, if it has one, is in the description above: implement every
 requirement it covers and give each scenario a test. Finish the whole story
-across as many turns as it takes. Stop early, with `needs-human-review` and
-the reason, only when you are blocked on something only a person can decide
+across as many turns as it takes. Stop early, with `blocked` and your
+question, only when you are blocked on something only a person can decide
 or provide; work that is merely large or still missing is not a reason.
+When you finish, a separate review session checks every acceptance
+criterion, and Sortie merges the pull request once that review and CI pass.
 
 Commit your work with git, in conventional commits, with no AI attribution.
 Do not push and do not open a pull request: Sortie does both after the run.
 Only committed work leaves this machine. Before you finish, write
 `.sortie/pr.json` with a JSON object holding a short `title` and a `body`
 that says what changed and how you proved it.
+{{- end }}

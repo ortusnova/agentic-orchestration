@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -23,7 +24,7 @@ import (
 	"time"
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
-	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/ws"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/stdio"
 )
 
 // Event is one thing the fake saw.
@@ -47,6 +48,9 @@ type Job struct {
 	// StdioInput is sent to the agent, one message each, once the
 	// stdio stream opens.
 	StdioInput []string
+	// KeepInputOpen leaves the agent's input open after StdioInput:
+	// no C frame is sent.
+	KeepInputOpen bool
 }
 
 type lease struct {
@@ -72,9 +76,27 @@ type Fake struct {
 	leases   map[string]*lease
 	workers  map[string]protocol.Declaration
 	answer   map[string]int // job key → status the heartbeat answers
-	stdioOut map[string]*bytes.Buffer
-	results  map[string][]byte
-	usage    map[string]protocol.Usage
+	attempts map[string]*attemptData
+}
+
+// attemptData is what the worker sent on an attempt's flows.
+type attemptData struct {
+	stdout, stderr bytes.Buffer
+	exit           *int
+	streamOpened   bool
+	streamEnded    bool
+	result         *Result
+	usage          []protocol.Usage
+}
+
+// Result is what the worker returned on the bundles flow.
+type Result struct {
+	// Bundle is the bundle part; nil when the worker left it out.
+	Bundle []byte
+	// PR is the pr part; nil when the worker left it out.
+	PR []byte
+	// ContentType is the request's media type.
+	ContentType string
 }
 
 func key(job string, attempt int) string { return job + "#" + strconv.Itoa(attempt) }
@@ -82,8 +104,7 @@ func key(job string, attempt int) string { return job + "#" + strconv.Itoa(attem
 // New starts a fake on loopback.
 func New() *Fake {
 	f := &Fake{LeaseMS: 3000, jobs: map[string]Job{}, tokens: map[string]map[string]string{}, leases: map[string]*lease{},
-		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, stdioOut: map[string]*bytes.Buffer{},
-		results: map[string][]byte{}, usage: map[string]protocol.Usage{}}
+		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{}}
 	f.Server = httptest.NewServer(f)
 	return f
 }
@@ -152,29 +173,72 @@ func (f *Fake) Tokens(job string, attempt int) map[string]string {
 	return out
 }
 
-// StdioOutput is what the agent wrote on its stdio stream.
+// data returns the attempt's record; f.mu is held.
+func (f *Fake) data(k string) *attemptData {
+	a := f.attempts[k]
+	if a == nil {
+		a = &attemptData{}
+		f.attempts[k] = a
+	}
+	return a
+}
+
+// StdioOutput is what the agent wrote to its standard output, from the
+// stream's O frames.
 func (f *Fake) StdioOutput(job string, attempt int) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if b := f.stdioOut[key(job, attempt)]; b != nil {
-		return b.String()
-	}
-	return ""
+	return f.data(key(job, attempt)).stdout.String()
 }
 
-// Result is the bundle the worker uploaded for the attempt.
-func (f *Fake) Result(job string, attempt int) []byte {
+// StdioError is what the agent wrote to its standard error, from the
+// stream's E frames.
+func (f *Fake) StdioError(job string, attempt int) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.results[key(job, attempt)]
+	return f.data(key(job, attempt)).stderr.String()
 }
 
-// Usage is the usage the worker reported for the attempt.
+// Exit is the exit status of the stream's X frame, and whether one
+// came.
+func (f *Fake) Exit(job string, attempt int) (int, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if x := f.data(key(job, attempt)).exit; x != nil {
+		return *x, true
+	}
+	return 0, false
+}
+
+// StreamBroken reports a stdio stream that ended before its X frame.
+func (f *Fake) StreamBroken(job string, attempt int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a := f.data(key(job, attempt))
+	return a.streamEnded && a.exit == nil
+}
+
+// Result is what the worker returned for the attempt, and whether it
+// returned anything.
+func (f *Fake) Result(job string, attempt int) (Result, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r := f.data(key(job, attempt)).result; r != nil {
+		return *r, true
+	}
+	return Result{}, false
+}
+
+// Usage is the latest usage the worker reported for the attempt: its
+// totals so far.
 func (f *Fake) Usage(job string, attempt int) (protocol.Usage, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	u, ok := f.usage[key(job, attempt)]
-	return u, ok
+	us := f.data(key(job, attempt)).usage
+	if len(us) == 0 {
+		return protocol.Usage{}, false
+	}
+	return us[len(us)-1], true
 }
 
 func reply(w http.ResponseWriter, code int, v any) {
@@ -363,7 +427,9 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 	if run.SeedPath == "" {
 		run.SeedPath = "/jobs/" + j.ID + "/attempts/" + strconv.Itoa(j.Attempt) + "/seed"
 	}
-	f.jobs[k] = Job{ID: j.ID, Attempt: j.Attempt, Requires: j.Requires, Run: run, Seed: j.Seed, StdioInput: j.StdioInput}
+	stored := j
+	stored.Run = run
+	f.jobs[k] = stored
 	f.mu.Unlock()
 	reply(w, http.StatusOK, wireOffer{
 		Job:   protocol.Job{ID: j.ID, Attempt: j.Attempt, Issue: protocol.Issue{ID: "id-" + j.ID, Identifier: j.ID, Title: "fake " + j.ID}, Requires: j.Requires},
@@ -464,7 +530,9 @@ func (f *Fake) tokenJob(flow, header string) (string, int, bool) {
 	return "", 0, false
 }
 
-// flow serves /flows/{flow}/jobs/{job}/attempts/{n}[/rest].
+// flow serves /flows/{flow}/jobs/{job}/attempts/{n}[/rest] as Sortie's
+// data plane does: each request needs the protocol header and its
+// flow's live token for that attempt.
 func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/flows/"), "/", 6)
 	if len(parts) < 5 || parts[1] != "jobs" || parts[3] != "attempts" {
@@ -481,8 +549,14 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 6 {
 		rest = parts[5]
 	}
+	if r.Header.Get(protocol.ProtocolHeader) != "1" {
+		problem(w, http.StatusBadRequest, "unsupported_protocol", "send "+protocol.ProtocolHeader+": 1")
+		f.record(Event{Kind: "bad-protocol", Job: job, Attempt: attempt, Status: 400})
+		return
+	}
 	if !f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
-		http.Error(w, "invalid or ended job token", http.StatusUnauthorized)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="sortie-job"`)
+		problem(w, http.StatusUnauthorized, "invalid_token", "the request carries no live "+flow+" token of this job's attempt")
 		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: 401})
 		return
 	}
@@ -492,28 +566,15 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		seed := f.jobs[k].Seed
 		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-git-bundle")
+		w.Header().Set("Content-Length", strconv.Itoa(len(seed)))
 		_, _ = w.Write(seed)
 		f.record(Event{Kind: "seed", Job: job, Attempt: attempt, Status: 200})
-	case flow == protocol.FlowBundles && r.Method == http.MethodPut && rest == "result":
-		b, _ := io.ReadAll(r.Body)
-		f.mu.Lock()
-		f.results[k] = b
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-		f.record(Event{Kind: "bundle", Job: job, Attempt: attempt, Status: 204, Body: b})
+	case flow == protocol.FlowBundles && r.Method == http.MethodPost && rest == "result":
+		f.result(w, r, job, attempt)
 	case flow == protocol.FlowUsage && r.Method == http.MethodPost && rest == "":
-		b, _ := io.ReadAll(r.Body)
-		var u protocol.Usage
-		if err := json.Unmarshal(b, &u); err != nil {
-			http.Error(w, "bad usage", http.StatusBadRequest)
-			return
-		}
-		f.mu.Lock()
-		f.usage[k] = u
-		f.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-		f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 204, Body: b})
-	case flow == protocol.FlowStdio && rest == "":
+		f.usageReport(w, r, job, attempt)
+	case flow == protocol.FlowStdio && r.Method == http.MethodGet && rest == "":
 		f.stdio(w, r, job, attempt)
 	case flow == protocol.FlowMCP:
 		b, _ := io.ReadAll(r.Body)
@@ -524,32 +585,173 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt int) {
-	c, err := ws.Accept(w, r)
+// result takes the multipart result: the part bundle, left out when the
+// machine has no issue branch, and the optional part pr, at most 64 KiB.
+// Any other part, two bundles, or a second result is refused.
+func (f *Fake) result(w http.ResponseWriter, r *http.Request, job string, attempt int) {
+	refuse := func(code int, msg string) {
+		problem(w, code, "invalid_result", msg)
+		f.record(Event{Kind: "result", Job: job, Attempt: attempt, Status: code, Body: []byte(msg)})
+	}
+	mr, err := r.MultipartReader()
 	if err != nil {
+		refuse(http.StatusBadRequest, "the result must be multipart/form-data with the parts bundle and pr")
 		return
 	}
-	k := key(job, attempt)
-	f.mu.Lock()
-	input := f.jobs[k].StdioInput
-	out := &bytes.Buffer{}
-	f.stdioOut[k] = out
-	f.mu.Unlock()
-	f.record(Event{Kind: "stdio", Job: job, Attempt: attempt, Status: 101})
-	for _, in := range input {
-		if err := c.WriteMessage(ws.OpBinary, []byte(in)); err != nil {
+	res := Result{ContentType: r.Header.Get("Content-Type")}
+	for {
+		part, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			refuse(http.StatusBadRequest, "the result body cannot be read: "+err.Error())
+			return
+		}
+		b, err := io.ReadAll(part)
+		if err != nil {
+			refuse(http.StatusBadRequest, "the result body cannot be read: "+err.Error())
+			return
+		}
+		switch part.FormName() {
+		case protocol.ResultBundlePart:
+			if res.Bundle != nil {
+				refuse(http.StatusBadRequest, "the result carries two bundles")
+				return
+			}
+			res.Bundle = b
+		case protocol.ResultPRPart:
+			if len(b) > protocol.MaxPRFile {
+				refuse(http.StatusRequestEntityTooLarge, "the pr part exceeds 64 KiB")
+				return
+			}
+			res.PR = b
+		default:
+			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr", part.FormName()))
 			return
 		}
 	}
+	f.mu.Lock()
+	a := f.data(key(job, attempt))
+	if a.result != nil {
+		f.mu.Unlock()
+		refuse(http.StatusConflict, "the attempt's result was already returned")
+		return
+	}
+	a.result = &res
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	f.record(Event{Kind: "result", Job: job, Attempt: attempt, Status: 204, Body: res.Bundle})
+}
+
+// usageReport takes a usage report: every field optional, counts not
+// negative, measured true when absent.
+func (f *Fake) usageReport(w http.ResponseWriter, r *http.Request, job string, attempt int) {
+	b, _ := io.ReadAll(io.LimitReader(r.Body, 4<<10))
+	var body struct {
+		InputTokens      *int64  `json:"input_tokens"`
+		OutputTokens     *int64  `json:"output_tokens"`
+		CacheReadTokens  *int64  `json:"cache_read_tokens"`
+		CacheWriteTokens *int64  `json:"cache_write_tokens"`
+		Model            *string `json:"model"`
+		Measured         *bool   `json:"measured"`
+	}
+	if err := json.Unmarshal(b, &body); err != nil {
+		problem(w, http.StatusBadRequest, "invalid_usage", "the usage body must be a JSON object")
+		f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 400, Body: b})
+		return
+	}
+	u := protocol.Usage{Measured: body.Measured == nil || *body.Measured}
+	if body.Model != nil {
+		u.Model = *body.Model
+	}
+	for _, c := range []struct {
+		src *int64
+		dst *int64
+	}{{body.InputTokens, &u.InputTokens}, {body.OutputTokens, &u.OutputTokens}, {body.CacheReadTokens, &u.CacheReadTokens}, {body.CacheWriteTokens, &u.CacheWriteTokens}} {
+		if c.src == nil {
+			continue
+		}
+		if *c.src < 0 {
+			problem(w, http.StatusBadRequest, "invalid_usage", "a count must not be negative")
+			f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 400, Body: b})
+			return
+		}
+		*c.dst = *c.src
+	}
+	f.mu.Lock()
+	a := f.data(key(job, attempt))
+	a.usage = append(a.usage, u)
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+	f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 204, Body: b})
+}
+
+// stdio upgrades to sortie-stdio/1, sends the job's StdioInput as I
+// frames and then C, unless KeepInputOpen, and reads the worker's O, E
+// and X frames. A stream that ends before X is broken.
+func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt int) {
+	k := key(job, attempt)
+	f.mu.Lock()
+	a := f.data(k)
+	opened := a.streamOpened
+
+	f.mu.Unlock()
+	if opened {
+		problem(w, http.StatusConflict, "stdio_open", "the attempt's stdio stream was already opened")
+		return
+	}
+	c, err := stdio.Accept(w, r)
+	if err != nil {
+		f.record(Event{Kind: "stdio", Job: job, Attempt: attempt, Status: http.StatusUpgradeRequired})
+		return
+	}
+	defer func() { _ = c.Close() }()
+	f.mu.Lock()
+	j := f.jobs[k]
+	a.streamOpened = true
+	f.mu.Unlock()
+	f.record(Event{Kind: "stdio", Job: job, Attempt: attempt, Status: 101})
+	go func() {
+		for _, in := range j.StdioInput {
+			if _, err := (stdio.Writer{C: c, Type: stdio.Stdin}).Write([]byte(in)); err != nil {
+				return
+			}
+		}
+		if !j.KeepInputOpen {
+			_ = c.WriteFrame(stdio.StdinClosed, nil)
+		}
+	}()
+	defer func() {
+		f.mu.Lock()
+		a.streamEnded = true
+		f.mu.Unlock()
+		f.record(Event{Kind: "stdio-end", Job: job, Attempt: attempt})
+	}()
 	for {
-		_, msg, err := c.ReadMessage()
+		typ, payload, err := c.ReadFrame()
 		if err != nil {
 			return
 		}
 		f.mu.Lock()
-		out.Write(msg)
+		switch typ {
+		case stdio.Stdout:
+			a.stdout.Write(payload)
+		case stdio.Stderr:
+			a.stderr.Write(payload)
+		case stdio.Exit:
+			if status, err := stdio.ExitStatus(payload); err == nil {
+				a.exit = &status
+			}
+		}
 		f.mu.Unlock()
-		f.record(Event{Kind: "stdio-out", Job: job, Attempt: attempt, Body: msg})
+		f.record(Event{Kind: "stdio-" + string(typ), Job: job, Attempt: attempt, Body: payload})
+		if typ == stdio.Exit {
+			return
+		}
+		if typ != stdio.Stdout && typ != stdio.Stderr {
+			return
+		}
 	}
 }
 
