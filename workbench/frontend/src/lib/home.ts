@@ -23,6 +23,8 @@ export interface HomeMilestone {
   depends_on: string[];
   gate: string | null;
   changes: string[];
+  /** The stories it waits on that no milestone, or only a later one, includes; absent from an older backend. */
+  waits_on?: string[];
   progress: MilestoneProgress;
 }
 
@@ -105,7 +107,9 @@ export interface HomeDoc {
   next: string | null;
   critical_path: {
     milestone: string; gate: string | null;
-    stories: { key: string; label: string; title: string; change: string; needs: Reason | null; running: boolean; estimate: number | null }[];
+    stories: { key: string; label: string; title: string; change: string; needs: Reason | null; running: boolean; estimate: number | null;
+      /** The milestone waits on it without including its change. */
+      waited_on?: boolean }[];
   } | null;
   not_ready: NotReadyItem[];
   /** Absent from an older backend. */
