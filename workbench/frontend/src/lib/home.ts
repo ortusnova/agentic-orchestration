@@ -83,6 +83,61 @@ export interface HomeQuestion extends Question {
   replaced_by?: { key: string; label: string; title: string } | null;
 }
 
+export type Doing = "waiting" | "starting" | "working" | "in_review" | "needs_you" | "held";
+
+/** A story released to Sortie and not yet done, with what it is doing. */
+export interface ReleasedStory {
+  key: string;
+  label: string;
+  change: string;
+  title: string;
+  identifier: string;
+  url: string | null;
+  state: Doing;
+  /** Starting: the attempt, and the error the last one ended with. */
+  attempt: number | null;
+  error: string | null;
+  /** Working: the turn, and when the run started, in Unix seconds. */
+  turn: number | null;
+  started_at: number | null;
+  /** In review: the pull request. */
+  pr: { ref: string; url: string | null } | null;
+  /** Needs you: the agent's question. */
+  question: string | null;
+  /** Held: why. */
+  reason: string | null;
+}
+
+/** How long since a time, in Unix seconds, in words: "12 min", "2 h 5 min". */
+export function since(start: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - start) / 60);
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+/** What a released story is doing, in words. The pull request of a story in review is linked beside them. */
+export function doingText(s: ReleasedStory, now: number): string {
+  switch (s.state) {
+    case "waiting":
+      return "waiting for a slot";
+    case "starting":
+      return ["starting", s.attempt != null ? `attempt ${s.attempt}` : null, s.error ? `last error: ${s.error}` : null]
+        .filter(Boolean).join(", ");
+    case "working":
+      return ["working", s.turn != null ? `turn ${s.turn}` : null, s.started_at != null ? `for ${since(s.started_at, now)}` : null]
+        .filter(Boolean).join(", ");
+    case "in_review":
+      return "in review";
+    case "needs_you":
+      return s.question ? `needs you: ${s.question}` : "needs you";
+    case "held":
+      return s.reason ? `held: ${s.reason}` : "held";
+  }
+}
+
 export interface Span {
   id: string;
   start: number;
@@ -110,6 +165,8 @@ export interface HomeDoc {
   not_ready: NotReadyItem[];
   /** Absent from an older backend. */
   questions?: HomeQuestion[];
+  /** Every story released to Sortie and not yet done, in release order. Absent from an older backend. */
+  released?: ReleasedStory[];
   needs_person: { total: number; questions?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
 }
