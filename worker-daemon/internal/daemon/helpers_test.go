@@ -39,11 +39,17 @@ func TestMain(m *testing.M) {
 		case "fake-echo":
 			_, _ = io.Copy(os.Stdout, os.Stdin)
 			os.Exit(0)
+		case "fake-acp-agent":
+			os.Exit(fakeACPAgent())
 		case "fake-usage":
 			os.Exit(fakeUsage())
 		}
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if sortieBinDir != "" {
+		_ = os.RemoveAll(sortieBinDir)
+	}
+	os.Exit(code)
 }
 
 // fakeAgent reads a prompt line, answers on standard output, makes one

@@ -13,7 +13,7 @@ One static binary per platform: `linux/amd64`, `linux/arm64`,
 ```sh
 make build          # bin/worker-daemon
 make cross          # one binary per platform
-make test           # every scenario, against the fake control plane
+make test           # every scenario, against the fake control plane and Sortie's data plane
 make lint
 worker-daemon version
 worker-daemon run -config /etc/worker-daemon/config.json

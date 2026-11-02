@@ -248,12 +248,31 @@ On macOS, a launchd agent with `ProgramArguments` `worker-daemon run
 
 `make -C worker-daemon test` runs every scenario of
 `agent-platform/worker-daemon` against the fake control plane in
-`internal/fakecp`, which serves protocol 1 and the five flows, with
-machines from `internal/machine/fakemachine`. The smolvm end-to-end test,
+`internal/fakecp`, which serves protocol 1 and the five flows on the
+wire as Sortie's data plane does, with machines from
+`internal/machine/fakemachine`. The smolvm end-to-end test,
 `TestSmolvmEndToEnd`, runs where `/dev/kvm` exists, smolvm is on `PATH`
 and `WORKER_DAEMON_E2E_PACK` names a pack with `sh`, `git` and `socat`;
 elsewhere it is skipped and says which of the three is missing:
 
 ```sh
 WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
+```
+
+Two end-to-end tests run the daemon against the real Sortie data plane:
+`TestOneAttemptOverTheWire` and `TestUnknownAmountOverTheWire`. They
+build Sortie from the `sortie/` submodule (plan-bench) and the stage-1
+edge from `dev/stage0/edge`, and run Sortie under `environment.kind:
+remote` with a file tracker and a local forge (a bare repository and a
+fake Gitea API). The daemon dials the edge, and the edge's egress goes to
+a fake nono. One attempt of `ONS-7` runs on fake machines, with an agent
+that speaks the Agent Client Protocol. It ends in a pull request on the
+local forge, and Sortie records the usage the daemon posted, measured or
+`"measured": false`. Without the submodule they are skipped; set
+`WORKER_DAEMON_SORTIE_SRC` to use another Sortie checkout, and
+`WORKER_DAEMON_E2E_NO_SKIP=1` to fail instead:
+
+```sh
+git submodule update --init sortie
+make -C worker-daemon test RUN=OverTheWire
 ```
