@@ -36,8 +36,6 @@ export interface TrackerView {
   terminal: boolean;
   url: string | null;
   parent_id: string | null;
-  /** The story's pull request, as owner/repo#number, when Sortie holds it. */
-  pr?: string | null;
 }
 
 export interface GraphNode {
