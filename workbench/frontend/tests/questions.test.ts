@@ -61,6 +61,18 @@ function homeDoc(questions: HomeQuestion[]): HomeDoc {
     milestones: [], goal: null, next: null, critical_path: null, timeline: null,
     not_ready: [item("apw/other", questions.length + 1)],
     questions,
+    workers: [{
+      name: "p1", main: true, dispatched: true, reachable: true, slots: 3, busy: 0, verdict: asks.length ? "stuck" : "idle",
+      reasons: questions.map((q) => ({ code: "question", text: `${q.identifier} asks: ${q.statement}`, identifier: q.identifier, key: q.key })),
+      later: [],
+      lanes: [1, 2, 3].map((slot) => {
+        const q = slot === 1 ? questions[0] : undefined;
+        return q
+          ? { slot, kind: "stuck" as const, reason: null, next: [], stuck: { code: "question" as const, text: `asks: ${q.statement}` },
+              job: { identifier: q.identifier, key: q.key, title: q.title, phase: "Build", rule: "build", since: null } }
+          : { slot, kind: "free" as const, job: null, stuck: null, next: [], reason: slot === 1 ? "Nothing approved is ready for p1." : "" };
+      }),
+    }],
     needs_person: { total: questions.length + 1, questions: questions.length, approve: 1, approve_stories: 1, spec: 0, operator: 0,
       nearest: questions[0]?.key ?? "apw/other" },
   };
@@ -105,8 +117,6 @@ describe("Scenario: A question on the home page", () => {
     expect($$(`[data-question='${KEY}'] .statement p`)).toHaveLength(2);
     expect($(`[data-question='${KEY}'] time`)!.getAttribute("datetime")).toBe("2026-11-01T18:35:26.000Z");
     expect($(`[data-question='${KEY}'] textarea`)).not.toBeNull();
-    expect(text("[data-tile='needs']")).toContain("1 question to answer");
-    expect(text("[data-tile='needs']")).toContain("nearest: worker-daemon, which asks a question");
   });
 
   it("appears within one refresh, and leaves as soon as Sortie no longer reports the park", async () => {
@@ -122,12 +132,14 @@ describe("Scenario: A question on the home page", () => {
     expect($("[data-column='answer'] .item")).toBeNull();
   });
 
-  it("names the question in the execution panel, never only stuck", async () => {
+  it("names the question in its worker's lane, never only stuck", async () => {
     await home(doc(true));
-    expect(text("[data-verdict] .big")).toBe("Stuck");
-    const reason = $("[data-verdict] [data-reason='question']")!;
-    expect(flat(reason.textContent!)).toBe(flat(`${KEY} asks: ${STATEMENT}`));
-    expect(reason.querySelector("a")!.getAttribute("href")).toContain("graph");
+    expect($("[data-worker='p1']")!.dataset.verdict).toBe("stuck");
+    const lane = $("[data-worker='p1'] [data-stuck='question']")!;
+    expect(text("[data-worker='p1'] [data-stuck='question'] .st")).toBe("Stuck · asks you");
+    expect(flat(lane.querySelector(".alarm")!.getAttribute("title")!)).toBe(flat(`asks: ${STATEMENT}`));
+    expect(lane.querySelector("a.jt")!.getAttribute("href")).toContain("graph");
+    expect(text("[data-worker='p1'] .fault")).toContain("Needs you: answer its question");
   });
 });
 

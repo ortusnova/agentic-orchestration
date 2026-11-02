@@ -6,6 +6,7 @@ import {
   changedStories, mapShare, slackText, slackWidth, visualSpans,
   type HomeDoc, type HomeMilestone, type NotReadyItem,
 } from "../src/lib/home";
+import type { Worker } from "../src/lib/lanes";
 import { parseRoute } from "../src/lib/router";
 import type { MergedGraph } from "../src/lib/types";
 
@@ -40,6 +41,16 @@ function item(key: string, extra: Partial<NotReadyItem> = {}): NotReadyItem {
     kind: story ? "story" : "change", key, label: story ? key.split("/")[1] : key, title: `Do ${key}`, change: key.split("/")[0],
     milestone: "m1", reason: "not_approved", column: "approve", slack: 0, urgency: "now", critical: false, dependents: 0, order: 0,
     rank: 1, after: [], action: { kind: "approve", keys: [key] }, ...extra,
+  };
+}
+
+function idleWorker(busy = 0): Worker {
+  return {
+    name: "p1", main: true, dispatched: true, reachable: true, slots: 3, busy, verdict: busy ? "working" : "idle", reasons: [], later: [],
+    lanes: [1, 2, 3].map((slot) => slot <= busy
+      ? { slot, kind: "job" as const, stuck: null, reason: null, next: [],
+          job: { identifier: `ONS-${slot}`, key: null, title: `job ${slot}`, phase: "Build", rule: "build", started_at: null } }
+      : { slot, kind: "free" as const, job: null, stuck: null, next: [], reason: slot === busy + 1 ? "Nothing approved is ready for p1." : "" }),
   };
 }
 
@@ -78,6 +89,7 @@ function homeDoc(extra: Partial<HomeDoc> = {}): HomeDoc {
       { key: "apw/gate", label: "gate", title: "The gate", change: "apw", needs: "waits_on_work", running: false, estimate: null },
     ] },
     not_ready: items,
+    workers: [idleWorker()],
     needs_person: { total: 5, approve: 2, approve_stories: 4, spec: 2, operator: 1, nearest: "apw/worker-daemon" },
     timeline: { axis: "stories_and_tasks", here: 0.5, to_goal: 0.31, spans: [
       { id: "m0", start: 0, end: 0.25, size: 10, done: 10, blockers: [] },
@@ -149,18 +161,17 @@ describe("home: the timeline", () => {
 });
 
 describe("home: the focal points", () => {
-  it("shows the verdict in words, with its reasons, the slots and the runway", async () => {
+  it("shows the workers' slot lanes below the timeline, and none of the four tiles", async () => {
     await render(doc(homeDoc()));
-    expect($("[data-verdict]")!.dataset.verdict).toBe("idle_now");
-    expect(text("[data-verdict] .big")).toBe("Idle now");
-    expect(text("[data-verdict] .reasons")).toBe("3 agent slots are free and 0 stories are ready");
-    expect(text("[data-tile='slots'] .num")).toBe("0 / 3 busy");
-    expect($$("[data-tile='slots'] .slots i")).toHaveLength(3);
-    expect(text("[data-tile='runway'] .num")).toBe("0 stories ready");
-    expect(text("[data-tile='runway']")).toContain("needs 3 more to fill the slots");
-    expect($$("[data-tile='slots'] .hist i")).toHaveLength(2);
-    expect(text("[data-tile='needs'] .num")).toBe("5");
-    expect(text("[data-tile='needs']")).toContain("nearest: worker-daemon, on the critical path");
+    expect($$("[data-tile]")).toHaveLength(0);
+    expect($("[aria-label='Execution health']")).toBeNull();
+    const sections = $$("main > section").map((s) => s.className.split(" ")[0]);
+    expect(sections.slice(0, 2)).toEqual(["score", "lanes"]);
+    expect(text("[data-worker='p1'] [data-busy]")).toBe("0 of 3 slots busy");
+    expect($$("[data-worker='p1'] .lane")).toHaveLength(3);
+    expect(text("[data-worker='p1'] .lane .ll p")).toBe("Nothing approved is ready for p1.");
+    // The count of what needs a person stays in its own section.
+    expect($("#needs-h")).not.toBeNull();
   });
 
   it("shows the critical path to the next milestone's gate, each story with what it needs", async () => {
@@ -244,9 +255,7 @@ describe("home: honest when sources fail", () => {
     h.health = { ...h.health, verdict: "stuck", reasons: [{ code: "sortie_unreachable", text: "Sortie is unreachable: refused" }], slots: null, busy: null, free: null, runway: null };
     await render(doc(h, { sortie: { reachable: false, error: "refused", capabilities: [], generated_at: null } }));
     expect(text("[data-notice='sortie']")).toContain("story progress is the last known");
-    expect(text("[data-verdict] .big")).toBe("Stuck");
-    expect(text("[data-tile='slots'] .num")).toBe("—");
-    expect(text("[data-tile='runway'] .num")).toBe("—");
+    expect($("[data-worker='p1']")).not.toBeNull();
     expect(text("[data-milestone='m1'] .cnt")).toContain("stories last known");
     expect(text("[data-milestone='m1'] .cnt")).toContain("101 / 151 agent tasks");
   });
@@ -265,17 +274,15 @@ describe("home: honest when sources fail", () => {
     h.health = { ...h.health, verdict: "done", reasons: [{ code: "done", text: "Every planned story is done" }] };
     h.milestones = h.milestones.map((m) => ({ ...m, done: true, next: false }));
     await render(doc(h));
-    expect(text("[data-verdict] .big")).toBe("Done");
     expect(text("h1")).toContain("the goal is reached");
     expect($(".path")).toBeNull();
     expect(text("[data-column='approve'] .none")).toBe("Nothing to approve.");
   });
 
-  it("shows no verdict its sources cannot support", async () => {
-    const h = homeDoc();
-    h.health = { ...h.health, verdict: null, reasons: [{ code: "not_dispatched", text: "Sortie runs agents for its configured project only, not T" }] };
-    await render(doc(h));
-    expect(text("[data-verdict] .big")).toBe("No verdict");
+  it("shows no slots for a Sortie that runs another project", async () => {
+    await render(doc(homeDoc({ workers: [{ name: "p1", main: true, dispatched: false }] })));
+    expect($$("[data-worker='p1'] .lane")).toHaveLength(0);
+    expect(text("[data-worker='p1'] .notice")).toContain("runs agents for its own tracker project, not this one");
   });
 
   it("before any valid plan, shows an empty state", async () => {
@@ -306,12 +313,10 @@ describe("home: live", () => {
 
   it("updates in place when a new home arrives", async () => {
     const a = await render(doc(homeDoc()));
-    const h = homeDoc();
-    h.health = { ...h.health, verdict: "healthy", reasons: [{ code: "enough", text: "A runway of 4 stories against 3 agent slots" }], busy: 3, runway: 4 };
-    a.setDoc(doc(h));
+    a.setDoc(doc(homeDoc({ workers: [idleWorker(3)] })));
     await settle();
-    expect(text("[data-verdict] .big")).toBe("Healthy");
-    expect(text("[data-tile='slots'] .num")).toBe("3 / 3 busy");
+    expect(text("[data-worker='p1'] [data-busy]")).toBe("3 of 3 slots busy");
+    expect($$("[data-worker='p1'] [data-lane='job']")).toHaveLength(3);
   });
 
   it("says every slack in words beside its bar, shorter for less slack", () => {
