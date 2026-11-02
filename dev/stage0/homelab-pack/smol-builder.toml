@@ -1,4 +1,4 @@
-# The homelab pack of a stage-0 worker with homelab's dev host (spec store
+# The homelab pack of the taichi stage-0 profile (spec store
 # run-homelab-through-sortie, design D12): homelab's sandbox image plus the
 # stage-0 agent harness. stage0.sh stages this file and Dockerfile with
 # homelab's image scripts (homelab/) and the harness (harness/), then builds
