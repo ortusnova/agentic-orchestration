@@ -65,7 +65,4 @@ def merge(plan: dict[str, Any] | None, tracker: dict[str, Any] | None) -> dict[s
 def _tracker_view(t: dict[str, Any] | None) -> dict[str, Any] | None:
     if not t:
         return None
-    view = {k: t.get(k) for k in ("id", "identifier", "title", "state", "terminal", "url", "parent_id")}
-    # The story's pull request, as owner/repo#number, when Sortie holds it.
-    view["pr"] = t.get("pr") or t.get("pull_request") or None
-    return view
+    return {k: t.get(k) for k in ("id", "identifier", "title", "state", "terminal", "url", "parent_id")}
