@@ -95,7 +95,9 @@ environment:
       # proxy.golang.org serves module zips by redirect to Google Cloud Storage.
       - storage.googleapis.com
     credentials:
-      - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
+      # Read at each launch (Sortie's command source), so a refreshed login
+      # reaches the next run without a restart of Sortie.
+      - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com], command: "${STAGE0_KIT}/anthropic-token.py"}
     pass_env: [IS_SANDBOX]
     # A story runs in the repository its plan node names (the Huly label
     # sortie-repository:<name>), else in sortie. homelab is listed so plan

@@ -94,7 +94,7 @@ VMs see only smolvm placeholders.
 | Credential | Source |
 | --- | --- |
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
-| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. A login token lasts hours, so `ortus-stage0-token.timer` restarts Sortie onto a fresher one while no agent runs |
+| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie reads it at each launch (the workflows' `command` source), so a refreshed login reaches the next run with no restart. The homelab profile reads only `claude-oauth-token` |
 | Huly | a login with the dev account in `stage0.env` |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
@@ -172,7 +172,7 @@ certificate.
 
 | What | Where |
 | --- | --- |
-| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); `ortus-stage0-token.timer` restarts nono with Sortie onto a fresher one |
+| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts nono alone onto a fresher one while no agent runs, or at once when its token has expired |
 | Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The edge's credential to nono | `nono-pass` in the stage-0 home |
