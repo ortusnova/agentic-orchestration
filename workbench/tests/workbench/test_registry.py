@@ -140,13 +140,13 @@ def test_an_old_store_gets_the_current_schemas(tmp_path):
     git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "old schema")
     git("add", "openspec/schemas/planning/mine.json")
 
-    assert upgrade_schemas(root) == ["openspec/schemas/planning/breakdown.schema.json"]
+    assert upgrade_schemas(root).paths == ["openspec/schemas/planning/breakdown.schema.json"]
     assert schema.read_text() == current and mine.read_text() == "{}"
     assert git("log", "-1", "--format=%s") == "Update the planning schemas\n"
     # The commit takes only the schema; what the store had staged stays staged.
     assert git("status", "--porcelain") == "A  openspec/schemas/planning/mine.json\n"
-    assert upgrade_schemas(root) == []
-    assert upgrade_schemas(tmp_path / "missing") == []
+    assert upgrade_schemas(root).paths == []
+    assert upgrade_schemas(tmp_path / "missing").paths == []
 
 
 def test_scaffold_refuses_an_existing_directory(tmp_path):
