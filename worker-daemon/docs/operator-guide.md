@@ -138,7 +138,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 
 1. It serves the job's two forwarders on Unix sockets in the job's
    directory: **egress**, an HTTP proxy, and **mcp**, the tool server.
-2. It fetches the workspace seed from `{bundles}{run.seed_path}`.
+2. It fetches the workspace seed from `{bundles}{run.seed_path}`, which
+   is `/jobs/{job}/attempts/{attempt}/seed`.
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
    `/run/worker`, and the two sockets mounted with `--mount-socket`. It
@@ -148,55 +149,78 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    that is the guest's only way out.
 4. It seeds `/workspace` from the bundle and checks out the issue branch:
    the branch at the bundle's `HEAD`, or, when several are there, the one
-   named after the job (`sortie/ONS-7` for `ONS-7`).
+   named after the job (`sortie/ONS-7` for `ONS-7`). It adds `/.sortie` to
+   the repository's `.git/info/exclude`, so the agent's control directory
+   is never committed.
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
    forwarder, `NO_PROXY=127.0.0.1,localhost`, and `WORKER_MCP_URL` at the
-   mcp forwarder. The agent's standard input and output travel on the
-   `stdio` flow; its standard error goes to the daemon's log when it fails.
-6. When the agent exits, it exports the issue branch's new commits as a
-   bundle and uploads it on `bundles`, runs the usage command and reports
-   on `usage`, deletes the machine, and reports the outcome: `succeeded`
-   when the agent exited 0 and the export worked.
+   mcp forwarder. The agent's standard input, output and error travel on
+   the `stdio` flow; its standard error also goes to the daemon's log when
+   it fails. When the control plane closes the agent's input (Sortie does
+   when it stops the session), the agent's standard input closes.
+6. When the agent exits, it sends the exit status, the stream's last
+   frame. Then it runs the usage command and reports on `usage`, returns
+   the result on `bundles` (the issue branch's bundle and the agent's
+   `.sortie/pr.json`), deletes the machine, and reports the outcome:
+   `succeeded` when the agent exited 0 and the result was returned. The
+   result always goes before the report. Usage goes before the result,
+   because once Sortie has the result it finishes the attempt and closes
+   its flows.
 
 When a heartbeat answers `409`, the daemon stops the machine at once,
-within the heartbeat interval, and sends no bundle, usage or report for
+within the heartbeat interval, and sends no result, usage or report for
 that attempt. When the daemon is stopped (SIGTERM or SIGINT), it stops
 every machine and reports each running attempt `failed`.
 
 ### Flows on the wire
 
-Each request carries the flow's job token as `Authorization: Bearer`
-(egress: `Proxy-Authorization: Bearer`) and `X-Sortie-Worker-Protocol: 1`.
-Paths are under the flow's URL:
+The daemon speaks `agent-platform/worker-api#Data-plane flows on the
+wire`, the contract Sortie's data plane serves. Each flow request carries
+`X-Sortie-Worker-Protocol: 1` and its flow's job token, as
+`Authorization: Bearer`, or `Proxy-Authorization: Bearer` on the `egress`
+proxy. Paths are under the flow's URL:
 
 | Flow | Request |
 |---|---|
-| `bundles` | `GET {run.seed_path}`, the seed; `PUT /jobs/{job}/attempts/{n}/result`, the result bundle (`application/x-git-bundle`). No new commits, no upload. |
-| `stdio` | WebSocket at `/jobs/{job}/attempts/{n}` (`http`/`https` URLs are dialled as `ws`/`wss`). Each binary or text message is agent input; each agent write is one binary message. |
-| `mcp` | A guest request for `/p` goes to `/jobs/{job}/attempts/{n}/p`, streamed both ways. |
-| `egress` | The flow is an HTTP proxy: the guest's `CONNECT` tunnels and absolute-form requests are carried to it. |
-| `usage` | `POST /jobs/{job}/attempts/{n}`, JSON below. |
+| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional part `pr` (`.sortie/pr.json`, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
+| `stdio` | `GET /jobs/{job}/attempts/{attempt}` with `Connection: Upgrade` and `Upgrade: sortie-stdio/1` opens a framed stream (answer `101`). A `ws` or `wss` flow URL is dialled as `http` or `https`. |
+| `usage` | `POST /jobs/{job}/attempts/{attempt}` with `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "model", "measured"}`, the attempt's totals so far; `"measured": false` says that spend occurred and its amount is unknown. |
+| `egress` | An HTTP proxy; the daemon carries the guest's `CONNECT` tunnels and absolute-form requests to it. |
+| `mcp` | `/jobs/{job}/attempts/{attempt}/<path>` reaches the tool server of that attempt's own session, streamed both ways: a guest request for `/<path>` goes there. |
+
+A `stdio` frame is one type byte, a four-byte big-endian payload length
+of at most 1 MiB, and the payload. The control plane sends `I` (the
+agent's standard input) and `C` (input closed); the worker sends `O`
+(standard output), `E` (standard error) and last `X` (the agent exited,
+the payload its exit status as a four-byte big-endian signed integer). A
+stream that ends before `X` is broken. The daemon splits a longer write
+into frames of at most 1 MiB, and closes the stream after `X`.
+
+The `bundle` part is a bundle of `refs/heads/<issue branch>` only, which
+leaves out the seed's commits; a branch with nothing new is bundled as its
+tip alone. The daemon returns the result before it reports the attempt,
+and it returns one even when the agent failed.
 
 ### Token usage
 
 After each run the daemon runs the agent kind's usage command in the
 machine, in `/workspace`, with the agent's environment. The command prints
 one JSON object, `{"input_tokens", "output_tokens"}` and optionally
-`"cache_read_tokens"` and `"cache_write_tokens"`. The daemon posts:
+`"cache_read_tokens"`, `"cache_write_tokens"` and `"model"`. The daemon
+posts the attempt's totals:
 
 ```json
-{"job": "ONS-7", "attempt": 1, "spend_occurred": true, "amount_known": true,
- "input_tokens": 12000, "output_tokens": 3000, "cache_read_tokens": null,
- "cache_write_tokens": null, "model_requests": 14}
+{"input_tokens": 12000, "output_tokens": 3000, "cache_read_tokens": 0,
+ "cache_write_tokens": 0, "model": "claude-sonnet-4-5", "measured": true}
 ```
 
-`model_requests` counts what the egress forwarder carried. When the
-command fails, prints something else, or none is configured, and the run
-made model requests, the daemon reports `"spend_occurred": true,
-"amount_known": false` with every token field `null`: spend occurred,
-amount unknown, never zero (design D14.1). A run that made no model
-request reports zero, known.
+When the command fails, prints something else, or none is configured,
+and the run made model requests (the egress forwarder counts what it
+carried), the daemon posts `"measured": false`, with zero counts: spend
+occurred, amount unknown, never a zero spend (design D14.1). Sortie
+records it as an unmeasured turn. A run that made no model request posts
+zero, `"measured": true`.
 
 ## Run as a service
 

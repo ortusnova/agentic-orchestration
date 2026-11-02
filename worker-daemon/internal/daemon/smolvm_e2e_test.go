@@ -64,7 +64,7 @@ func TestSmolvmEndToEnd(t *testing.T) {
 	})
 	ev := h.fake.Events()
 	report := indexOf(ev, 0, is("report", "ONS-7", 1))
-	for _, kind := range []string{"seed", "stdio", "egress", "mcp", "bundle", "usage"} {
+	for _, kind := range []string{"seed", "stdio", "stdio-X", "egress", "mcp", "usage", "result"} {
 		if i := indexOf(ev, 0, is(kind, "ONS-7", 1)); i < 0 || i > report {
 			t.Errorf("no %s event before the report: %s", kind, h.describe())
 		}

@@ -34,4 +34,4 @@ does, and the flows on the wire.
 | `internal/protocol` | The wire types. |
 | `internal/secret` | A token type that never prints. |
 | `internal/hostinfo` | Memory, disk, KVM and nested virtualization, per OS. |
-| `internal/ws` | The WebSocket the stdio flow uses. |
+| `internal/stdio` | The framed stream of the stdio flow (`sortie-stdio/1`). |

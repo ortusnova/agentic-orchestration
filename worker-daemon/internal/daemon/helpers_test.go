@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,9 @@ func TestMain(m *testing.M) {
 		switch os.Args[1] {
 		case "fake-agent":
 			os.Exit(fakeAgent())
+		case "fake-echo":
+			_, _ = io.Copy(os.Stdout, os.Stdin)
+			os.Exit(0)
 		case "fake-usage":
 			os.Exit(fakeUsage())
 		}
@@ -74,10 +78,24 @@ func fakeAgent() int {
 		fmt.Fprintln(os.Stderr, "tool call:", err)
 		return 5
 	}
+	fmt.Fprintln(os.Stderr, "agent: working")
 	if err := os.WriteFile("work.txt", []byte("done by the agent\n"), 0o600); err != nil {
 		return 6
 	}
-	for _, args := range [][]string{{"add", "work.txt"}, {"-c", "user.name=agent", "-c", "user.email=agent@example.invalid", "commit", "-q", "-m", "agent work"}} {
+	if err := os.MkdirAll(".sortie", 0o700); err != nil {
+		return 6
+	}
+	if err := os.WriteFile(".sortie/pr.json", []byte(testPR), 0o600); err != nil {
+		return 6
+	}
+	gitSteps := [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=agent@example.invalid", "commit", "-q", "-m", "agent work"}}
+	switch os.Getenv("AGENT_GIT") {
+	case "none":
+		gitSteps = nil
+	case "no-branch":
+		gitSteps = [][]string{{"checkout", "-q", "--detach"}, {"branch", "-q", "-D", os.Getenv("SORTIE_ISSUE_BRANCH")}}
+	}
+	for _, args := range gitSteps {
 		cmd := exec.Command("git", args...)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
@@ -86,8 +104,14 @@ func fakeAgent() int {
 		}
 	}
 	fmt.Println("done")
+	if code, err := strconv.Atoi(os.Getenv("AGENT_EXIT")); err == nil {
+		return code
+	}
 	return 0
 }
+
+// testPR is the .sortie/pr.json the fake agent writes.
+const testPR = `{"title": "Agent work", "body": "Adds work.txt."}`
 
 // modelRequest is an HTTPS model call as a client makes it: CONNECT
 // through the proxy, then HTTP inside the tunnel (the fake egress flow
@@ -154,7 +178,7 @@ func fakeUsage() int {
 		fmt.Println("tokens: lots")
 		return 0
 	}
-	fmt.Println(`{"input_tokens":1200,"output_tokens":300,"cache_read_tokens":50}`)
+	fmt.Println(`{"input_tokens":1200,"output_tokens":300,"cache_read_tokens":50,"model":"claude-test"}`)
 	return 0
 }
 
@@ -367,6 +391,7 @@ func (h *harness) offer(id string, attempt int, env map[string]string) {
 		env = map[string]string{}
 	}
 	env["SORTIE_ISSUE_IDENTIFIER"] = id
+	env["SORTIE_ISSUE_BRANCH"] = "sortie/" + id
 	env["GIT_CONFIG_GLOBAL"] = "/dev/null"
 	h.fake.Offer(fakecp.Job{
 		ID: id, Attempt: attempt,

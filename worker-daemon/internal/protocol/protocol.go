@@ -181,20 +181,30 @@ func ResultPath(job string, attempt int) string {
 	return AttemptSuffix(job, attempt) + "/result"
 }
 
-// Usage is the body the daemon posts on the usage flow after a run.
-//
-// SpendOccurred and AmountKnown keep "spend occurred, amount unknown"
-// apart from a run that spent nothing: when AmountKnown is false the
-// token fields are null, never zero.
+// SeedPath is where, on the bundles flow, the workspace seed of an
+// attempt is fetched, when the run descriptor names no seed_path.
+func SeedPath(job string, attempt int) string {
+	return AttemptSuffix(job, attempt) + "/seed"
+}
+
+// Result parts and their limit.
+const (
+	// ResultBundlePart holds the bundle of the issue branch.
+	ResultBundlePart = "bundle"
+	// ResultPRPart holds the agent's .sortie/pr.json.
+	ResultPRPart = "pr"
+	// MaxPRFile bounds the pr part.
+	MaxPRFile = 64 << 10
+)
+
+// Usage is the body the daemon posts on the usage flow: the attempt's
+// token totals so far. Measured false says spend occurred and its
+// amount is unknown; the counts are then zero and mean nothing.
 type Usage struct {
-	Job              string `json:"job"`
-	Attempt          int    `json:"attempt"`
-	SpendOccurred    bool   `json:"spend_occurred"`
-	AmountKnown      bool   `json:"amount_known"`
-	InputTokens      *int64 `json:"input_tokens"`
-	OutputTokens     *int64 `json:"output_tokens"`
-	CacheReadTokens  *int64 `json:"cache_read_tokens"`
-	CacheWriteTokens *int64 `json:"cache_write_tokens"`
-	ModelRequests    int64  `json:"model_requests"`
-	Reason           string `json:"reason,omitempty"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Model            string `json:"model"`
+	Measured         bool   `json:"measured"`
 }
