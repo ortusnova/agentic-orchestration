@@ -33,6 +33,9 @@ class PlanState:
         self._validate = validate
         # Approved digests and the frozen set, read at every validation.
         self._inputs = inputs or (lambda: ({}, {}))
+        # Planning schemas by kind, read in place of the store's own: the
+        # workbench's, while the upgrade that brings them waits to merge.
+        self.replaced_schemas: dict[str, str] = {}
         self.graph: dict[str, Any] | None = None
         self.stories: dict[str, dict[str, Any]] = {}
         # The milestones and each change's tasks.md items, from the last valid read.
@@ -83,7 +86,8 @@ class PlanState:
         self._seen = self.fingerprint()
         try:
             approvals, frozen = self._inputs()
-            result = self._validate(self.store, approvals=approvals, frozen=frozen)
+            kw = {"schemas": planlib.Schemas.load(self.store, self.replaced_schemas)} if self.replaced_schemas else {}
+            result = self._validate(self.store, approvals=approvals, frozen=frozen, **kw)
             errors = [e.to_dict() for e in result.errors]
             graph = result.graph
             if graph is not None:

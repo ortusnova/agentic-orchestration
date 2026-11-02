@@ -5,10 +5,11 @@
 #
 #   store-sync.sh [STORE]     default: $STAGE0_STORE from stage0.env
 #
-# The store is also a working checkout: the planning session edits it, and the
-# workbench commits schema updates there. So it moves only when that loses
-# nothing: on a branch with an upstream, with no change to a tracked file, and
-# when the upstream contains HEAD. Otherwise it leaves the store as it is and
+# The store is also a working checkout: the planning session edits it. The
+# workbench does not commit on a branch that has an upstream: it brings a
+# schema update as a pull request, from a branch it pushes. So the store moves
+# only when that loses nothing: on a branch with an upstream, with no change
+# to a tracked file, and when the upstream contains HEAD. Otherwise it leaves the store as it is and
 # says why, once per state (journalctl --user -u ortus-stage0-store).
 set -euo pipefail
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}

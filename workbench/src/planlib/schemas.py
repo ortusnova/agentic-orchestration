@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
@@ -38,13 +38,16 @@ class Schemas:
     versions: dict[str, int] = field(default_factory=dict)
 
     @classmethod
-    def load(cls, store: Path) -> "Schemas":
+    def load(cls, store: Path, replaced: Mapping[str, str] | None = None) -> "Schemas":
+        """The store's schemas. ``replaced`` maps a kind to the schema text
+        read in place of the store's file of that kind."""
         validators: dict[str, Draft202012Validator] = {}
         versions: dict[str, int] = {}
+        replaced = replaced or {}
         for kind, supported in SUPPORTED_VERSIONS.items():
             path = Path(store) / SCHEMA_DIR / f"{kind}.schema.json"
             try:
-                schema = json.loads(path.read_text())
+                schema = json.loads(replaced[kind] if kind in replaced else path.read_text())
             except FileNotFoundError as exc:
                 if kind in OPTIONAL:
                     continue

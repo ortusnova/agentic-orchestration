@@ -12,11 +12,11 @@ from fastapi import HTTPException
 
 from .autosync import SyncLoop, sync_project
 from .config import Config
-from .delivery import DeliveryWatch, GitHubClient
+from .delivery import DeliveryWatch, GitHubClient, GitHubError
 from .hub import Hub
 from .plan_state import PlanState, watch
 from .registry import Project, Registry, RegistryError, check_new, suggest_slug
-from .scaffold import ScaffoldError, scaffold_store, upgrade_schemas
+from .scaffold import UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, upgrade_schemas
 from .sessions import SessionManager, runtime_base
 from .sortie import SortieClient, SortieError
 from .workers import WorkerRelay
@@ -87,7 +87,7 @@ class ProjectRuntime:
         import planlib
 
         try:
-            store = planlib.load_store(self.store)
+            store = planlib.load_store(self.store, planlib.Schemas.load(self.store, self.plan.replaced_schemas))
         except planlib.PlanLoadError:
             return []
         approvals = self.registry.approvals(self.project.id)
@@ -100,19 +100,55 @@ class ProjectRuntime:
                 log.info("project %s: imported the approval of %s from its breakdown", self.slug, change)
         return imported
 
-    def upgrade_schemas(self) -> None:
+    def upgrade_schemas(self) -> SchemaUpgrade | None:
+        """Bring the store's planning schemas up to the ones the workbench
+        ships: in the store itself, or, when its branch tracks an upstream,
+        on a pushed branch. Until that branch merges the plan is validated
+        against the shipped schemas."""
         try:
-            changed = upgrade_schemas(self.store)
+            up = upgrade_schemas(self.store)
         except (OSError, ScaffoldError) as exc:
             log.warning("project %s: could not update its planning schemas: %s", self.slug, exc)
+            return None
+        if up.written:
+            log.info("project %s: updated its planning schemas: %s", self.slug, ", ".join(up.paths))
+            return up
+        self.plan.replaced_schemas = up.replaced()
+        try:
+            push_upgrade(self.store, up)
+        except (OSError, ScaffoldError) as exc:
+            log.warning("project %s: could not push its planning schema upgrade: %s", self.slug, exc)
+            return None
+        if up.pushed:
+            log.info("project %s: pushed its planning schema upgrade to %s on %s: %s", self.slug, up.branch,
+                     up.upstream.remote, ", ".join(up.paths))
+        return up
+
+    async def propose_schemas(self, up: SchemaUpgrade | None) -> None:
+        """Open the pull request for the pushed schema upgrade, unless GitHub has one."""
+        if up is None or up.upstream is None or up.branch is None:
             return
-        if changed:
-            log.info("project %s: updated its planning schemas: %s", self.slug, ", ".join(changed))
+        repo = up.upstream.github_repo()
+        if repo is None:
+            log.warning("project %s: %s is not on GitHub; merge %s into %s by hand", self.slug,
+                        up.upstream.remote, up.branch, up.upstream.base)
+            return
+        body = ("The plan workbench ships newer planning schemas than this store has. "
+                "It validates the plan against them until this merges.\n\n"
+                + "".join(f"- `{p}`\n" for p in up.paths))
+        try:
+            pull = await self.deliveries.github.ensure_pull(*repo, head=up.branch, base=up.upstream.base,
+                                                            title=UPGRADE_MESSAGE, body=body)
+        except GitHubError as exc:
+            log.warning("project %s: could not open the pull request for %s: %s", self.slug, up.branch, exc)
+            return
+        if pull["created"]:
+            log.info("project %s: opened %s for its planning schemas", self.slug, pull["url"])
 
     async def start(self) -> None:
         self.hub.bind(asyncio.get_running_loop())
         self.sync.bind(asyncio.get_running_loop())
-        await asyncio.to_thread(self.upgrade_schemas)
+        await self.propose_schemas(await asyncio.to_thread(self.upgrade_schemas))
         await asyncio.to_thread(self.import_legacy_approvals)
         await asyncio.to_thread(self.plan.refresh)
         if (self.store / "openspec").is_dir():
