@@ -341,7 +341,7 @@ render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://12
   || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
 say "Rendering Sortie's workflow"
-python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
+STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
 "$KIT/run-sortie.sh" validate >/dev/null || die "Sortie refused the workflow: $KIT/run-sortie.sh validate"
 
 say "Installing the user units"

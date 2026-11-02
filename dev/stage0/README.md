@@ -20,6 +20,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
+dev/stage0/test-review-gate.sh        # check the review gate against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -56,9 +57,29 @@ pull request. When the pull request merges, Sortie moves the story to
 `Done`. A homelab story released after a Sortie story merged is dispatched
 by the same Sortie, like any other.
 
+- **Review and merge.** Every story's pull request goes through the
+  criteria gate, whatever its `review` value (spec store
+  `agent-platform/run-supervision`, design D5). The build rule
+  (`build`, `claude-label` or `claude-title`) hops to the `review` rule
+  (`gate: criteria`, stage label `sortie-stage:review`), a new run in a new
+  agent session. The review checks each acceptance criterion with evidence,
+  may add fix commits, which Sortie pushes, and never rewrites a pushed
+  commit. When it passes, Sortie's `auto_merge` squashes the pull request
+  once CI passes, and merge completion moves the story to `Done`: no person
+  is involved. A criterion it cannot settle, such as one that conflicts
+  with a design rule, stops it `blocked`: the pull request stays open, and
+  Sortie parks the story with the review's question, which the workbench
+  shows. Branch protection that requires an approving review would keep
+  every pull request from merging; the kit's repositories must not require
+  one. Sortie merges a `review: human` story after a review only from the
+  Sortie commit that lets its gate do so (`planReviewGate`); with an older
+  Sortie a person still merges those. `test-review-gate.sh` checks all of
+  this against Sortie's own loader, exit and merge code: it needs the
+  `sortie/` submodule, or `SORTIE_SRC` naming a Sortie checkout.
+
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
-  then it runs Claude Code.
+  then its build runs Claude Code. The review always runs opencode.
   `pack/agent-acp` picks one from `SORTIE_RULE`. Both use the operator's
   Claude subscription. No other model provider is configured.
 - **opencode 2.** The pack runs opencode 2.2.1 (smol-builder's base layer)
@@ -111,7 +132,7 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | Credential | Source |
 | --- | --- |
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
-| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. A login token lasts hours, so `ortus-stage0-token.timer` restarts Sortie onto a fresher one while no agent runs |
+| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
@@ -189,7 +210,7 @@ certificate.
 
 | What | Where |
 | --- | --- |
-| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); `ortus-stage0-token.timer` restarts nono with Sortie onto a fresher one |
+| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts nono alone onto a fresher one while no agent runs, or at once when its token has expired |
 | Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The edge's credential to nono | `nono-pass` in the stage-0 home |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks refresh-token.sh with systemctl, curl and anthropic-token.py stubbed:
-# when it restarts Sortie onto a fresher Claude token, and when it waits.
+# when it restarts nono onto a fresher Claude token, and when it waits.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -24,10 +24,10 @@ min=$(( 60 * 1000 ))
 
 check() { # check NAME RUNNING_EXPIRY FRESH_EXPIRY BUSY WANT_RESTART
   rm -f "$tmp/calls"
-  echo "$2" > "$STAGE0_HOME/token-expiry"
+  echo "$2" > "$STAGE0_HOME/nono-token-expiry"
   FRESH=$3 BUSY=$4 "$tmp/kit/refresh-token.sh" 2> /dev/null
   local got=no
-  grep -q 'restart ortus-stage0-sortie.service' "$tmp/calls" 2> /dev/null && got=yes
+  grep -q 'restart ortus-stage0-nono.service' "$tmp/calls" 2> /dev/null && got=yes
   if [[ $got == "$5" ]]; then echo "ok: $1"; else echo "FAIL: $1: restart $got, want $5"; failed=1; fi
 }
 

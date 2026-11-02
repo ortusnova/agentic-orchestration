@@ -12,8 +12,9 @@
 #                            harnesses: the freshest live token that
 #                            anthropic-token.py finds (a `claude setup-token`
 #                            token, else opencode's or Claude Code's OAuth
-#                            login). Its expiry goes to $STAGE0_HOME/token-expiry,
-#                            which ortus-stage0-token.timer watches.
+#                            login). Sortie reads it again at each launch
+#                            (the workflow's command source); this start
+#                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
 # Git reaches GitHub over HTTPS with that same token, through a credential
@@ -42,7 +43,6 @@ STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
 export CLAUDE_CODE_OAUTH_TOKEN
 CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py") \
   || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
-"$(dirname "$0")/anthropic-token.py" --expiry > "$STAGE0_HOME/token-expiry"
 export IS_SANDBOX=1
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY
 

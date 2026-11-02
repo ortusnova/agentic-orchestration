@@ -18,6 +18,9 @@ export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 # shellcheck source=egress-credentials.sh
 . "$KIT/egress-credentials.sh"
 egress_credentials || die "could not read the egress credentials"
+# nono reads its credentials only here; refresh-token.sh restarts it onto a
+# fresher Claude token, using this expiry.
+"$KIT/anthropic-token.py" --expiry > "$STAGE0_HOME/nono-token-expiry"
 NONO_PROXY_PASS=$(cat "$STAGE0_HOME/nono-pass")
 export NONO_PROXY_PASS NONO_NO_UPDATE_CHECK=1
 # --silent keeps nono from printing its proxy URL, which holds the pass; -v
