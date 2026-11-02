@@ -24,6 +24,8 @@ export interface Question {
   /** When the story stopped, in Unix seconds, if Sortie says. */
   parked_at: number | null;
   reason: string | null;
+  /** The Sortie that holds the question, by name; absent from an older backend. */
+  sortie?: string;
 }
 
 export interface TrackerView {

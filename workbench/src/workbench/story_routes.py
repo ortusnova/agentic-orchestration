@@ -159,9 +159,10 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
 
     @router.post("/stories/answer")
     async def answer(slug: str, body: AnswerBody, who: Identity = Depends(approver)) -> dict:
-        """Answer the question a parked story's agent asked, through Sortie's
-        answer API: Sortie posts it on the issue, in the person's name, and
-        releases the park. The workbench writes nothing to the tracker."""
+        """Answer the question a parked story's agent asked, through the
+        answer API of the Sortie that holds it: Sortie posts it on the issue,
+        in the person's name, and releases the park. The workbench writes
+        nothing to the tracker."""
         rt = projects.get(slug)
         text = body.text.strip()
         if not text:
@@ -172,7 +173,7 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
         writable(rt)
         try:
-            await rt.hub.sortie.answer(ident, text, who.name or who.email or who.key)
+            await rt.hub.holder(ident).answer(ident, text, who.name or who.email or who.key)
         except SortieError as exc:
             if exc.status == 409:
                 await rt.hub.poll_once()

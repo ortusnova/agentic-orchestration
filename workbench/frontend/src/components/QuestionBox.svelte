@@ -63,7 +63,7 @@
     {#if question.statement}{@html renderMarkdown(question.statement)}{:else}<p class="none">The agent stopped for a person without saying why.</p>{/if}
   </div>
   <p class="when">
-    Stopped {#if when}<time datetime={when.iso}>{when.text}</time>{:else}at a time Sortie does not report{/if}{#if question.reason} · {question.reason}{/if}
+    Stopped {#if when}<time datetime={when.iso}>{when.text}</time>{:else}at a time Sortie does not report{/if}{#if question.reason} · {question.reason}{/if}{#if question.sortie} · <span data-sortie={question.sortie}>on {question.sortie}'s Sortie</span>{/if}
   </p>
   {#if replacedBy && !closed}
     <div class="replaced" data-replaced-by={replacedBy.key}>

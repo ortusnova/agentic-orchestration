@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .autosync import approved_digest
 from .home import History, build_home
@@ -24,7 +24,9 @@ _UNSET = object()
 
 
 class Hub:
-    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None):
+    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
+                 sortie_name: str = "sortie", others: dict[str, ProjectSortie] | None = None,
+                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None):
         self.plan = plan
         # Called, from any thread, when the approved part of the graph changes.
         self.on_approved_change = lambda: None
@@ -32,6 +34,16 @@ class Hub:
         self._approved: str | None | object = _UNSET
         self.sync_status: dict[str, Any] | None = None
         self.sortie = sortie
+        # Every Sortie whose questions the hub reads, by name: the main one,
+        # which also serves the plan, and the others (agent-platform/run-supervision).
+        self.sortie_name = sortie_name
+        self.sorties: dict[str, ProjectSortie] = {sortie_name: sortie, **(others or {})}
+        # Why the last read of each other Sortie's state failed; None once it answers.
+        self.other_errors: dict[str, str | None] = {name: None for name in others or {}}
+        # The last questions each other Sortie reported, kept while it cannot be read.
+        self._other_questions: dict[str, dict[str, dict[str, Any]]] = {}
+        # Pushes the open questions to the operator's channel at every poll.
+        self.alerts = alerts
         # (approvals, rereviews) of the project, by plan key.
         self.records = records or (lambda: ({}, {}))
         # What GitHub reported of each pull request a story names, by ref.
@@ -50,7 +62,7 @@ class Hub:
         # The open question of each parked issue, by tracker identifier, and
         # the per-issue responses that gave their statements, by park.
         self.questions: dict[str, dict[str, Any]] = {}
-        self._park_details: dict[tuple[str, Any], dict[str, Any]] = {}
+        self._park_details: dict[tuple[str, str, Any], dict[str, Any]] = {}
         self.history = History()
         # The order the stories were released in, as the hub saw them leave the backlog.
         self.release_order = ReleaseOrder()
@@ -68,6 +80,24 @@ class Hub:
         self._loop = loop
 
     async def poll_once(self) -> None:
+        await self._poll()
+        await self.alert()
+
+    async def alert(self) -> None:
+        """Push the project's open questions to the operator's channel. Not
+        while the main Sortie cannot be read, when the list may be short, and
+        not from a read-only workbench, which runs beside the one that does."""
+        if self.alerts is None or self.read_only or self.sortie_error is not None or self.tracker is None:
+            return
+        questions = (self.home or {}).get("questions")
+        if questions is None:
+            return
+        try:
+            await self.alerts(list(questions))
+        except Exception:  # pushing must never stop the poll
+            log.exception("could not push the open questions")
+
+    async def _poll(self) -> None:
         # Catch store edits the file watcher missed.
         if await asyncio.to_thread(self.plan.stale):
             await asyncio.to_thread(self.plan.refresh)
@@ -95,13 +125,15 @@ class Hub:
         # The home reads the agent slots and held runs from Sortie's state,
         # which Sortie keeps for the project it dispatches only.
         if not graph.get("dispatched"):
-            self.agent_state, self.state_error, self.questions = None, None, {}
+            self.agent_state, self.state_error = None, None
+            self.questions = await self._questions(None)
             return {}
         try:
             state = await self.sortie.state()
         except SortieError as exc:
             log.warning("sortie state unavailable: %s", exc)
-            self.agent_state, self.state_error, self.questions = None, exc.message, {}
+            self.agent_state, self.state_error = None, exc.message
+            self.questions = await self._questions(None)
             return {}
         self.agent_state, self.state_error = state, None
         self.questions = await self._questions(state)
@@ -109,26 +141,58 @@ class Hub:
             return {}
         return worker_fields(state)
 
-    async def _questions(self, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        """The open question of each parked issue, by tracker identifier. The
-        state may shorten a stop statement; the issue's own response holds it
-        whole, and is read once per park."""
-        out: dict[str, dict[str, Any]] = {}
-        details: dict[tuple[str, Any], dict[str, Any] | None] = {}
-        for entry in parked(state):
-            ident = entry["issue_identifier"]
-            park = (ident, parked_at_of(entry))
-            detail = self._park_details.get(park) if park[1] is not None else None
-            if detail is None:
-                try:
-                    detail = await self.sortie.issue(ident)
-                except SortieError as exc:
-                    log.info("sortie has no details of %s's park: %s", ident, exc.message)
-                    detail = None
-            details[park] = detail
-            out[ident] = question(entry, detail)
+    async def _questions(self, state: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+        """The open question of each parked issue, by tracker identifier, from
+        every Sortie: the main one's ``state``, when it dispatches the project,
+        and each other one's own. Each question names the Sortie that holds
+        it. A Sortie that cannot be read keeps the questions it last reported."""
+        details: dict[tuple[str, str, Any], dict[str, Any] | None] = {}
+        out = await self._held(self.sortie_name, self.sortie, state, details) if state is not None else {}
+        for name, client in self.sorties.items():
+            if name == self.sortie_name:
+                continue
+            try:
+                other = await client.state()
+            except SortieError as exc:
+                if self.other_errors.get(name) is None:
+                    log.warning("%s's sortie state unavailable: %s", name, exc.message)
+                self.other_errors[name] = exc.message
+                held = self._other_questions.get(name, {})
+                # Its park details stay cached for when it answers again.
+                details.update({k: v for k, v in self._park_details.items() if k[0] == name})
+            else:
+                self.other_errors[name] = None
+                held = self._other_questions[name] = await self._held(name, client, other, details)
+            for ident, q in held.items():
+                out.setdefault(ident, q)
         self._park_details = {k: v for k, v in details.items() if v is not None}
         return out
+
+    async def _held(self, name: str, client: ProjectSortie, state: dict[str, Any],
+                    details: dict[tuple[str, str, Any], dict[str, Any] | None]) -> dict[str, dict[str, Any]]:
+        """The open questions in one Sortie's state. The state may shorten a
+        stop statement; the issue's own response holds it whole, and is read
+        once per park."""
+        out: dict[str, dict[str, Any]] = {}
+        for entry in parked(state):
+            ident = entry["issue_identifier"]
+            park = (name, ident, parked_at_of(entry))
+            detail = self._park_details.get(park) if park[2] is not None else None
+            if detail is None:
+                try:
+                    detail = await client.issue(ident)
+                except SortieError as exc:
+                    log.info("%s's sortie has no details of %s's park: %s", name, ident, exc.message)
+                    detail = None
+            details[park] = detail
+            out[ident] = {**question(entry, detail), "sortie": name}
+        return out
+
+    def holder(self, identifier: str) -> ProjectSortie:
+        """The Sortie that holds the issue's question; the main one when no
+        Sortie reports one."""
+        q = self.questions.get(identifier)
+        return self.sorties.get((q or {}).get("sortie") or self.sortie_name, self.sortie)
 
     async def pull_back_stale(self) -> None:
         """Pull back each released story whose content changed since its
@@ -181,6 +245,8 @@ class Hub:
                 # Sortie runs agents for its configured project only.
                 "dispatched": bool((self.tracker or {}).get("dispatched", False)),
                 "generated_at": (self.tracker or {}).get("generated_at"),
+                # The other Sorties whose questions the workbench reads.
+                "others": [{"name": n, "reachable": e is None, "error": e} for n, e in self.other_errors.items()],
             },
         )
         doc["plan_states"] = (self.tracker or {}).get("plan_states")

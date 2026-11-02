@@ -17,7 +17,9 @@ class FakeSortie:
 
     DEFAULT = "T"
 
-    def __init__(self):
+    def __init__(self, token: str = SORTIE_TOKEN):
+        # The control token it takes.
+        self.token = token
         # Tracker projects of the workspace: key -> {"name", "problems"}.
         self.projects: dict[str, dict[str, Any]] = {self.DEFAULT: {"name": "Tracker", "problems": []}}
         self.ensure_error: tuple[int, str] | None = None
@@ -100,14 +102,14 @@ class FakeSortie:
         return node
 
     def client(self) -> SortieClient:
-        return SortieClient("http://sortie.test", SORTIE_TOKEN, transport=httpx.MockTransport(self.handle))
+        return SortieClient("http://sortie.test", self.token, transport=httpx.MockTransport(self.handle))
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         if self.unreachable:
             raise httpx.ConnectError("connection refused", request=request)
         self.requests.append((request.method, request.url.path, body))
-        if request.headers.get("authorization") != f"Bearer {SORTIE_TOKEN}":
+        if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"error": {"code": "unauthorized", "message": "token"}})
         if self.down:
             return httpx.Response(502, json={"error": {"code": "tracker_transport_error", "message": "tracker down"}})

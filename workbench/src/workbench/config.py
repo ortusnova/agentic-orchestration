@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,63 @@ def _recheck(value: str) -> float:
     if not 1 <= seconds <= MAX_DELIVERY_RECHECK:
         raise ConfigError(f"WORKBENCH_DELIVERY_RECHECK_SECONDS must be between 1 and {MAX_DELIVERY_RECHECK:g}")
     return seconds
+
+
+# A Sortie's name, as people read it: "taichi's Sortie".
+SORTIE_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+# The channels the workbench can push questions to: the kinds of Sortie's
+# own notifications.
+NOTIFY_KINDS = ("slack", "discord", "telegram", "webhook")
+
+
+@dataclass(frozen=True)
+class SortieSource:
+    """A Sortie besides the main one, whose questions the workbench reads."""
+
+    name: str
+    url: str
+    token: str = field(default="", repr=False)
+
+
+def _sorties(env: dict[str, str], main: str) -> tuple[SortieSource, ...]:
+    """WORKBENCH_SORTIES: ``name=url`` entries, separated by spaces; each
+    one's control token is the file ``<name>.token`` in
+    WORKBENCH_SORTIE_TOKEN_DIR, when that directory is set."""
+    out: list[SortieSource] = []
+    token_dir = env.get("WORKBENCH_SORTIE_TOKEN_DIR", "").strip()
+    for entry in env.get("WORKBENCH_SORTIES", "").split():
+        name, sep, url = entry.partition("=")
+        if not sep or not SORTIE_NAME.fullmatch(name) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"WORKBENCH_SORTIES: {entry!r} is not name=http(s)://address")
+        if name == main or any(s.name == name for s in out):
+            raise ConfigError(f"WORKBENCH_SORTIES: the name {name} is taken")
+        token = ""
+        if token_dir:
+            path = Path(token_dir).expanduser() / f"{name}.token"
+            try:
+                token = path.read_text().strip()
+            except OSError as exc:
+                raise ConfigError(f"WORKBENCH_SORTIE_TOKEN_DIR: {exc}") from exc
+        out.append(SortieSource(name, url.rstrip("/"), token))
+    return tuple(out)
+
+
+def _notify_secret(env: dict[str, str]) -> str:
+    """The channel's credential, from a file that only its owner may write."""
+    raw = env.get("WORKBENCH_NOTIFY_CREDENTIAL_FILE", "").strip()
+    if not raw:
+        raise ConfigError("WORKBENCH_NOTIFY_CREDENTIAL_FILE is required with WORKBENCH_NOTIFY_KIND")
+    path = Path(raw).expanduser()
+    try:
+        if path.stat().st_mode & 0o022:
+            raise ConfigError(f"WORKBENCH_NOTIFY_CREDENTIAL_FILE {path} is writable by others than its owner; chmod 600 it")
+        secret = path.read_text().strip()
+    except OSError as exc:
+        raise ConfigError(f"WORKBENCH_NOTIFY_CREDENTIAL_FILE: {exc}") from exc
+    if not secret:
+        raise ConfigError(f"WORKBENCH_NOTIFY_CREDENTIAL_FILE {path} is empty")
+    return secret
 
 
 @dataclass(frozen=True)
@@ -97,6 +155,17 @@ class Config:
     # Where the people who use this workbench can get its source, as the
     # AGPL requires. Whoever runs a modified workbench points it at theirs.
     source_url: str = SOURCE_URL
+    # The main Sortie's name, and every other Sortie whose questions the
+    # workbench reads and answers (agent-platform/run-supervision).
+    sortie_name: str = "sortie"
+    other_sorties: tuple[SortieSource, ...] = ()
+    # The operator's channel, where every open question is pushed. No kind,
+    # no channel. The secret is a webhook URL, or a Telegram bot's token.
+    notify_kind: str = ""
+    notify_secret: str = field(default="", repr=False)
+    notify_chat_id: str = ""
+    # Where people reach this workbench, for the links in what it pushes.
+    public_url: str = ""
 
     @property
     def oidc(self) -> bool:
@@ -137,6 +206,20 @@ class Config:
         password_hash = env.get("WORKBENCH_PASSWORD_HASH", "").strip()
         if not issuer and not password_hash:
             raise ConfigError("WORKBENCH_PASSWORD_HASH is required without WORKBENCH_OIDC_ISSUER (local mode)")
+        sortie_name = env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie"
+        if not SORTIE_NAME.fullmatch(sortie_name):
+            raise ConfigError(f"WORKBENCH_SORTIE_NAME {sortie_name!r} must be lowercase letters, digits and dashes")
+        notify_kind = env.get("WORKBENCH_NOTIFY_KIND", "").strip()
+        notify_secret, notify_chat_id = "", env.get("WORKBENCH_NOTIFY_CHAT_ID", "").strip()
+        public_url = env.get("WORKBENCH_PUBLIC_URL", "").strip().rstrip("/")
+        if notify_kind:
+            if notify_kind not in NOTIFY_KINDS:
+                raise ConfigError(f"WORKBENCH_NOTIFY_KIND {notify_kind!r} is not one of {', '.join(NOTIFY_KINDS)}")
+            notify_secret = _notify_secret(env)
+            if notify_kind == "telegram" and not notify_chat_id:
+                raise ConfigError("WORKBENCH_NOTIFY_CHAT_ID is required with WORKBENCH_NOTIFY_KIND=telegram")
+            if not public_url.startswith(("http://", "https://")):
+                raise ConfigError("WORKBENCH_PUBLIC_URL is required with WORKBENCH_NOTIFY_KIND: the links in each question point there")
         prompt = env.get("WORKBENCH_PROMPT_FILE") or str(bundled("prompts/planning-session.md", "prompts/planning-session.md"))
         frontend = env.get("WORKBENCH_FRONTEND_DIR") or str(bundled("frontend", "frontend/dist"))
         return cls(
@@ -168,4 +251,10 @@ class Config:
             oidc_approver_group=env.get("WORKBENCH_OIDC_APPROVER_GROUP", "").strip(),
             allow_local_mode=env.get("WORKBENCH_ALLOW_LOCAL_MODE", "") == "1",
             source_url=env.get("WORKBENCH_SOURCE_URL", "").strip() or SOURCE_URL,
+            sortie_name=sortie_name,
+            other_sorties=_sorties(env, sortie_name),
+            notify_kind=notify_kind,
+            notify_secret=notify_secret,
+            notify_chat_id=notify_chat_id,
+            public_url=public_url,
         )
