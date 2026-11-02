@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "name": "ortus-cp-egress",
+    "description": "The egress flow of the control plane (control-plane/docs/operator-guide.md): the hosts the remote workflow allows, and the credentials nono holds, from the podman secrets cp.sh creates"
+  },
+  "network": {
+    "allow_domain": [
+      "api.anthropic.com",
+      "api.github.com",
+      "github.com",
+      "models.opencode.ai",
+      "proxy.golang.org",
+      "registry.npmjs.org",
+      "storage.googleapis.com",
+      "sum.golang.org"
+    ],
+    "credentials": ["anthropic", "github_api", "github_git"],
+    "custom_credentials": {
+      "anthropic": {
+        "upstream": "https://api.anthropic.com",
+        "credential_key": "env://CP_EGRESS_ANTHROPIC",
+        "inject_header": "Authorization",
+        "credential_format": "Bearer {}"
+      },
+      "github_api": {
+        "upstream": "https://api.github.com",
+        "credential_key": "env://CP_EGRESS_GITHUB",
+        "inject_header": "Authorization",
+        "credential_format": "Bearer {}"
+      },
+      "github_git": {
+        "upstream": "https://github.com",
+        "credential_key": "env://CP_EGRESS_GITHUB_BASIC",
+        "inject_mode": "basic_auth"
+      }
+    }
+  }
+}
