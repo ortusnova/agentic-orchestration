@@ -153,7 +153,7 @@ credential are the operator's choice: any kind Sortie's notifications have.
 
 | Where | What it sends |
 | --- | --- |
-| Both workflows, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`) and a merge that needs a person (`escalation.auto_merge`) |
+| Both workflows, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
 | The workbench on p1, which reads the questions of p1's Sortie and of each homelab host's | each open question within one poll, with the story, the Sortie that holds it, and a link to the project's home on `STAGE0_WORKBENCH_PUBLIC_URL`, where it is answered; then again every 4 hours while it stays open, and never once it is answered or released |
 
 To set the channel, on p1 and on each homelab host (taichi):

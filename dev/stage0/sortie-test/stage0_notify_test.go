@@ -115,7 +115,8 @@ func TestStage0_EveryKindOfChannelLoads(t *testing.T) {
 			const secret = "https://channel.test/hook-secret-0123456789"
 			cfg := loadWithChannel(t, name, kind, "-1001234567890", secret)
 			b := channelBackend(t, cfg, kind)
-			for _, e := range []domain.EventType{domain.EventSessionStopped, domain.EventSessionEscalated} {
+			for _, e := range []domain.EventType{domain.EventSessionStopped, domain.EventSessionEscalated,
+				domain.EventEscalationCIFailure, domain.EventEscalationMergeConflicts} {
 				if !slices.Contains(b.Events, e) {
 					t.Errorf("%s/%s: events = %v, want %s", name, kind, b.Events, e)
 				}

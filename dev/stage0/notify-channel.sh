@@ -16,8 +16,9 @@
 
 # What Sortie sends there: a run that stopped for a person (an agent's park,
 # a review that cannot settle a criterion), a question its broker escalates,
-# and the holds and merge failures that need a person.
-NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto_merge]'
+# and the holds, merge failures, and pull requests still failing or
+# conflicting after their fix runs, that need a person.
+NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts]'
 
 # notify_entry KIND [CHAT_ID]: the workflow's notifications entry for the
 # channel, indented as a list item; nothing for no kind. The credential stays
