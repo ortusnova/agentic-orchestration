@@ -275,7 +275,17 @@ dev/stage0/huly-tunnel.sh taichi
 # On taichi, once homelab's `make dev-host` has run there:
 STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
 dev/stage0/stage0.sh                          # later runs read it from stage0.env
+# On p1 again, once taichi's Sortie has its token: the workbench shows taichi.
+dev/stage0/huly-tunnel.sh taichi
 ```
+
+The same connection forwards taichi's Sortie to p1's loopback (from port
+7681 up, one port per host), and `huly-tunnel.sh` copies its control token
+to `$STAGE0_HOME/sorties/taichi.token` on p1, with its address in
+`taichi.env`. `run-workbench.sh` passes every Sortie there to the
+workbench (`WORKBENCH_SORTIES`), and the project home shows each as a
+worker with its slot lanes, beside p1's own (`WORKBENCH_SORTIE_NAME`, the
+host's short name).
 
 | Part | Where |
 | --- | --- |
@@ -303,7 +313,8 @@ To remove the profile: on taichi, `systemctl --user disable --now
 ortus-stage0-sortie`, delete each `sortie-*` machine, then
 `git -C ~/dev/homelab worktree remove ~/.local/share/ortus-nova/stage0/homelab`
 and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
-`dev/stage0/huly-tunnel.sh --remove taichi`.
+`dev/stage0/huly-tunnel.sh --remove taichi`, which also removes taichi from the
+workbench.
 
 ## Remove it
 
