@@ -32,5 +32,5 @@ mount are code the fork keeps apart from upstream for nothing.
 ## Impact
 
 - Sortie fork (ortusnova/sortie, a separate pull request): `internal/environment/smolvm` and the tool socket are deleted, and config validation refuses the kind; the workflow reference and the smolvm guide follow.
-- This repository: the stage-0 kit's workflow uses the `remote` kind (`dev/stage0/WORKFLOW.md`), and the homelab profile's co-located workflow is deleted.
+- This repository: the stage-0 kit's workflow uses the `remote` kind (`dev/stage0/WORKFLOW.md`), and the homelab profile's co-located workflow is deleted. Before taichi's Sortie stops, its merge records (`plan_satisfaction`) are carried into p1's, so no homelab story waits on a blocker that merged under taichi.
 - Operators: a workflow on the `smolvm` kind moves to `remote` and runs its jobs on a worker daemon.

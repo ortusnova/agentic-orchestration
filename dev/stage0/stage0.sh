@@ -229,7 +229,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   "$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
     || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
-  retire_sortie "$UNITS"
+  retire_sortie "$UNITS" || die "this host's Sortie keeps running until p1's Sortie holds its merge records (see above)"
   say "Installing the user units"
   mkdir -p "$UNITS"
   units=(ortus-stage0-worker.service)

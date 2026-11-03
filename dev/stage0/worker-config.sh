@@ -106,15 +106,33 @@ register_local_worker() {
 
 # retire_sortie UNITS: a worker host runs no Sortie (spec store
 # agent-platform/one-sortie). Stop the one an earlier profile left here and
-# remove its unit; its workspaces and recorder folders stay. Does nothing
-# once it is gone.
+# remove its unit; its workspaces, its database and recorder folders stay.
+# It stops it only once p1's Sortie holds every merge record it holds
+# (worker-host.sh carry, on p1, which leaves merges-carried.json here), so
+# no story waits on p1 for a blocker that merged here; until then it fails
+# and the Sortie runs on. Does nothing once it is gone.
 retire_sortie() {
-  local units=$1 unit=ortus-stage0-sortie.service
+  local units=$1 unit=ortus-stage0-sortie.service db=$STAGE0_HOME/sortie/.sortie.db
+  local carried=$STAGE0_HOME/merges-carried.json left
   [[ -e $units/$unit ]] || return 0
-  say "Retiring this host's Sortie: p1's Sortie dispatches every repository now"
+  if [[ -e $db ]]; then
+    left=$(python3 "$KIT/merges.py" missing "$db" "$carried") || {
+      say "Could not read this host's Sortie's merge records ($db): it keeps running"
+      return 1
+    }
+    if [[ -n $left ]]; then
+      say "p1's Sortie lacks $(wc -l <<< "$left") merge record(s) of this host's Sortie, so it keeps running: on p1, run dev/stage0/worker-host.sh carry $(hostname -s), then this again"
+      return 1
+    fi
+  fi
+  say "Retiring this host's Sortie: p1's Sortie dispatches every repository now, and holds its merge records"
   systemctl --user disable -q --now "$unit" 2>/dev/null || true
   rm -f "$units/$unit" "$STAGE0_HOME/profile.env"
   systemctl --user daemon-reload
+  # A merge it recorded after the check and before it stopped.
+  if [[ -e $db ]] && left=$(python3 "$KIT/merges.py" missing "$db" "$carried") && [[ -n $left ]]; then
+    say "This host's Sortie recorded $(wc -l <<< "$left") merge(s) as it stopped: on p1, run dev/stage0/worker-host.sh carry $(hostname -s) again"
+  fi
 }
 
 # retire_huly_tunnels UNITS: no worker host polls Huly, so p1 keeps no
