@@ -23,6 +23,18 @@ def test_migrates_once_and_reopens(tmp_path, open_registry):
         assert db.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
+def test_a_closed_registry_opens_no_connection(open_registry):
+    # A plan refresh still running in a thread at shutdown reads approvals
+    # after the app closed the registry; it must not leak a new connection.
+    reg = open_registry()
+    reg.list()
+    reg.close()
+    with pytest.raises(RegistryError) as err:
+        reg.approvals(1)
+    assert err.value.code == "registry_closed"
+    assert reg._conn is None
+
+
 def test_slug_tracker_key_and_store_are_unique(open_registry):
     reg = open_registry()
     with reg.reserve("billing", "Billing", "BILL", "projects/billing"):

@@ -1,0 +1,192 @@
+"""Sortie's cap on agents at once, every worker's together: at the cap,
+stories that wait for a slot wait on the cap, so the lanes read full, not
+stuck, even where a worker's lane is free; a free lane counts only while
+the cap has room."""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from tests.workbench.conftest import P, settle, sign_in
+from tests.workbench.fake_sortie import FakeSortie
+from tests.workbench.test_approvals import app_for, billing
+from tests.workbench.test_fleet import NODES, NOW, iso, worker
+from workbench.fleet import build_fleet, lanes_summary, story_states
+from workbench.home import execution_health, slots_of
+
+WAITING = ("ONS-50", "ONS-68", "ONS-70", "ONS-71")
+
+
+def remote_state(cap: int, running: list[str], waiting=WAITING) -> dict:
+    """p1's one Sortie under the remote kind: p1's worker with 3 run slots,
+    taichi's with 2, every job on p1, and stories that wait for a slot."""
+    return {
+        "generated_at": iso(NOW), "config": {"agent": {"max_concurrent_agents": cap}},
+        "running": [{"issue_identifier": i, "worker": "p1", "started_at": iso(NOW - 60), "step": "build"} for i in running],
+        "retrying": [], "budget_exhausted": [], "parked": [], "held": [], "pulls": [],
+        "waits": [{"issue_identifier": i, "kind": "slot", "reason": f"No free agent slot: {len(running)} of {cap} running",
+                   "release": "Released when a running session ends.", "since": iso(NOW - 30)} for i in waiting],
+        "workers": {"workers": [{"id": "p1", "last_check_in": iso(NOW - 2), "declaration": {"run_slots": 3}},
+                                {"id": "taichi", "last_check_in": iso(NOW - 2), "declaration": {"run_slots": 2}}],
+                    "queue": [], "leases": []},
+    }
+
+
+def lanes_of(state: dict) -> tuple[dict, dict]:
+    fleet = build_fleet([("p1", state, None)], NODES, now=NOW)
+    return fleet, lanes_summary(fleet, None)
+
+
+def test_at_the_cap_the_lanes_are_full_not_stuck():
+    # The live case of 2026-11-03: a cap of 3, all 3 on p1, taichi's 2 slots free.
+    fleet, summary = lanes_of(remote_state(3, ["ONS-34", "ONS-52", "ONS-48"]))
+    assert summary["verdict"] == "full"
+    assert summary["reasons"][0]["code"] == "cap_full"
+    assert summary["reasons"][0]["text"] == ("p1: 4 stories wait for a slot: Sortie runs 3 agents, "
+                                             "its cap of 3 at once (agent.max_concurrent_agents)")
+    assert fleet["sorties"][0]["cap"] == {"limit": 3, "running": 3}
+    t = worker(fleet, "taichi")
+    assert t["verdict"] == "idle" and t["capped"]
+    assert not any(r["code"] == "slot_idle" for r in t["reasons"])
+    assert any(r["code"] == "cap_full" for r in t["reasons"])
+    assert worker(fleet, "p1")["verdict"] == "moving"
+
+
+def test_a_free_slot_under_the_cap_with_work_waiting_is_stuck():
+    fleet, summary = lanes_of(remote_state(16, ["ONS-34", "ONS-52", "ONS-48"]))
+    assert summary["verdict"] == "stuck"
+    t = worker(fleet, "taichi")
+    assert t["verdict"] == "stuck" and not t["capped"]
+    assert [r["text"] for r in t["reasons"]] == ["4 stories wait for a slot while 2 slots are free"]
+
+
+def test_only_the_cap_s_room_counts_as_free():
+    # A cap of 4 with 3 running: one more agent may start, though taichi has 2 free lanes.
+    fleet, summary = lanes_of(remote_state(4, ["ONS-34", "ONS-52", "ONS-48"]))
+    assert summary["verdict"] == "stuck"
+    assert [r["text"] for r in worker(fleet, "taichi")["reasons"]] == ["4 stories wait for a slot while 1 slot is free"]
+
+
+def test_a_stuck_story_still_makes_the_lanes_stuck_at_the_cap():
+    state = remote_state(3, ["ONS-34", "ONS-52", "ONS-48"], waiting=("ONS-70",))
+    state["parked"] = [{"issue_identifier": "ONS-50", "worker": "taichi", "statement": "Which disk?", "parked_at": iso(NOW - 99)}]
+    fleet, summary = lanes_of(state)
+    assert summary["verdict"] == "stuck"
+    assert any(r["code"] == "question" for r in summary["reasons"])
+
+
+def test_at_the_cap_with_nothing_waiting_the_lanes_are_not_full():
+    _, summary = lanes_of(remote_state(3, ["ONS-34", "ONS-52", "ONS-48"], waiting=()))
+    assert summary["verdict"] == "healthy"
+
+
+def test_the_home_lanes_follow_the_fake_sortie_s_cap(store):
+    billing(store)
+    fake = FakeSortie()
+    fake.issue("billing/b1", state="In Progress")
+    fake.issue("billing/b2")
+    fake.run("T-1", "s1", worker="p1")
+    fake.max_agents = 1
+    fake.extra_state = {
+        "waits": [{"issue_identifier": "T-2", "kind": "slot", "reason": "No free agent slot: 1 of 1 running",
+                   "release": "Released when a running session ends.", "since": "2026-11-03T15:05:39Z"}],
+        "workers": {"workers": [{"id": "p1", "declaration": {"run_slots": 3}}, {"id": "taichi", "declaration": {"run_slots": 2}}],
+                    "queue": [], "leases": []},
+    }
+    app = app_for(store, fake)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        lanes = client.get(f"{P}/graph").json()["home"]["lanes"]
+        assert lanes["verdict"] == "full"
+        assert lanes["reasons"][0]["code"] == "cap_full"
+        # The cap rises: taichi's free slots now take work, and stories still wait.
+        fake.max_agents = 16
+        settle(client)
+        lanes = client.get(f"{P}/graph").json()["home"]["lanes"]
+        assert lanes["verdict"] == "stuck"
+        assert any(r["code"] == "slot_idle" for r in lanes["reasons"])
+
+
+def test_a_queued_job_runs_on_no_worker_s_lane():
+    # Live, 2026-11-03 16:15Z: under a cap of 16 Sortie lists 7 queued jobs
+    # in running[] with no worker; every worker's slots are in use.
+    state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=("ONS-70", "ONS-71"))
+    state["running"] += [{"issue_identifier": "ONS-61", "worker": "taichi", "started_at": iso(NOW - 60), "step": "build"},
+                         {"issue_identifier": "ONS-50", "worker": "taichi", "started_at": iso(NOW - 60), "step": "build"}]
+    state["running"] += [{"issue_identifier": i, "started_at": iso(NOW - 30)} for i in ("ONS-70", "ONS-71")]
+    state["workers"]["queue"] = [{"job": {"id": i, "issue": {"identifier": i}}, "queued_at": iso(NOW - 30),
+                                  "waiting": ["worker p1: all 3 run slots in use", "worker taichi: all 2 run slots in use"]}
+                                 for i in ("ONS-70", "ONS-71")]
+    fleet, summary = lanes_of(state)
+    p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
+    assert (p1["busy"], len(p1["lanes"]), t["busy"], len(t["lanes"])) == (3, 3, 2, 2)
+    assert fleet["sorties"][0]["cap"] == {"limit": 16, "running": 7}
+    assert summary["verdict"] == "healthy" and summary["busy"] == 5
+    states = story_states(fleet)
+    assert states["ONS-70"]["status"] == "waiting" and states["ONS-70"]["kind"] == "slot"
+
+
+def test_sortie_s_queued_job_is_only_a_wait():
+    # sortie#50: Sortie lists a job queued for a slot only in waits[],
+    # with the matcher's reasons, not in running[] (live, 2026-11-03 16:27Z:
+    # ONS-101, ONS-105 and ONS-109 read as p1 lanes, busy 6 of 3).
+    state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=())
+    state["running"] += [{"issue_identifier": i, "worker": "taichi", "started_at": iso(NOW - 60), "step": "build"}
+                         for i in ("ONS-61", "ONS-50")]
+    reason = "worker p1: all 3 run slots in use, 0 of 8 GiB memory free; worker taichi: all 2 run slots in use"
+    state["waits"] = [{"issue_identifier": i, "kind": "slot", "reason": reason, "release": "a worker that can run it frees a slot",
+                       "since": iso(NOW - 30)} for i in ("ONS-68", "ONS-70")]
+    state["waits"].append({"issue_identifier": "ONS-71", "worker": "taichi", "kind": "slot", "since": iso(NOW - 30),
+                           "reason": "worker p1: no nested virtualization; worker taichi: all 2 run slots in use",
+                           "release": "worker taichi frees a slot"})
+    fleet, summary = lanes_of(state)
+    p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
+    assert (p1["busy"], len(p1["lanes"]), t["busy"], len(t["lanes"])) == (3, 3, 2, 2)
+    lanes = {(x.get("job") or {}).get("identifier") for w in (p1, t) for x in w["lanes"]}
+    assert lanes == {"ONS-34", "ONS-52", "ONS-48", "ONS-61", "ONS-50"}, lanes
+    assert [x["reason"] for x in p1["waits"] if x["identifier"] == "ONS-68"] == [reason]
+    assert sorted(x["identifier"] for x in t["waits"]) == ["ONS-68", "ONS-70", "ONS-71"]
+    states = story_states(fleet)
+    for i in ("ONS-68", "ONS-70", "ONS-71"):
+        assert states[i]["status"] == "waiting" and states[i]["kind"] == "slot", (i, states[i])
+    assert summary["busy"] == 5
+
+
+def test_the_health_counts_the_workers_slots_under_a_higher_cap():
+    state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=())
+    assert slots_of(state) == 5
+    assert slots_of(remote_state(3, [], waiting=())) == 3
+    assert slots_of({"config": {"agent": {"max_concurrent_agents": 2}}}) == 2
+    health = execution_health(reachable=True, sortie_error=None, dispatched=True, project="T", state=state,
+                              state_error=None, sync=None, runway=6, remaining=9, key_of={})
+    assert health["slots"] == 5 and health["verdict"] == "healthy"
+    assert health["reasons"][0]["text"] == "A runway of 6 stories against 5 agent slots"
+
+
+def test_a_slot_free_while_the_worker_lacks_memory_is_not_stuck():
+    # Live, 2026-11-03 17:55Z, run slots from capacity (p1 5, taichi 7):
+    # p1 ran 3 jobs with 1.72 GiB memory free and taichi 3 with 11.43 GiB
+    # disk above its floor, and 6 stories waited. A free slot there is not
+    # a stuck worker: the stories wait on its resources.
+    state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=())
+    state["workers"]["workers"][0]["declaration"]["run_slots"] = 5
+    state["workers"]["workers"][1]["declaration"]["run_slots"] = 7
+    state["running"] += [{"issue_identifier": "ONS-61", "worker": "taichi", "started_at": iso(NOW - 60), "step": "build"}]
+    reason = "worker p1: 1.72 of 8 GiB memory free; worker taichi: 11.43 of 20 GiB disk free"
+    state["waits"] = [{"issue_identifier": i, "kind": "slot", "reason": reason, "release": "a worker that can run it frees a slot",
+                       "since": iso(NOW - 30)} for i in ("ONS-68", "ONS-70")]
+    fleet, summary = lanes_of(state)
+    p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
+    assert (p1["verdict"], t["verdict"]) == ("moving", "moving"), (p1["reasons"], t["reasons"])
+    assert [r["text"] for r in p1["reasons"] if r["code"] == "resources_full"] == [
+        "2 stories wait for this worker's resources, not a slot: 1.72 of 8 GiB memory free"]
+    assert [r["text"] for r in t["reasons"] if r["code"] == "resources_full"] == [
+        "2 stories wait for this worker's resources, not a slot: 11.43 of 20 GiB disk free"]
+    assert summary["verdict"] != "stuck"
+    # Once a slot, not only resources, holds a story back somewhere it could
+    # run, a free lane there is stuck again.
+    state["waits"][0]["reason"] = "worker p1: 1.72 of 8 GiB memory free; worker taichi: all 7 run slots in use"
+    fleet, _ = lanes_of(state)
+    assert worker(fleet, "taichi")["verdict"] == "stuck"
+    assert worker(fleet, "p1")["verdict"] == "moving"

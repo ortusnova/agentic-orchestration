@@ -17,9 +17,13 @@ they are not, so an older Sortie still gives slots, jobs and holds.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from typing import Any, Iterable
+
+from .leases import clock, expired_text, waiting_text
+from .timeline import past_runs, project
 
 PHASES = ("build", "review", "fix", "live_proof", "deploy")
 PHASE_TEXT = {"build": "build", "review": "review", "fix": "fix", "live_proof": "live proof", "deploy": "deploy"}
@@ -149,7 +153,7 @@ def _pull(entry: dict[str, Any] | None) -> dict[str, Any] | None:
 class _Worker:
     def __init__(self, name: str, sortie: str, *, slots: int | None, used: dict | None = None, free: dict | None = None,
                  capacity: dict | None = None, last_seen: float | None = None, unmanaged: list | None = None,
-                 capabilities: list[str] | None = None, remote: bool = False):
+                 capabilities: list[str] | None = None, remote: bool = False, gone: bool = False):
         self.name = name
         self.sortie = sortie
         self.slots = slots
@@ -159,11 +163,15 @@ class _Worker:
         self.unmanaged = unmanaged or []
         self.capabilities = capabilities or []
         self.remote = remote
+        self.gone = gone
         self.jobs: list[dict[str, Any]] = []
         self.stuck: list[dict[str, Any]] = []
         self.waits: list[dict[str, Any]] = []
         self.reasons: list[dict[str, Any]] = []
         self.draining: dict[str, Any] | None = None
+        # Its Sortie's cap on agents at once, every worker's together:
+        # {"limit", "running"}, or None when the Sortie does not report it.
+        self.cap: dict[str, int] | None = None
         # Whether its Sortie serves its use, its unmanaged machines and its jobs' steps.
         self.known = {"use": used is not None, "unmanaged": unmanaged is not None, "steps": True}
 
@@ -218,7 +226,8 @@ def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
                                 "nested" if d.get("nested") else None, *(d.get("backends") or [])] if c]
             out.append(_Worker(w.get("id") or "worker", name, slots=d.get("run_slots"), used=_size(d.get("used")),
                                free=_size(d.get("free")), last_seen=ts(w.get("last_check_in")),
-                               unmanaged=d.get("unmanaged", w.get("unmanaged")), capabilities=caps, remote=True))
+                               unmanaged=d.get("unmanaged", w.get("unmanaged")), capabilities=caps, remote=True,
+                               gone=bool(w.get("gone"))))
         if out:
             return out
     host = state.get("host") if isinstance(state.get("host"), dict) else {}
@@ -226,6 +235,25 @@ def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
     return [_Worker(host.get("name") or name, name, slots=cap if isinstance(cap, int) and cap > 0 else None,
                     used=_size(host.get("used")), free=_size(host.get("free")), capacity=_size(host.get("capacity")),
                     last_seen=ts(state.get("generated_at")) or now, unmanaged=host.get("unmanaged"))]
+
+
+def _cap_of(state: dict[str, Any], running: list[dict[str, Any]]) -> dict[str, int] | None:
+    """A Sortie's cap on agents at once and how many run now, every
+    project's and worker's together, as its dispatch counts them."""
+    limit = ((state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        return None
+    return {"limit": limit, "running": len(running)}
+
+
+def _cap_room(cap: dict[str, int] | None) -> int | None:
+    """How many more agents a Sortie's cap lets start; None when unknown."""
+    return None if cap is None else max(0, cap["limit"] - cap["running"])
+
+
+def _cap_text(n: int, cap: dict[str, int]) -> str:
+    return (f"{_plural(n, 'story', 'stories')} wait for a slot: Sortie runs {cap['running']} agents, "
+            f"its cap of {cap['limit']} at once (agent.max_concurrent_agents)")
 
 
 def _pick(workers: list[_Worker], name: str | None) -> _Worker:
@@ -245,26 +273,39 @@ def _hold(r: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nodes: list[dict[str, Any]],
-                statements: dict[str, str] | None = None, now: float | None = None) -> dict[str, Any]:
+                statements: dict[str, str] | None = None, now: float | None = None,
+                leases: dict[str, dict[str, Any]] | None = None, history: Any = None) -> dict[str, Any]:
     """The fleet document. ``states`` holds, per Sortie, its name, its state
     (None when it could not be read) and why not; ``nodes`` the merged
-    graph's nodes; ``statements`` the full question of each parked story."""
+    graph's nodes; ``statements`` the full question of each parked story;
+    ``leases`` the supervisor's leases, by identifier (leases.leases_of). A
+    story under a live lease waits on the supervisor, not on a person, so
+    its park is no question; one whose lease expired is stuck for a person.
+    ``history`` (timeline.RunHistory) gives each Sortie's recent runs and its
+    rules' medians: the lanes' past and the forecast of their future."""
     now = time.time() if now is None else now
     stories = _Stories(nodes)
     statements = statements or {}
+    supervised = leases or {}
     workers: list[_Worker] = []
     pulls: list[dict[str, Any]] = []
     sorties: list[dict[str, Any]] = []
     where: dict[str, str] = {}
+    # Per Sortie: the jobs that wait for a slot, in the order they began to
+    # wait, and what estimates their length.
+    forecasts: dict[str, dict[str, Any]] = {}
 
     for name, state, error in states:
         if state is None:
             sorties.append({"name": name, "reachable": False, "error": error, "missing": []})
             continue
         missing = missing_fields(state)
-        sorties.append({"name": name, "reachable": True, "error": None, "missing": missing})
-        mine = _workers_of(name, state, now)
         running = [r for r in state.get("running") or [] if isinstance(r, dict)]
+        cap = _cap_of(state, running)
+        sorties.append({"name": name, "reachable": True, "error": None, "missing": missing, "cap": cap})
+        mine = _workers_of(name, state, now)
+        for w in mine:
+            w.cap = cap
         if running and not any(r.get("step") for r in running):
             for w in mine:
                 w.known["steps"] = False
@@ -284,12 +325,33 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             # another may run issues of other projects too.
             return stories.ours(ident)
 
+        queue: dict[str, dict[str, Any]] = {}
+
+        def enqueue(ident: str | None, kind: str, eligible: list[str] | None, reason: str | None,
+                    release: str | None, since: float | None, title: str | None = None) -> None:
+            if not ident or ident in queue:
+                return
+            if eligible is None and kind == "slot" and history is not None:
+                # A retry names no worker; its repository's jobs may need one.
+                eligible = history.workers.eligible(name, ident)
+            queue[ident] = {**stories.ref(ident, title), "kind": kind, "eligible": eligible, "reason": reason,
+                            "release": release, "since": since, "not_before": None}
+
+        forecasts[name] = {"queue": queue, "state": state}
+
+        # A job in Sortie's queue is in running[] too, as Sortie counts it
+        # against its cap, but no worker took it: it waits for a slot, and
+        # runs on no worker's lane.
+        queued = {((q.get("job") or {}).get("issue") or {}).get("identifier") or (q.get("job") or {}).get("id")
+                  for q in (state.get("workers") or {}).get("queue") or [] if isinstance(q, dict)}
         for r in state.get("running") or []:
             ident = r.get("issue_identifier")
             if not ours(ident):
                 continue
             where[ident] = name
             lease = leases.get(ident) or {}
+            if ident in queued and not r.get("worker") and not lease:
+                continue
             w = _pick(mine, r.get("worker") or lease.get("worker"))
             step, step_at = step_of(r)
             if step is None:
@@ -307,9 +369,24 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                 "status_text": r.get("status_text") or r.get("last_message") or None,
             })
 
+        for ident, held in supervised.items():
+            if held["sortie"] != name or not ours(ident):
+                continue
+            where[ident] = name
+            w = mine[0]
+            if held["expired"]:
+                w.stuck.append({**stories.ref(ident), "sortie": name, "worker": w.name, "kind": "hold_expired",
+                                "since": held["expired_at"] or held["until"], "phase": None,
+                                "reason": expired_text(held), "lease": held, "action": "story"})
+            else:
+                w.waits.append({**stories.ref(ident), "sortie": name, "kind": "supervisor", "reason": waiting_text(held),
+                                "release": f"the supervisor, who renews its lease by {clock(held['until'])} "
+                                           f"or the story turns stuck for a person",
+                                "since": held["held_since"], "lease": held})
+
         for p in state.get("parked") or []:
             ident = p.get("issue_identifier")
-            if not ours(ident):
+            if not ours(ident) or ident in supervised:
                 continue
             where[ident] = name
             w = _pick(mine, p.get("worker"))
@@ -361,9 +438,16 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                                     "kind": "drain", "reason": x.get("reason") or "waits for the host to drain",
                                     "release": x.get("release") or None, "since": ts(x.get("since"))})
                     continue
-            w.waits.append({**stories.ref(ident), "sortie": name, "kind": x.get("kind") or "slot",
-                            "reason": x.get("reason") or x.get("reason_text") or _words(x.get("kind")),
-                            "release": x.get("release") or x.get("release_text") or None, "since": ts(x.get("since"))})
+            kind = x.get("kind") or "slot"
+            if kind in ("slot", "capability"):
+                enqueue(ident, kind, [x["worker"]] if x.get("worker") else None,
+                        x.get("reason") or x.get("reason_text"), x.get("release") or x.get("release_text"), ts(x.get("since")))
+            # A slot wait that names no worker waits for any of them, as a
+            # queued job does: each worker's free lane could take it.
+            for t in mine if kind == "slot" and not x.get("worker") else [w]:
+                t.waits.append({**stories.ref(ident), "sortie": name, "kind": kind,
+                                "reason": x.get("reason") or x.get("reason_text") or _words(x.get("kind")),
+                                "release": x.get("release") or x.get("release_text") or None, "since": ts(x.get("since"))})
         for h in [] if served_waits else state.get("held") or []:
             ident = h.get("issue_identifier")
             hold = h.get("hold") or {}
@@ -371,6 +455,8 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                 continue
             w = _pick(mine, h.get("worker"))
             slot = hold.get("slot") or {}
+            enqueue(ident, "slot", [h["worker"]] if h.get("worker") else None, hold.get("reason_text"),
+                    hold.get("release_text"), ts(hold.get("held_since")), h.get("issue_title"))
             w.waits.append({**stories.ref(ident, h.get("issue_title")), "sortie": name, "kind": "slot",
                             "reason": hold.get("reason_text") or f"waits for an agent slot ({slot.get('used')} of {slot.get('limit')} busy)",
                             "release": hold.get("release_text") or "a slot frees", "since": ts(hold.get("held_since"))})
@@ -386,10 +472,29 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             reason = "; ".join(waiting) or (f"no worker has {', '.join(lacking)}" if lacking else "waits for a worker with a free slot")
             targets = [w for w in mine if q.get("worker") == w.name] or (
                 [w for w in mine if all(c in w.capabilities for c in caps)] if kind == "slot" else mine) or mine
+            enqueue(ident, kind, [w.name for w in targets] if kind == "slot" else None, reason,
+                    "a worker with it checks in" if kind == "capability" else "a slot frees", ts(q.get("queued_at")),
+                    (job.get("issue") or {}).get("title"))
             for w in targets:
                 w.waits.append({**stories.ref(ident, (job.get("issue") or {}).get("title")), "sortie": name, "kind": kind,
                                 "reason": reason, "release": "a worker with it checks in" if kind == "capability" else "a slot frees",
                                 "since": ts(q.get("queued_at"))})
+
+        # A run that failed waits for its retry to come due, then for a slot.
+        for r in state.get("retrying") or []:
+            ident = r.get("issue_identifier")
+            due = ts(r.get("due_at"))
+            if ours(ident) and ident not in queue:
+                caps = (r.get("worker_wait") or {}).get("capabilities") if isinstance(r.get("worker_wait"), dict) else None
+                able = [w.name for w in mine if all(c in w.capabilities for c in caps)] if caps else None
+                enqueue(ident, "slot" if able is None or able else "capability", able or None,
+                        f"retry {r.get('attempt') or ''}".strip() + " comes due" if able is None or able
+                        else f"no worker has {', '.join(caps or [])}", None,
+                        ts(r.get("dispatched_at")) or due or now, r.get("issue_title"))
+                queue[ident]["not_before"] = due
+        if isinstance(state.get("dispatch_paused"), dict):
+            # Paused for a deploy: it applies once the runs end, and the queue then resumes.
+            forecasts[name]["paused"] = True
 
         # Every open pull request of a story, and what it waits on.
         seen_pulls = set()
@@ -417,7 +522,7 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
         for p in state.get("parked") or []:
             ident = p.get("issue_identifier")
             pr = _pull(p)
-            if ours(ident) and pr and ident not in seen_pulls:
+            if ours(ident) and pr and ident not in seen_pulls and ident not in supervised:
                 pulls.append(_pull_doc(stories.ref(ident), pr, "person", "its agent asks a person", ts(p.get("parked_at")),
                                        name, _pick(mine, p.get("worker")).name, now))
 
@@ -448,8 +553,86 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                             "reason": "waits for the host to drain" + (f": {w.draining['reason']}" if w.draining["reason"] else "")
                                       + (f", {_plural(len(w.jobs), 'job')} still running" if w.jobs else "")})
 
-    return {"generated_at": now, "sorties": sorties, "workers": [_worker_doc(w, now) for w in workers],
-            "pulls": pulls, "where": where}
+    docs = [_worker_doc(w, now) for w in workers]
+    waiting: list[dict[str, Any]] = []
+    for s in sorties:
+        f = forecasts.get(s["name"])
+        if f is None:
+            continue
+        running = {r.get("dispatch_id") for r in f["state"].get("running") or [] if isinstance(r, dict) and r.get("dispatch_id")}
+        if history is not None:
+            s["unattributed"] = past_runs(s["name"], history.recent.get(s["name"]) or [], docs, history.workers,
+                                          stories, now, running)
+        else:
+            for w in docs:
+                for lane in w["lanes"]:
+                    lane.setdefault("past", [])
+        # A job on a lane already runs, whatever else lists it.
+        placed = {j["identifier"] for w in docs if w["sortie"] == s["name"] for j in w["jobs"]}
+        placed |= {x["identifier"] for w in docs if w["sortie"] == s["name"] for x in w["stuck"]}
+        # In the order Sortie takes them: a retry once it comes due, to the
+        # minute, so that one whose due time Sortie moves by seconds keeps its
+        # place; then the first to wait first.
+        queue = sorted((q for q in f["queue"].values() if q["identifier"] not in placed),
+                       key=lambda q: (max(now, q["not_before"] or now) // 60,
+                                      q["since"] if q["since"] is not None else float("inf"), q["identifier"] or ""))
+        estimate = _estimator(f["state"], (history.medians.get(s["name"]) if history is not None else None) or {})
+        for q in queue:
+            q["rule"] = estimate.rule_of(q["identifier"])
+        resume = None
+        if f.get("paused"):
+            resume = max([now] + [j["ends_at"] for w in docs if w["sortie"] == s["name"] for j in w["jobs"]])
+        waiting += project(s["name"], queue, docs, estimate, now, resume_at=resume)
+
+    return {"generated_at": now, "sorties": sorties, "workers": docs, "pulls": pulls, "where": where,
+            "waiting": waiting}
+
+
+class _estimator:
+    """How long a queued job of a Sortie is expected to run: the median of
+    its rule's newest succeeded runs, as Sortie estimates a running job's
+    end; else Sortie's own estimate of a running job of the rule; else a
+    default for the rule's phase."""
+
+    def __init__(self, state: dict[str, Any], medians: dict[str, tuple[float, int]]):
+        self.medians = medians
+        self.rules: dict[str, str] = {}
+        self.labels: dict[str, list[str]] = {}
+        for k in ("retrying", "running", "held", "parked", "budget_exhausted"):
+            for r in state.get(k) or []:
+                if isinstance(r, dict) and r.get("issue_identifier"):
+                    if r.get("rule_name"):
+                        self.rules.setdefault(r["issue_identifier"], r["rule_name"])
+                    self.labels.setdefault(r["issue_identifier"], [str(x) for x in r.get("issue_labels") or []])
+        self.sortie: dict[str, float] = {}
+        for r in state.get("running") or []:
+            start, end = ts((r or {}).get("started_at")), ts((r or {}).get("estimated_end"))
+            if start is not None and end is not None and end > start and r.get("rule_name"):
+                self.sortie.setdefault(r["rule_name"], end - start)
+        rules = ((state.get("config") or {}).get("dispatch") or {}).get("rules") or []
+        self.default = next((r.get("name") for r in rules if isinstance(r, dict) and r.get("selected_by") == "catch_all"
+                             and r.get("name")), None) or "build"
+        self.stages = {r.get("stage"): r.get("name") for r in rules if isinstance(r, dict) and r.get("stage") and r.get("name")}
+
+    def rule_of(self, ident: str | None) -> str:
+        if ident in self.rules:
+            return self.rules[ident]
+        for label in self.labels.get(ident or "") or []:
+            if label in self.stages:
+                return self.stages[label]
+            if label.startswith("sortie-stage:"):
+                return label.split(":", 1)[1]
+        return self.default
+
+    def __call__(self, item: dict[str, Any]) -> tuple[float, str]:
+        rule = item.get("rule") or self.default
+        if rule in self.medians and self.medians[rule][0] > 0:
+            seconds, n = self.medians[rule]
+            return seconds, f"the median of {_plural(n, f'succeeded {rule} run')}"
+        if rule in self.sortie:
+            return self.sortie[rule], f"Sortie's estimate of a {rule} run"
+        phase = phase_of({"rule_name": rule})
+        return PHASE_ESTIMATE[phase], f"no succeeded {rule} run yet: a {PHASE_TEXT[phase]} default"
 
 
 def _pr_ref(p: dict[str, Any]) -> dict[str, Any]:
@@ -474,7 +657,7 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         job = jobs[i] if i < len(jobs) else None
         if job is not None:
             job["slot"] = i + 1
-        lanes.append({"slot": i + 1, "job": job, "stuck": None, "extra": i >= slots})
+        lanes.append({"slot": i + 1, "job": job, "stuck": None, "extra": i >= slots, "past": [], "next": []})
     # A story that stopped for a person or a budget holds the next free lane
     # in sight, so the lane reads stuck, with why, where its slot is.
     free = [lane for lane in lanes if lane["job"] is None]
@@ -504,11 +687,22 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         reasons.append({"code": s["kind"], "identifier": s["identifier"], "key": s["key"],
                         "text": f"{s['label']} {s['reason']}", "action": s["action"]})
     slot_waits = [x for x in w.waits if x["kind"] == "slot"]
+    # A story Sortie keeps back because this worker lacks the CPU, memory
+    # or disk it requires waits on the worker's resources, not on a free
+    # lane: its run slots follow its capacity, so a slot can be free while
+    # what runs, or another program on the host, holds the rest.
+    short = {id(x): r for x in slot_waits if (r := _short_of(x.get("reason"), w.name))}
+    open_waits = [x for x in slot_waits if id(x) not in short]
     idle_lanes = [lane for lane in lanes if lane["job"] is None and lane["stuck"] is None and not lane["extra"]]
-    if slot_waits and idle_lanes and not w.draining:
-        reasons.append({"code": "slot_idle", "identifier": slot_waits[0]["identifier"], "key": slot_waits[0]["key"],
-                        "text": f"{_plural(len(slot_waits), 'story', 'stories')} wait for a slot while "
-                                f"{_plural(len(idle_lanes), 'slot')} {'is' if len(idle_lanes) == 1 else 'are'} free", "action": "story"})
+    # A free lane takes a story only while its Sortie's cap has room: at
+    # the cap the stories wait on the cap, not on a stuck worker.
+    room = _cap_room(w.cap)
+    free_slots = len(idle_lanes) if room is None else min(len(idle_lanes), room)
+    capped = bool(slot_waits and idle_lanes and room == 0 and not w.draining)
+    if open_waits and free_slots and not w.draining:
+        reasons.append({"code": "slot_idle", "identifier": open_waits[0]["identifier"], "key": open_waits[0]["key"],
+                        "text": f"{_plural(len(open_waits), 'story', 'stories')} wait for a slot while "
+                                f"{_plural(free_slots, 'slot')} {'is' if free_slots == 1 else 'are'} free", "action": "story"})
     if reasons:
         verdict = "stuck"
     elif w.draining:
@@ -524,7 +718,15 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         verdict = "idle"
         reasons.append({"code": "idle", "identifier": None, "key": None, "action": None,
                         "text": "nothing runs and nothing waits" if not w.waits else f"nothing runs; {_plural(len(w.waits), 'item')} waiting"})
-    order = {"slot": 0, "capability": 1, "live_proof": 2, "drain": 3}
+    if short and free_slots and not w.draining:
+        first = next(x for x in slot_waits if id(x) in short)
+        reasons.append({"code": "resources_full", "identifier": first["identifier"], "key": first["key"], "action": None,
+                        "text": f"{_plural(len(short), 'story', 'stories')} wait for this worker's resources, not a slot: "
+                                f"{short[id(first)]}"})
+    if capped and verdict != "stuck" and w.cap is not None:
+        reasons.append({"code": "cap_full", "identifier": None, "key": None, "action": None,
+                        "text": _cap_text(len(slot_waits), w.cap)})
+    order = {"slot": 0, "capability": 1, "live_proof": 2, "supervisor": 3, "drain": 4}
     waits = sorted(w.waits, key=lambda x: (order.get(x["kind"], 9), x["since"] or 0.0, x["identifier"] or ""))
     nxt = [x for x in waits if x["kind"] in ("slot", "live_proof") and x["identifier"]]
     unmanaged = []
@@ -535,12 +737,30 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         unmanaged.append({"name": m["name"], "since": since, "age": (now - since) if since else None,
                           "age_text": _ago(now - since) if since else "age unknown", "state": m.get("state") or None})
     return {
-        "name": w.name, "sortie": w.sortie, "remote": w.remote, "last_seen": w.last_seen,
+        "name": w.name, "sortie": w.sortie, "remote": w.remote, "last_seen": w.last_seen, "gone": w.gone,
         "slots": slots, "slots_known": isinstance(w.slots, int) and w.slots > 0, "busy": busy,
         "capacity": w.capacity, "used": w.used,
         "verdict": verdict, "reasons": reasons, "lanes": lanes, "jobs": jobs, "stuck": sorted(w.stuck, key=lambda s: s["slot"] or 99),
         "waits": waits, "next": nxt[:3], "unmanaged": unmanaged, "draining": w.draining, "known": dict(w.known),
+        "capped": capped, "later": 0, "past_hidden": 0,
     }
+
+
+def _short_of(reason: Any, worker: str) -> str | None:
+    """What this worker lacks for a waiting job, from the reason Sortie
+    gives (sortie Matcher.Placeable: "worker NAME: WHY, WHY; worker ..."),
+    when only CPU, memory or disk keep it back; None when the worker's run
+    slots are in use too, or the reason does not name the worker."""
+    if not isinstance(reason, str):
+        return None
+    for part in reason.split("; "):
+        name, sep, why = part.partition(": ")
+        if sep and name == f"worker {worker}":
+            whys = [y.strip() for y in why.split(", ") if y.strip()]
+            if whys and all(re.search(r"\b(CPUs|GiB memory|GiB disk) free$", y) for y in whys):
+                return ", ".join(whys)
+            return None
+    return None
 
 
 def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[str, Any]:
@@ -564,20 +784,38 @@ def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[
             reasons.append({**r, "worker": None, "identifier": None, "action": None})
     busy = sum(w["busy"] for w in workers)
     slots = sum(w["slots"] for w in workers if w["slots_known"]) or None
+    # A Sortie at its cap with stories waiting for a slot is full: the cap
+    # holds them, not a stuck worker, even where a worker's lane is free.
+    full = []
+    for s in fleet.get("sorties") or []:
+        cap = s.get("cap")
+        waiting = {x["identifier"] for w in workers if w["sortie"] == s["name"] for x in w["waits"] if x["kind"] == "slot"}
+        if s["reachable"] and cap and _cap_room(cap) == 0 and waiting:
+            full.append({"code": "cap_full", "text": f"{s['name']}: " + _cap_text(len(waiting), cap),
+                         "worker": None, "key": None, "identifier": None, "action": None})
     if reasons:
         verdict = "stuck"
+    elif full:
+        verdict = "full"
+        reasons = full + [{**r, "worker": None, "identifier": None, "action": None} for r in (health or {}).get("reasons") or []
+                          if r.get("code") not in ("enough", "short", "idle")]
     else:
         verdict = (health or {}).get("verdict") or ("healthy" if busy else None)
         reasons = [{**r, "worker": None, "identifier": None, "action": None} for r in (health or {}).get("reasons") or []]
     missing = [{**m, "sortie": s["name"]} for s in fleet.get("sorties") or [] for m in s.get("missing") or []]
-    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots, "missing": missing,
-            "runway": (health or {}).get("runway"), "generated_at": fleet.get("generated_at")}
+    caps = [s["cap"]["limit"] for s in fleet.get("sorties") or [] if s.get("cap")]
+    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots, "cap": sum(caps) if caps else None, "missing": missing,
+            "runway": (health or {}).get("runway"), "generated_at": fleet.get("generated_at"),
+            "waiting": fleet.get("waiting") or [],
+            "unattributed": sum(s.get("unattributed") or 0 for s in fleet.get("sorties") or [])}
 
 
 def _release(s: dict[str, Any]) -> str | None:
     """What releases a stuck story."""
     if s["kind"] == "budget":
         return "more sessions" if s.get("action") == "sessions" else "a larger budget in its workflow"
+    if s["kind"] == "hold_expired":
+        return "a person releasing the hold in Sortie, or the supervisor placing a new one with new evidence"
     return {"question": "your answer", "permission": "a person in its session"}.get(s["kind"])
 
 
@@ -600,12 +838,12 @@ def story_states(fleet: dict[str, Any], held: dict[str, dict[str, Any]] | None =
             s = lane["stuck"]
             if s:
                 put(s["identifier"], {"status": "stuck", "worker": w["name"], "sortie": s["sortie"], "slot": lane["slot"],
-                                      "why": s["reason"], "release": _release(s),
+                                      "why": s["reason"], "release": _release(s), "lease": s.get("lease"),
                                       "kind": s["kind"], "action": s["action"], "phase": s.get("phase"), "step": None})
         for s in w["stuck"]:
             if s["slot"] is None:
                 put(s["identifier"], {"status": "stuck", "worker": w["name"], "sortie": s["sortie"], "slot": None, "why": s["reason"],
-                                      "release": _release(s),
+                                      "release": _release(s), "lease": s.get("lease"),
                                       "kind": s["kind"], "action": s["action"], "phase": s.get("phase"), "step": None})
         for j in w["jobs"]:
             put(j["identifier"], {"status": "running", "worker": w["name"], "sortie": j["sortie"], "slot": j.get("slot"),
@@ -616,7 +854,7 @@ def story_states(fleet: dict[str, Any], held: dict[str, dict[str, Any]] | None =
             if x["kind"] == "drain":
                 continue
             put(x["identifier"], {"status": "waiting", "worker": w["name"], "sortie": x["sortie"], "slot": None,
-                                  "why": x["reason"], "release": x["release"], "kind": x["kind"],
+                                  "why": x["reason"], "release": x["release"], "kind": x["kind"], "lease": x.get("lease"),
                                   "action": "pull" if x["kind"] == "live_proof" else None, "phase": None, "step": None})
     for ident, h in (held or {}).items():
         hold = h.get("hold") or {}

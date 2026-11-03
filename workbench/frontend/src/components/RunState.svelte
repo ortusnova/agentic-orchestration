@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ACTION_TEXT, duration, releaseText, type RunState } from "../lib/fleet";
+  import { ACTION_TEXT, duration, leaseText, releaseText, type RunState } from "../lib/fleet";
 
   /** A story's run state in its panel: where it runs or why it waits, what
    * releases it, its pull request and what that waits on, and the action
@@ -21,7 +21,8 @@
   const heading = $derived(
     run.status === "running" ? `Running on ${run.worker}${run.slot ? `, slot ${run.slot}` : ""}`
       : run.status === "stuck" ? `Stuck${run.worker ? ` on ${run.worker}${run.slot ? `, slot ${run.slot}` : ""}` : ""}`
-        : run.status === "waiting" ? `Waiting${run.worker ? ` on ${run.worker}` : ""}` : "Its pull request is open",
+        : run.status === "waiting" && run.kind === "supervisor" ? "Waiting on the supervisor"
+          : run.status === "waiting" ? `Waiting${run.worker ? ` on ${run.worker}` : ""}` : "Its pull request is open",
   );
 
   async function give(e: Event) {
@@ -43,6 +44,7 @@
 <div class="run {run.status}" data-run-state={run.status} data-run-for={story}>
   <b>{heading}</b>
   <p data-why>{run.why}{#if run.status === "running" && run.started_at} · for {duration(Date.now() / 1000 - run.started_at)}{/if}</p>
+  {#if run.lease && !run.lease.expired}<p class="rel" data-lease>{leaseText(run.lease, Date.now() / 1000)}</p>{/if}
   {#if run.release}<p class="rel" data-release>{releaseText(run.release)}</p>{/if}
   {#if run.pull}
     <p class="pr" data-run-pull={run.pull.number}>

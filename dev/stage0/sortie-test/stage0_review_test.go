@@ -33,10 +33,10 @@ const reviewHuman = "sortie-review:human"
 
 // stage0Values stand in for what stage0.sh renders into the workflow.
 var stage0Values = map[string]string{
-	"STAGE0_SORTIE_PORT":    "7680",
-	"STAGE0_MAX_AGENTS":     "3",
-	"STAGE0_HOMELAB_MOUNTS": "[]",
-	"STAGE0_HULY_URL":       "http://127.0.0.1:8087",
+	"STAGE0_SORTIE_PORT":       "7680",
+	"STAGE0_SORTIE_MAX_AGENTS": "16",
+	"STAGE0_HOMELAB_MOUNTS":    "[]",
+	"STAGE0_HULY_URL":          "http://127.0.0.1:8087",
 	// No operator channel; stage0_notify_test.go renders each kind.
 	"STAGE0_NOTIFY_ENTRY": "",
 	// The remote kind's flow URLs need a real port.

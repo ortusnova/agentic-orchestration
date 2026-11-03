@@ -71,7 +71,7 @@ def notification_router(projects: ProjectManager, registry: Registry, tokens: Ho
         """Every notification kept of the project's stories, seen or not."""
         rt = projects.get(slug)
         return {"notifications": project_notifications(registry.notifications(_identifiers(rt)), rt.hub.doc.get("nodes") or [],
-                                                       rt.hub.questions, clock(), shown_only=False)}
+                                                       rt.hub.open_questions(), clock(), shown_only=False)}
 
     @router.post("/api/projects/{slug}/notifications/seen")
     async def seen(slug: str, body: SeenBody, who: Identity = Depends(require_operator)) -> dict[str, Any]:

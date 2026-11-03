@@ -17,8 +17,11 @@ type Snapshot struct {
 	KVM    bool
 	Nested bool
 	CPUs   float64
+	// MemTotalGiB is the host's memory.
+	MemTotalGiB float64
 	// MemAvailableGiB is the memory the host can give a new machine
-	// without swapping.
+	// without swapping: what the kernel reports now, so it falls as
+	// anything else on the host takes memory.
 	MemAvailableGiB float64
 	// DiskAvailableGiB is the space an unprivileged writer has left on
 	// the file system of the disk path.
@@ -35,7 +38,7 @@ type Host struct{}
 
 // Snapshot implements [Probe].
 func (Host) Snapshot(diskPath string) (Snapshot, error) {
-	mem, err := memAvailable()
+	mem, total, err := memInfo()
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -46,7 +49,7 @@ func (Host) Snapshot(diskPath string) (Snapshot, error) {
 	return Snapshot{
 		OS: runtime.GOOS, Arch: runtime.GOARCH,
 		KVM: hasKVM(), Nested: hasNested(),
-		CPUs:            float64(runtime.NumCPU()),
-		MemAvailableGiB: float64(mem) / GiB, DiskAvailableGiB: float64(disk) / GiB,
+		CPUs:        float64(runtime.NumCPU()),
+		MemTotalGiB: float64(total) / GiB, MemAvailableGiB: float64(mem) / GiB, DiskAvailableGiB: float64(disk) / GiB,
 	}, nil
 }

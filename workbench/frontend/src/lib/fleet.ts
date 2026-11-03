@@ -3,12 +3,28 @@
 
 export type Phase = "build" | "review" | "fix" | "live_proof" | "deploy";
 export type WorkerVerdict = "stuck" | "moving" | "idle" | "draining";
-export type HoldKind = "question" | "budget" | "permission";
-export type WaitKind = "slot" | "capability" | "live_proof" | "drain";
+export type HoldKind = "question" | "budget" | "permission" | "hold_expired";
+export type WaitKind = "slot" | "capability" | "live_proof" | "supervisor" | "drain";
 export type PullWait = "review" | "ci" | "conflict" | "live_proof" | "person" | "none";
 export type Action = "answer" | "sessions" | "open" | "pull" | "story" | null;
 
 export interface Size { cpu?: number; mem_gib?: number; disk_gib?: number }
+
+/** A lease the supervisor holds on a story in Sortie: the story waits on the
+ * supervisor until it releases it, as long as it renews the lease with new
+ * evidence before it runs out. Times in Unix seconds. */
+export interface Lease {
+  identifier: string;
+  sortie: string;
+  by: string | null;
+  reason: string | null;
+  evidence: string | null;
+  held_since: number | null;
+  renewed_at: number | null;
+  until: number | null;
+  expired: boolean;
+  expired_at: number | null;
+}
 
 export interface StoryRef {
   identifier: string | null;
@@ -50,10 +66,49 @@ export interface Stuck extends StoryRef {
   action: Action;
   question?: string | null;
   slot?: number | null;
-  phase?: Phase;
+  phase?: Phase | null;
+  /** The supervisor's lease that ran out, for a hold_expired story. */
+  lease?: Lease | null;
 }
 
-export interface Lane { slot: number; job: Job | null; stuck: Stuck | null; extra: boolean }
+/** A run a slot ran before now, from its Sortie's run history. Times in Unix seconds. */
+export interface PastRun extends StoryRef {
+  started_at: number;
+  ended_at: number;
+  status: string | null;
+  rule: string | null;
+  phase: Phase;
+  phase_text: string;
+  error: string | null;
+}
+
+/** A job that waits for a slot, placed where the forecast expects it to run:
+ * in the slot that frees first on a worker that can take it. */
+export interface Projected extends StoryRef {
+  starts_at: number;
+  ends_at: number;
+  /** Its expected length, in seconds, and what that comes from. */
+  estimate: number;
+  basis: string;
+  rule: string | null;
+  since: number | null;
+}
+
+/** A job that waits for a slot that no slot can take: no worker can run it, or its workers drain. */
+export interface Waiting extends StoryRef {
+  sortie: string;
+  kind: string;
+  reason: string;
+  release: string | null;
+  since: number | null;
+}
+
+export interface Lane {
+  slot: number; job: Job | null; stuck: Stuck | null; extra: boolean;
+  /** Absent from an older backend. */
+  past?: PastRun[];
+  next?: Projected[];
+}
 
 export interface Wait extends StoryRef {
   sortie: string;
@@ -62,6 +117,8 @@ export interface Wait extends StoryRef {
   release: string | null;
   since: number | null;
   pull?: PullRef | null;
+  /** The supervisor's lease, for a story that waits on the supervisor. */
+  lease?: Lease | null;
 }
 
 export interface Reason {
@@ -98,6 +155,12 @@ export interface Worker {
   draining: { reason: string | null; since: number | null } | null;
   /** Whether its Sortie serves its use, its unmanaged machines and its jobs' steps; absent from an older backend. */
   known?: { use: boolean; unmanaged: boolean; steps: boolean };
+  /** Whether stories wait for a slot while its lanes are free because its Sortie's cap is reached; absent from an older backend. */
+  capped?: boolean;
+  /** Jobs the forecast places beyond its horizon, and past runs more than its slots held at once; absent from an older backend. */
+  later?: number;
+  past_hidden?: number;
+  gone?: boolean;
 }
 
 export interface Pull extends StoryRef {
@@ -118,7 +181,7 @@ export interface Missing { field: string; text: string; sortie?: string }
 
 export interface Fleet {
   generated_at?: number;
-  sorties: { name: string; reachable: boolean; error: string | null; missing?: Missing[] }[];
+  sorties: { name: string; reachable: boolean; error: string | null; missing?: Missing[]; cap?: { limit: number; running: number } | null }[];
   workers: Worker[];
   pulls: Pull[];
   error?: string;
@@ -130,10 +193,15 @@ export interface Lanes {
   reasons: Reason[];
   busy: number;
   slots: number | null;
+  /** Sortie's cap on agents at once, every worker's together; absent from an older backend. */
+  cap?: number | null;
   runway: number | null;
   missing?: Missing[];
   generated_at?: number;
   workers: Worker[];
+  /** The jobs no slot can take, and the runs that ended on no worker the workbench knows; absent from an older backend. */
+  waiting?: Waiting[];
+  unattributed?: number;
 }
 
 /** A story's run state, in its panel. */
@@ -150,6 +218,8 @@ export interface RunState {
   step: string | null;
   started_at?: number;
   pull: (PullRef & { waits_text: string; reason: string | null; stuck: boolean }) | null;
+  /** The supervisor's lease on it, live or expired; absent from an older backend. */
+  lease?: Lease | null;
 }
 
 export const WORKER_VERDICT_TEXT: Record<WorkerVerdict, string> = {
@@ -157,8 +227,27 @@ export const WORKER_VERDICT_TEXT: Record<WorkerVerdict, string> = {
 };
 
 export const WAIT_TEXT: Record<WaitKind, string> = {
-  slot: "a slot", capability: "a capability", live_proof: "a live proof", drain: "the host to drain",
+  slot: "a slot", capability: "a capability", live_proof: "a live proof", supervisor: "the supervisor", drain: "the host to drain",
 };
+
+/** A time in UTC, to the minute: "14:00 UTC", with the date when it is not today's. */
+export function clockText(t: number, now: number): string {
+  const iso = new Date(t * 1000).toISOString();
+  const day = iso.slice(0, 10) === new Date(now * 1000).toISOString().slice(0, 10) ? "" : `${iso.slice(0, 10)} `;
+  return `${day}${iso.slice(11, 16)} UTC`;
+}
+
+/** What a live lease says beside its reason: the evidence, when it was last
+ * renewed and when it runs out. */
+export function leaseText(lease: Lease, now: number): string {
+  const parts = [`evidence: ${lease.evidence ?? "none given"}`];
+  if (lease.renewed_at != null) parts.push(`renewed ${duration(now - lease.renewed_at)} ago`);
+  if (lease.until != null) {
+    parts.push(lease.until > now ? `runs out at ${clockText(lease.until, now)}, in ${duration(lease.until - now)}`
+      : `ran out at ${clockText(lease.until, now)}`);
+  }
+  return parts.join(" · ");
+}
 
 /** A duration in words: "40 s", "25 min", "2.0 h". */
 export function duration(seconds: number | null | undefined): string {
@@ -194,14 +283,30 @@ export function missingText(sortie: string, missing: Missing[]): string {
   return `${sortie}'s Sortie does not serve ${missing.length === 1 ? "this field" : "these fields"} yet, so the view cannot show ${what}.`;
 }
 
-/** The time window of the lanes: the last hours and the next one, around now. */
-export function laneWindow(workers: Worker[], now: number): { start: number; end: number } {
-  const HOUR = 3600;
-  const starts = workers.flatMap((w) => w.jobs.map((j) => j.started_at));
-  const ends = workers.flatMap((w) => w.jobs.map((j) => j.ends_at));
-  const start = Math.min(now - 2 * HOUR, ...starts.map((s) => Math.max(s, now - 8 * HOUR)));
-  const end = Math.max(now + HOUR, ...ends.map((e) => Math.min(e, now + 8 * HOUR)));
-  return { start, end };
+/** The lanes' axis, in seconds around now: 30 minutes back to an hour ahead, now at one third. */
+export const LANE_FROM = -1800;
+export const LANE_TO = 3600;
+
+/** The time window of the lanes around now. */
+export function laneWindow(now: number): { start: number; end: number } {
+  return { start: now + LANE_FROM, end: now + LANE_TO };
+}
+
+/** Where a time sits on the lanes' axis, in percent, clipped to it. */
+export function lanePct(t: number, now: number): number {
+  const m = Math.max(LANE_FROM, Math.min(LANE_TO, t - now));
+  return ((m - LANE_FROM) / (LANE_TO - LANE_FROM)) * 100;
+}
+
+/** The axis's ticks: every quarter hour, now among them. */
+export const LANE_TICKS: { at: number; label: string }[] = [
+  { at: -1800, label: "−30 min" }, { at: -900, label: "−15" }, { at: 0, label: "NOW" }, { at: 900, label: "+15" },
+  { at: 1800, label: "+30" }, { at: 2700, label: "+45" }, { at: 3600, label: "+1 h" },
+];
+
+/** Minutes, rounded, at least one: "~8 min". */
+export function minutes(seconds: number): string {
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
 }
 
 /** A box's left edge and width in the window, as percentages, clipped to it. */
@@ -210,17 +315,6 @@ export function boxGeometry(from: number, to: number, win: { start: number; end:
   const a = Math.min(Math.max(from, win.start), win.end);
   const b = Math.min(Math.max(to, a), win.end);
   return { left: ((a - win.start) / span) * 100, width: Math.max(1.5, ((b - a) / span) * 100) };
-}
-
-/** The ticks of the window, one per hour. */
-export function hourTicks(win: { start: number; end: number }, now: number): { at: number; left: number; label: string }[] {
-  const out = [];
-  const span = Math.max(1, win.end - win.start);
-  for (let h = Math.ceil((win.start - now) / 3600); now + h * 3600 <= win.end; h++) {
-    const at = now + h * 3600;
-    out.push({ at, left: ((at - win.start) / span) * 100, label: h === 0 ? "now" : `${h > 0 ? "+" : ""}${h} h` });
-  }
-  return out;
 }
 
 /** What a lane says in words, for a screen reader and a tooltip. */
