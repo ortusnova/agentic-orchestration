@@ -15,9 +15,9 @@ based on and its result, and serves the newest in its state as
 ``supervisor``, the supervisor session's status, comes with its pause and
 resume (openspec sortie-supervises-runs, supervisor-session); a Sortie that
 serves the actions without it reads as off, with nothing to pause. Every
-Sortie's actions show, each beside the story it touched; the status and the
-pause are those of the Sortie that dispatches the project. Nothing here
-writes.
+Sortie's actions show, each beside the story it touched, and each Sortie's
+status, with its own pause; the Sortie that dispatches the project comes
+first. Nothing here writes.
 """
 
 from __future__ import annotations
@@ -148,6 +148,25 @@ def action_of(raw: dict[str, Any], key_of: dict[str, str], nodes: dict[str, dict
     }
 
 
+def _status_of(sup: dict[str, Any] | None) -> dict[str, Any]:
+    """One Sortie's supervisor status, and who paused it and when; off, with
+    nothing to pause, for a Sortie that serves none."""
+    if sup is None:
+        return {"status": "off", "paused_at": None, "paused_by": None,
+                "reason": ("Sortie records the supervisor's actions but serves no status for it: "
+                           "it runs no supervisor session to pause.")}
+    status = sup.get("status")
+    if not isinstance(status, str) or not status:
+        status = "paused" if sup.get("paused") else "active"
+    return {"status": status, "paused_at": parked_at_of({"at": sup.get("paused_at")}),
+            "paused_by": sup.get("paused_by") or None, "reason": sup.get("reason") or None}
+
+
+def _supervisor_of(state: dict[str, Any]) -> dict[str, Any] | None:
+    sup = state.get("supervisor")
+    return sup if isinstance(sup, dict) else None
+
+
 def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
                     peers: list[tuple[str, dict[str, Any]]] = (), own: str | None = None,
                     ) -> tuple[dict[str, Any] | None, dict[str, list[dict[str, Any]]]]:
@@ -155,18 +174,20 @@ def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
     issues, newest first, and the actions on each, by plan key; None
     and none when no Sortie reports a supervisor. ``state`` is the state of
     the Sortie that dispatches the project, named ``own``; ``peers`` are the
-    other Sorties' names and states. An action on another project's issue is
-    left out; one that names no issue stays."""
-    sup = (state or {}).get("supervisor")
-    sup = sup if isinstance(sup, dict) else None
+    other Sorties' names and states. The top-level status is the own
+    Sortie's; ``sorties`` holds each reporting Sortie's, the own one first.
+    An action on another project's issue is left out; one that names no
+    issue stays."""
     sources = [(own, state or {})] + [(name, s or {}) for name, s in peers]
-    if sup is None and not any(isinstance(s.get("supervisor_actions"), list) for _, s in sources):
+    reports = [_supervisor_of(s) is not None or isinstance(s.get("supervisor_actions"), list) for _, s in sources]
+    if not any(reports):
         return None, {}
     node_of = {n["plan_key"]: n for n in nodes if n.get("plan_key")}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes
               if n.get("plan_key") and (n.get("tracker") or {}).get("identifier")}
-    raws: list[tuple[str | None, dict[str, Any]]] = [(own, a) for a in (sup or {}).get("actions") or []]
+    raws: list[tuple[str | None, dict[str, Any]]] = []
     for name, s in sources:
+        raws += [(name, a) for a in (_supervisor_of(s) or {}).get("actions") or []]
         raws += [(name, a) for a in s.get("supervisor_actions") or []]
     seen: set[tuple[str | None, str]] = set()
     recorded = []
@@ -182,22 +203,19 @@ def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
     # Newest first; of two at the same time, the one Sortie recorded later.
     order = sorted(range(len(recorded)), key=lambda i: (recorded[i]["at"] or 0.0, i), reverse=True)
     actions = [recorded[i] for i in order]
-    if sup is None:
-        status, reason = "off", ("Sortie records the supervisor's actions but serves no status for it: "
-                                 "it runs no supervisor session to pause.")
-    else:
-        status, reason = sup.get("status"), sup.get("reason") or None
-        if not isinstance(status, str) or not status:
-            status = "paused" if sup.get("paused") else "active"
+    sorties = [{"name": name, "own": i == 0, **_status_of(_supervisor_of(s))}
+               for i, (name, s) in enumerate(sources) if i == 0 or reports[i]]
     by_key: dict[str, list[dict[str, Any]]] = {}
     for a in actions:
         if a["key"] and len(by_key.setdefault(a["key"], [])) < STORY_ACTIONS:
             by_key[a["key"]].append(a)
+    own_status = sorties[0]
     view = {
-        "status": status,
-        "paused_at": parked_at_of({"at": (sup or {}).get("paused_at")}),
-        "paused_by": (sup or {}).get("paused_by") or None,
-        "reason": reason,
+        "status": own_status["status"],
+        "paused_at": own_status["paused_at"],
+        "paused_by": own_status["paused_by"],
+        "reason": own_status["reason"],
+        "sorties": sorties,
         "actions": actions[:HOME_ACTIONS],
         "total": len(actions),
     }

@@ -78,9 +78,9 @@
     }
   }
 
-  async function supervise(op: "pause" | "resume"): Promise<string | null> {
+  async function supervise(op: "pause" | "resume", sortie: string | null = null): Promise<string | null> {
     try {
-      await projectApi(slug).supervisor(op);
+      await projectApi(slug).supervisor(op, sortie);
       return null;
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) return `${op === "pause" ? "Pausing" : "Resuming"} the supervisor needs the approver role.`;

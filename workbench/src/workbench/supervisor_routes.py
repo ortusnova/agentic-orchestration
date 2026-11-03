@@ -19,25 +19,36 @@ def supervisor_router(projects: ProjectManager, require_role) -> APIRouter:
     approver = require_role(APPROVER)
 
     @router.post("/{op}")
-    async def control(slug: str, op: Literal["pause", "resume"], who: Identity = Depends(approver)) -> dict:
-        """Pause or resume the supervisor through Sortie's control API, in the
-        person's name. This writes nothing to the tracker, so a read-only
-        workbench (WORKBENCH_SYNC=0), such as a ui story's preview, may do it."""
+    async def control(slug: str, op: Literal["pause", "resume"], sortie: str | None = None,
+                      who: Identity = Depends(approver)) -> dict:
+        """Pause or resume a supervisor through its Sortie's control API, in the
+        person's name: the one of ``sortie``, by name, else the one that
+        dispatches the project. This writes nothing to the tracker, so a
+        read-only workbench (WORKBENCH_SYNC=0), such as a ui story's preview,
+        may do it."""
         rt = projects.get(slug)
-        if not (rt.hub.doc.get("sortie") or {}).get("dispatched"):
-            raise HTTPException(status_code=409, detail={"code": "not_dispatched", "message":
-                                f"Sortie runs agents for its configured project only, not {rt.project.huly_project}"})
+        hub = rt.hub
+        if sortie is None or sortie == hub.sortie.name:
+            target = hub.sortie
+            if not (hub.doc.get("sortie") or {}).get("dispatched"):
+                raise HTTPException(status_code=409, detail={"code": "not_dispatched", "message":
+                                    f"Sortie runs agents for its configured project only, not {rt.project.huly_project}"})
+        else:
+            target = next((p for p in hub.peers if p.name == sortie), None)
+            if target is None:
+                raise HTTPException(status_code=404, detail={"code": "unknown_sortie", "message":
+                                    f"this workbench reads no Sortie named {sortie}"})
         try:
-            await rt.hub.sortie.supervisor(op, who.name or who.email or who.key)
+            await target.supervisor(op, who.name or who.email or who.key)
         except SortieError as exc:
             if exc.status == 404:
                 raise HTTPException(status_code=409, detail={"code": "no_supervisor", "message":
                                     "this Sortie has no supervisor to pause or resume"}) from exc
             raise HTTPException(status_code=exc.status if exc.status >= 400 else 502,
                                 detail={"code": exc.code, "message": exc.message}) from exc
-        log.info("project %s: %s chose %s on the supervisor", slug, who.key, op)
+        log.info("project %s: %s chose %s on the supervisor of %s", slug, who.key, op, target.name)
         # The new status shows now, not at the next poll.
-        await rt.hub.poll_once()
-        return {"supervisor": rt.hub.doc.get("supervisor"), "by": who.public()}
+        await hub.poll_once()
+        return {"supervisor": hub.doc.get("supervisor"), "by": who.public()}
 
     return router

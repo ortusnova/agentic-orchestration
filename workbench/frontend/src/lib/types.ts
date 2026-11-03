@@ -100,13 +100,20 @@ export interface SupervisorAction {
   sortie?: string | null;
 }
 
-/** Sortie's supervisor: whether it acts, and what it did lately. */
-export interface Supervisor {
+/** One Sortie's supervisor status: whether it acts, and who paused it and when. */
+export interface SupervisorStatus {
   /** "active", "paused" or "off". */
   status: string;
   paused_at: number | null;
   paused_by: string | null;
   reason: string | null;
+}
+
+/** Sortie's supervisor: whether it acts, and what it did lately. The status
+ * is that of the Sortie that dispatches the project. */
+export interface Supervisor extends SupervisorStatus {
+  /** Each Sortie that reports a supervisor, this project's own first. Absent from an older backend. */
+  sorties?: (SupervisorStatus & { name: string | null; own: boolean })[];
   /** The recent actions on this project's stories and on none, newest first. */
   actions: SupervisorAction[];
   total: number;

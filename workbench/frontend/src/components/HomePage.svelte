@@ -22,8 +22,8 @@
     onapprove: (keys: string[]) => Promise<string | null>;
     onanswer: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
-    /** Pause or resume Sortie's supervisor; resolves to an error message, or null. */
-    onsupervisor?: (op: "pause" | "resume") => Promise<string | null>;
+    /** Pause or resume a Sortie's supervisor, by the Sortie's name, null for this project's; resolves to an error message, or null. */
+    onsupervisor?: (op: "pause" | "resume", sortie: string | null) => Promise<string | null>;
     /** Give a story its session budget holds more sessions; resolves to an error message, or null. */
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
     actions?: Snippet;

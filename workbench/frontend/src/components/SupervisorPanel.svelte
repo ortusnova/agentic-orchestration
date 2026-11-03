@@ -1,7 +1,7 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import { canPause, canResume, iso, statusText, when } from "../lib/supervisor";
-  import type { Supervisor } from "../lib/types";
+  import type { Supervisor, SupervisorStatus } from "../lib/types";
   import SupervisorActions from "./SupervisorActions.svelte";
 
   let {
@@ -12,41 +12,58 @@
     /** Whether Sortie runs agents for this project, and so supervises its runs. */
     dispatched: boolean;
     reachable: boolean;
-    /** Pause or resume the supervisor; resolves to an error message, or null. */
-    oncontrol?: (op: "pause" | "resume") => Promise<string | null>;
+    /** Pause or resume a Sortie's supervisor, by the Sortie's name, null for
+     * the one that dispatches the project; resolves to an error message, or null. */
+    oncontrol?: (op: "pause" | "resume", sortie: string | null) => Promise<string | null>;
   } = $props();
 
-  let busy: "pause" | "resume" | null = $state(null);
+  type Busy = { op: "pause" | "resume"; sortie: string | null };
+  let busy: Busy | null = $state(null);
   let error = $state("");
 
-  async function control(op: "pause" | "resume") {
+  // The other Sorties that report a supervisor, each with its own status and pause.
+  const others = $derived((supervisor?.sorties ?? []).filter((s) => !s.own));
+
+  async function control(op: "pause" | "resume", sortie: string | null = null) {
     if (!oncontrol) return;
-    busy = op;
+    busy = { op, sortie };
     error = "";
-    error = (await oncontrol(op)) ?? "";
+    error = (await oncontrol(op, sortie)) ?? "";
     busy = null;
   }
 </script>
+
+{#snippet status(s: SupervisorStatus, sortie: string | null)}
+  <span class="st {s.status}" data-supervisor-status={s.status}><i aria-hidden="true"></i>{statusText(s)}</span>
+  {#if s.status === "paused" && (s.paused_by || s.paused_at != null)}
+    <span class="by">{s.paused_by ? `paused by ${s.paused_by}` : "paused"}{#if s.paused_at != null}{" · "}<time datetime={iso(s.paused_at)}>{when(s.paused_at)}</time>{/if}</span>
+  {/if}
+  {#if can("approver") && oncontrol}
+    {#if canPause(s)}
+      <button type="button" class="btn" data-act="pause-supervisor" disabled={!!busy} onclick={() => control("pause", sortie)}>{busy?.op === "pause" && busy.sortie === sortie ? "Pausing…" : "Pause"}</button>
+    {:else if canResume(s)}
+      <button type="button" class="btn go" data-act="resume-supervisor" disabled={!!busy} onclick={() => control("resume", sortie)}>{busy?.op === "resume" && busy.sortie === sortie ? "Resuming…" : "Resume"}</button>
+    {/if}
+  {/if}
+{/snippet}
 
 <section class="sup" aria-labelledby="sup-h" data-supervisor={supervisor?.status ?? "none"}>
   <div class="head">
     <h2 id="sup-h">Supervisor<span>Sortie's own agent: what it did to the runs, and what it was refused</span></h2>
     {#if supervisor}
-      <div class="ctl">
-        <span class="st {supervisor.status}" data-supervisor-status={supervisor.status}><i aria-hidden="true"></i>{statusText(supervisor)}</span>
-        {#if supervisor.status === "paused" && (supervisor.paused_by || supervisor.paused_at != null)}
-          <span class="by">{supervisor.paused_by ? `paused by ${supervisor.paused_by}` : "paused"}{#if supervisor.paused_at != null}{" · "}<time datetime={iso(supervisor.paused_at)}>{when(supervisor.paused_at)}</time>{/if}</span>
-        {/if}
-        {#if can("approver") && oncontrol}
-          {#if canPause(supervisor)}
-            <button type="button" class="btn" data-act="pause-supervisor" disabled={!!busy} onclick={() => control("pause")}>{busy === "pause" ? "Pausing…" : "Pause"}</button>
-          {:else if canResume(supervisor)}
-            <button type="button" class="btn go" data-act="resume-supervisor" disabled={!!busy} onclick={() => control("resume")}>{busy === "resume" ? "Resuming…" : "Resume"}</button>
-          {/if}
-        {/if}
+      <div class="ctl" data-sortie={supervisor.sorties?.[0]?.name ?? ""}>
+        {#if others.length && supervisor.sorties?.[0]?.name}<b class="name">{supervisor.sorties[0].name}</b>{/if}
+        {@render status(supervisor, null)}
       </div>
     {/if}
   </div>
+  {#if supervisor && others.length}
+    <ul class="others" aria-label="The other Sorties' supervisors">
+      {#each others as s (s.name)}
+        <li class="ctl" data-sortie={s.name}><b class="name">{s.name}</b>{@render status(s, s.name)}</li>
+      {/each}
+    </ul>
+  {/if}
   {#if error}<p class="err" role="alert">{error}</p>{/if}
   {#if !reachable}
     <p class="none" data-note="unreachable">Sortie is unreachable, so its supervisor is unknown.</p>
@@ -78,6 +95,8 @@
   .st.paused { border-color: #ecd9a8; background: var(--amber-tint); color: var(--amber-ink); }
   .st.paused i { background: var(--amber); }
   .by { font-size: 12px; color: var(--mute); }
+  .name { font: 600 12px var(--font-mono); color: var(--ink); }
+  .others { list-style: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
   .btn { height: 28px; padding: 0 14px; border: 1px solid var(--ink); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
   .btn:hover:not(:disabled) { background: var(--strip); }
   .btn.go { border-color: var(--done); background: var(--done); color: #fff; }

@@ -9,7 +9,7 @@
     onapprove?: (keys: string[]) => Promise<string | null>;
     onanswer?: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
-    onsupervisor?: (op: "pause" | "resume") => Promise<string | null>;
+    onsupervisor?: (op: "pause" | "resume", sortie: string | null) => Promise<string | null>;
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
   } = $props();
   // svelte-ignore state_referenced_locally

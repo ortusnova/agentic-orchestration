@@ -284,3 +284,52 @@ def test_an_action_on_this_projects_epic_stays():
         {"id": 1, "action": "grant_sessions", "issue_identifier": "X-9", "result": "done"}]}, nodes)
     assert [(a["action"], a["key"], a["label"]) for a in view["actions"]] == [("file_issue", "c", "c")]
     assert by_key == {"c": view["actions"]}
+
+
+# Each Sortie's supervisor ---------------------------------------------------------------
+
+
+def test_each_sorties_supervisor_status_shows_this_projects_first(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.supervisor.update(status="paused", paused_at="2026-11-03T08:00:00Z", paused_by="Ana Ruiz")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        sup = client.get(f"{P}/graph").json()["supervisor"]
+        assert [(s["name"], s["own"], s["status"], s["paused_by"]) for s in sup["sorties"]] == [
+            ("p1", True, "active", None), ("taichi", False, "paused", "Ana Ruiz")]
+        assert sup["sorties"][1]["paused_at"] == ts("2026-11-03T08:00:00Z")
+        assert sup["status"] == "active"
+
+
+def test_another_sorties_supervisor_pauses_and_resumes_in_that_sortie(store):
+    app, p1, taichi = fleet_app(store)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        r = client.post(f"{P}/supervisor/pause", params={"sortie": "taichi"})
+        assert r.status_code == 200, r.text
+        assert taichi.supervisor_controls == [{"op": "pause", "author": "Local operator"}] and p1.supervisor_controls == []
+        assert {s["name"]: s["status"] for s in r.json()["supervisor"]["sorties"]} == {"p1": "active", "taichi": "paused"}
+        r = client.post(f"{P}/supervisor/resume", params={"sortie": "taichi"})
+        assert r.status_code == 200, r.text
+        assert taichi.supervisor["status"] == "active"
+        assert client.post(f"{P}/supervisor/pause", params={"sortie": "p1"}).status_code == 200
+        assert p1.supervisor["status"] == "paused"
+
+
+def test_a_sortie_this_workbench_does_not_read_is_refused(store):
+    app, p1, taichi = fleet_app(store)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        r = client.post(f"{P}/supervisor/pause", params={"sortie": "elsewhere"})
+        assert r.status_code == 404 and r.json()["error"]["code"] == "unknown_sortie"
+        assert p1.supervisor_controls == [] and taichi.supervisor_controls == []
+
+
+def test_a_sortie_without_a_supervisor_lists_none():
+    view, _ = supervisor_view({"supervisor": {"status": "active"}}, [], [("other", {"running": []})], "own")
+    assert [s["name"] for s in view["sorties"]] == ["own"]
+    view, _ = supervisor_view({}, [], [("other", {"supervisor": {"status": "paused"}})], "own")
+    assert [(s["name"], s["status"]) for s in view["sorties"]] == [("own", "off"), ("other", "paused")]

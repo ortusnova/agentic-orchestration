@@ -81,7 +81,7 @@ const approver = () => (identity.identity = { name: "Ann Approver", email: "", r
 const planner = () => (identity.identity = { name: "Pat Planner", email: "", roles: ["planner"], id: "p" });
 
 type Home = ReturnType<typeof mount> & { setDoc: (d: MergedGraph) => void };
-async function home(d: MergedGraph, onsupervisor?: (op: "pause" | "resume") => Promise<string | null>) {
+async function home(d: MergedGraph, onsupervisor?: (op: "pause" | "resume", sortie: string | null) => Promise<string | null>) {
   app = mount(HomeHarness, { target: document.body, props: { initial: d, onsupervisor } });
   await settle();
   return app as Home;
@@ -168,6 +168,30 @@ describe("the supervisor on the home", () => {
     h.setDoc(doc(null, false));
     await settle();
     expect($("[data-note='not-dispatched']")).not.toBeNull();
+  });
+
+  it("shows each Sortie's status, and pauses and resumes each in its own Sortie", async () => {
+    approver();
+    const calls: [string, string | null][] = [];
+    const sorties = [
+      { name: "p1", own: true, status: "active", paused_at: null, paused_by: null, reason: null },
+      { name: "taichi", own: false, status: "paused", paused_at: MERGED_AT, paused_by: "Ana Ruiz", reason: null },
+    ];
+    await home(doc(supervisor({ sorties })), async (op, sortie) => { calls.push([op, sortie]); return null; });
+    expect($$("[data-supervisor] [data-sortie]").map((r) => [r.dataset.sortie, r.querySelector<HTMLElement>("[data-supervisor-status]")!.dataset.supervisorStatus]))
+      .toEqual([["p1", "active"], ["taichi", "paused"]]);
+    expect(text("[data-sortie='taichi'] .by")).toContain("paused by Ana Ruiz");
+    $<HTMLButtonElement>("[data-sortie='taichi'] [data-act='resume-supervisor']")!.click();
+    await settle();
+    $<HTMLButtonElement>("[data-sortie='p1'] [data-act='pause-supervisor']")!.click();
+    await settle();
+    expect(calls).toEqual([["resume", "taichi"], ["pause", null]]);
+  });
+
+  it("names no Sortie when only this project's reports a supervisor", async () => {
+    await home(doc(supervisor({ sorties: [{ name: "p1", own: true, status: "active", paused_at: null, paused_by: null, reason: null }] })));
+    expect($("[data-supervisor] .name")).toBeNull();
+    expect($("[data-supervisor] .others")).toBeNull();
   });
 
   it("says when it has taken no action", async () => {

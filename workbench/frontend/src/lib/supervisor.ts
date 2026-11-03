@@ -1,5 +1,5 @@
 /** Sortie's supervisor in words (agent-platform/run-supervision). */
-import type { Supervisor, SupervisorAction } from "./types";
+import type { SupervisorAction, SupervisorStatus } from "./types";
 
 /** What each action the supervisor's token allows reads as, done, by Sortie's name for it. */
 const ACTION_TEXT: Record<string, string> = {
@@ -54,13 +54,13 @@ export function resultTone(result: string): "ok" | "refused" | "failed" {
 
 const STATUS_TEXT: Record<string, string> = { active: "Acting", paused: "Paused", off: "Off" };
 
-export function statusText(s: Supervisor): string {
+export function statusText(s: SupervisorStatus): string {
   return STATUS_TEXT[s.status] ?? capital(words(s.status));
 }
 
 /** Whether a person may pause it now, or resume it; neither when it is off. */
-export const canPause = (s: Supervisor) => s.status === "active";
-export const canResume = (s: Supervisor) => s.status === "paused";
+export const canPause = (s: SupervisorStatus) => s.status === "active";
+export const canResume = (s: SupervisorStatus) => s.status === "paused";
 
 export function when(at: number | null): string {
   return at == null ? "" : new Date(at * 1000).toLocaleString();
