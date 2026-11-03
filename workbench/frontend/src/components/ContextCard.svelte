@@ -346,7 +346,7 @@
   .why.warn { color: var(--amber-ink); }
   .approver { font-size: 12px; color: var(--mute); }
   .chip.plan.ready, .chip.plan.released { color: var(--done); }
-  .chip.plan.needs_rereview, .chip.plan.delivery_unconfirmed { color: var(--amber-ink); }
+  .chip.plan.needs_rereview, .chip.plan.delivery_unconfirmed, .chip.plan.preview { color: var(--amber-ink); }
   .chip.plan.delivered { color: var(--done); }
   dd.pulls { flex-direction: column; gap: 4px; }
   .pull { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
