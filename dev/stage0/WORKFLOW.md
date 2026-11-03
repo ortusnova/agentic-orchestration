@@ -212,7 +212,10 @@ environment:
         project: ${STAGE0_AO_REPO_PROJECT}
       # What a homelab job needs, which replaces the homelab Sortie's smolvm
       # settings: nested KVM for the seed and Talos VMs, the sandbox's 8 vCPU
-      # and 20 GiB, and a 200 GiB disk. The homelab pack, its user builder,
+      # and 20 GiB, and a 60 GiB disk: a full vm chain writes about 31-40 GiB
+      # (measured on taichi, 2026-11-03), and the worker must have it free, so
+      # a larger number only keeps homelab jobs off a worker that could run
+      # them. The homelab pack, its user builder,
       # its guest kernel, its shared folders, the vm key and what the hooks
       # did are the worker's (homelab-inputs.sh): a worker with homelab's
       # dev host declares nested, any other does not.
@@ -222,7 +225,7 @@ environment:
         provider: github
         project: ${STAGE0_HOMELAB_REPO_PROJECT}
         image: homelab.smolmachine
-        requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 200}
+        requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 60}
     default_repository: sortie
 ---
 {{- if or .ci_failure .merge_conflict .review_comments -}}
