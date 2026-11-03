@@ -9,7 +9,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from .autosync import approved_digest
-from .fleet import build_fleet, lanes_summary, story_states
+from .fleet import build_fleet, lanes_summary, merge_waits, run_phases, story_states
 from .leases import leases_of
 from .home import History, build_home
 from .merge import merge
@@ -291,8 +291,9 @@ class Hub:
         snap = self.plan.snapshot()
         doc = merge(snap["graph"], self.tracker)
         approvals, rereviews = self.records()
+        states = [s for _, s, _ in self.states()]
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
-                              self.previews())
+                              self.previews(), run_phases(states), merge_waits(states))
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         self.leases = leases_of(self.states())
         try:

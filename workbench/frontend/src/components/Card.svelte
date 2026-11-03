@@ -34,8 +34,10 @@
     if (node.plan_status === "held") return "held for approval";
     if (node.plan_status === "needs_spec") return "needs a spec";
     if (node.plan_status === "draft") return "not approved";
-    if (node.plan_status === "preview") return "ready for you to look";
     if (node.plan_status === "building") return "building";
+    if (node.plan_status === "in_review") return "in review";
+    if (node.plan_status === "click_proofs") return "waiting for click-proofs";
+    if (node.plan_status === "merging") return "merging";
     if (cls === "prog") return "in progress";
     const open = model.blockers(node.plan_key).filter((b) => !model.isDone(model.node(b))).length;
     return open ? `waiting on ${open}` : "ready";
