@@ -16,6 +16,7 @@ dev/stage0/test-store-sync.sh         # check the store's fast-forward against t
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, and the drain
 dev/stage0/dev-host-apply.sh [CMD...] # drain this host, apply a setup change (homelab: make dev-host), run stage0.sh, dispatch again
 dev/stage0/test-review-gate.sh        # check the review gate and the fix runs against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
@@ -31,9 +32,10 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`; `podman-restart.service` brings it back after a reboot |
 | Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`) |
 | Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put). Such a change drains the host first (see [Drain before a change](#drain-before-a-change)); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
+| Previews | unit `ortus-stage0-previews.timer` every minute, and one `ortus-stage0-preview@<identifier>` per ui story's pull request; see [Previews of ui stories](#previews-of-ui-stories) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker-tunnel@<worker>`) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
 
@@ -47,8 +49,8 @@ acp-broker, then pushes the issue branch and opens the pull request. When
 the pull request merges, Sortie moves the story to `Done`.
 
 - **Review and merge.** Every story's pull request goes through the
-  criteria gate, whatever its `review` value (spec store
-  `agent-platform/run-supervision`, design D5). The build rule
+  criteria gate, whatever its `review` value (`human`, `criteria` or
+  `ui`; spec store `agent-platform/run-supervision`, design D5). The build rule
   (`build`, `claude-label` or `claude-title`) hops to the `review` rule
   (`gate: criteria`, stage label `sortie-stage:review`), a new run in a new
   agent session. The review checks each acceptance criterion with evidence,
@@ -62,9 +64,12 @@ the pull request merges, Sortie moves the story to `Done`.
   every pull request from merging; the kit's repositories must not require
   one. Sortie merges a `review: human` story after a review only from the
   Sortie commit that lets its gate do so (`planReviewGate`); with an older
-  Sortie a person still merges those. `test-review-gate.sh` checks all of
-  this against Sortie's own loader, exit and merge code: it needs the
-  `sortie/` submodule, or `SORTIE_SRC` naming a Sortie checkout.
+  Sortie a person still merges those. A `review: ui` story
+  (`sortie-review:ui`) is never merged by Sortie: once its review and CI
+  pass, it gets a preview ([below](#previews-of-ui-stories)) and the
+  operator merges it. `test-review-gate.sh` checks all of this against
+  Sortie's own loader, exit and merge code: it needs the `sortie/`
+  submodule, or `SORTIE_SRC` naming a Sortie checkout.
 
 - **CI failures and merge conflicts.** Both workflows turn on Sortie's
   `ci_failure` and `merge_conflicts` reactions (spec store
@@ -86,6 +91,14 @@ the pull request merges, Sortie moves the story to `Done`.
   profile reads `homelab`.
   `test-review-gate.sh` checks the fix runs too.
 
+- **Operator comments.** On p1 `review_comments` is on: a comment on a ui
+  story's pull request that no bot wrote, or a review that requests changes
+  on any story, starts a review fix run on the branch with the comments and
+  the fix prompt (at most 5 per story, a minute after the last comment).
+  Its triage, a `node` one-liner in the machine, passes over the kit's own
+  comment with the preview's address (`<!-- workbench-preview -->`), which
+  GitHub does not mark as a bot's because the kit posts it with the
+  operator's token.
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
   then its build runs Claude Code. The review always runs opencode.
@@ -127,6 +140,44 @@ the pull request merges, Sortie moves the story to `Done`.
   the workflow does not list. A `stage0.env` written before these settings
   existed keeps working: `stage0.sh` fills in each missing one with its
   default. To change one, set it in `stage0.env` and run `stage0.sh` again.
+
+## Previews of ui stories
+
+A `review: ui` story is built before it is approved, and the operator's
+merge is its approval (spec store `agent-platform/run-supervision`, design
+D8). Every minute `ortus-stage0-previews.timer` runs `run-previews.sh`, one
+pass of `workbench preview-sync` against Sortie and GitHub
+(`STAGE0_AO_REPO_PROJECT`):
+
+- A ui story whose run is over, that waits in `In Review` (its review
+  passed), and whose pull request (`sortie/<identifier>`) passes CI on its
+  head gets a preview: `preview.sh up` checks that head out in
+  `$STAGE0_HOME/previews/<identifier>/src`, builds its workbench, copies
+  the live registry into its own home, and starts
+  `ortus-stage0-preview@<identifier>`: `run-workbench.sh <identifier>`,
+  the branch's workbench with `WORKBENCH_SYNC=0`, against the live store
+  and Sortie, on `127.0.0.1:<port>` from `STAGE0_PREVIEW_FIRST_PORT` (8800)
+  up. The pull request gets one comment with the address, and the live
+  workbench shows the story as "Ready for you to look" with it, from
+  `$STAGE0_HOME/previews.json`.
+- The preview follows the branch: a fix run's new head is deployed once its
+  run is over and CI passes on it; until then the last one stays up.
+- When the pull request closes, merged or not, `preview.sh down` stops and
+  removes it. A merge makes the story Done, and the change deploys as any
+  workbench merge does.
+
+The address is a name beside the live workbench's TLS name,
+`STAGE0_WORKBENCH_URL` in `stage0.env`: `https://workbench.example.net`
+gives `https://workbench-ons-93.example.net/`, so a wildcard certificate
+for the live name's domain covers it. The kit does not serve TLS itself:
+each change rewrites `$STAGE0_HOME/previews/routes`, one `HOST PORT` line
+per preview, for the proxy in front of the live workbench, and runs
+`STAGE0_PREVIEW_ROUTES_HOOK` (for example, that proxy's reload). Without
+`STAGE0_WORKBENCH_URL` the address is the preview's loopback port.
+
+A preview runs the branch's code on this host with the kit's Sortie and
+GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
+tracker, and the branch has passed its criteria review and CI first.
 
 ## Drain before a change
 
