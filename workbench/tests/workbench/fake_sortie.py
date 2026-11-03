@@ -96,7 +96,7 @@ class FakeSortie:
         # Sortie that serves none; the actions its token took, as
         # supervisor_actions (sortie#40), or None for a Sortie without them;
         # and the pauses and resumes people asked for.
-        self.supervisor: dict[str, Any] | None = {"status": "active", "paused_at": None, "paused_by": None}
+        self.supervisor: dict[str, Any] | None = {"status": "idle", "agent": "opencode", "unavailable": None, "paused": None}
         self.supervisor_actions: list[dict[str, Any]] | None = []
         self.supervisor_controls: list[dict[str, str]] = []
 
@@ -253,18 +253,21 @@ class FakeSortie:
                 state["supervisor_actions"] = self.supervisor_actions[::-1][:50]
             return httpx.Response(200, json=state)
         if path in ("/api/v1/supervisor/pause", "/api/v1/supervisor/resume") and request.method == "POST":
+            # As Sortie's supervisor-session serves it: the control token's
+            # route, with an optional {"by", "reason"}; "operator" by default.
             if self.supervisor is None:
-                return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
-            author = (body or {}).get("author")
-            if not author:
-                return httpx.Response(400, json={"error": {"code": "invalid_request", "message": "author"}})
+                return httpx.Response(409, json={"error": {"code": "supervisor_not_configured",
+                                                           "message": "the workflow configures no supervisor section"}})
             op = path.rsplit("/", 1)[1]
-            self.supervisor_controls.append({"op": op, "author": author})
+            by = (body or {}).get("by") or "operator"
+            self.supervisor_controls.append({"op": op, "by": by})
             if op == "pause":
-                self.supervisor.update(status="paused", paused_at="2026-11-03T11:00:00Z", paused_by=author)
+                paused = {"since": "2026-11-03T11:00:00Z", "by": by, "reason": (body or {}).get("reason") or ""}
+                self.supervisor.update(status="paused", paused=paused)
             else:
-                self.supervisor.update(status="active", paused_at=None, paused_by=None)
-            return httpx.Response(200, json=dict(self.supervisor))
+                paused = self.supervisor.get("paused")
+                self.supervisor.update(status="idle", paused=None)
+            return httpx.Response(200, json={"supervisor_paused": paused})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:

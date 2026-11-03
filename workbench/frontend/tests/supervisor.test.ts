@@ -6,7 +6,7 @@ import { graph, node, synced } from "./fixtures";
 import ProjectView from "../src/components/ProjectView.svelte";
 import type { HomeDoc } from "../src/lib/home";
 import { session as identity } from "../src/lib/identity.svelte";
-import { actionText, resultText, resultTone } from "../src/lib/supervisor";
+import { actionText, canPause, canResume, resultText, resultTone, statusText } from "../src/lib/supervisor";
 import type { SessionClient } from "../src/lib/session";
 import type { GraphNode, MergedGraph, Supervisor, SupervisorAction, ViewState } from "../src/lib/types";
 
@@ -41,7 +41,7 @@ const refused: SupervisorAction = {
 };
 
 const supervisor = (extra: Partial<Supervisor> = {}): Supervisor =>
-  ({ status: "active", paused_at: null, paused_by: null, reason: null, actions: [merge, refused], total: 2, ...extra });
+  ({ status: "idle", paused_at: null, paused_by: null, reason: null, actions: [merge, refused], total: 2, ...extra });
 
 function homeDoc(): HomeDoc {
   return {
@@ -91,8 +91,8 @@ describe("the supervisor on the home", () => {
   it("shows its status and its recent actions, newest first, each with the story it touched", async () => {
     approver();
     await home(doc());
-    expect($("[data-supervisor-status]")!.dataset.supervisorStatus).toBe("active");
-    expect(text("[data-supervisor-status]")).toBe("Acting");
+    expect($("[data-supervisor-status]")!.dataset.supervisorStatus).toBe("idle");
+    expect(text("[data-supervisor-status]")).toBe("Idle");
     expect($$("[data-supervisor] .act").map((li) => li.dataset.action)).toEqual(["record_merge", "POST /api/v1/{identifier}/hold"]);
   });
 
@@ -156,7 +156,7 @@ describe("the supervisor on the home", () => {
   it("offers a planner no Pause", async () => {
     planner();
     await home(doc(), async () => null);
-    expect(text("[data-supervisor-status]")).toBe("Acting");
+    expect(text("[data-supervisor-status]")).toBe("Idle");
     expect($("[data-act='pause-supervisor']")).toBeNull();
   });
 
@@ -174,12 +174,12 @@ describe("the supervisor on the home", () => {
     approver();
     const calls: [string, string | null][] = [];
     const sorties = [
-      { name: "p1", own: true, status: "active", paused_at: null, paused_by: null, reason: null },
+      { name: "p1", own: true, status: "idle", paused_at: null, paused_by: null, reason: null },
       { name: "taichi", own: false, status: "paused", paused_at: MERGED_AT, paused_by: "Ana Ruiz", reason: null },
     ];
     await home(doc(supervisor({ sorties })), async (op, sortie) => { calls.push([op, sortie]); return null; });
     expect($$("[data-supervisor] [data-sortie]").map((r) => [r.dataset.sortie, r.querySelector<HTMLElement>("[data-supervisor-status]")!.dataset.supervisorStatus]))
-      .toEqual([["p1", "active"], ["taichi", "paused"]]);
+      .toEqual([["p1", "idle"], ["taichi", "paused"]]);
     expect(text("[data-sortie='taichi'] .by")).toContain("paused by Ana Ruiz");
     $<HTMLButtonElement>("[data-sortie='taichi'] [data-act='resume-supervisor']")!.click();
     await settle();
@@ -189,7 +189,7 @@ describe("the supervisor on the home", () => {
   });
 
   it("names no Sortie when only this project's reports a supervisor", async () => {
-    await home(doc(supervisor({ sorties: [{ name: "p1", own: true, status: "active", paused_at: null, paused_by: null, reason: null }] })));
+    await home(doc(supervisor({ sorties: [{ name: "p1", own: true, status: "idle", paused_at: null, paused_by: null, reason: null }] })));
     expect($("[data-supervisor] .name")).toBeNull();
     expect($("[data-supervisor] .others")).toBeNull();
   });
@@ -277,7 +277,7 @@ describe("on the project's page", () => {
     const view: ViewState = { epic: null, selected: null, showCross: true };
     app = mount(ProjectView, { target: document.body, props: { slug: "homelab", page: "home", view, onmissing: () => {} } });
     await settle();
-    expect(text("[data-supervisor-status]")).toBe("Acting");
+    expect(text("[data-supervisor-status]")).toBe("Idle");
     $<HTMLButtonElement>("[data-act='pause-supervisor']")!.click();
     await settle();
     expect(be.calls).toContainEqual({ method: "POST", url: "/api/projects/homelab/supervisor/pause" });
@@ -286,8 +286,8 @@ describe("on the project's page", () => {
     $<HTMLButtonElement>("[data-act='resume-supervisor']")!.click();
     await settle();
     expect(be.calls).toContainEqual({ method: "POST", url: "/api/projects/homelab/supervisor/resume" });
-    expect(be.status()).toBe("active");
-    expect(text("[data-supervisor-status]")).toBe("Acting");
+    expect(be.status()).toBe("idle");
+    expect(text("[data-supervisor-status]")).toBe("Idle");
   });
 });
 
@@ -304,6 +304,14 @@ describe("how Sortie's records read", () => {
     expect(resultText("rejected")).toBe("rejected");
     expect(resultTone("rejected")).toBe("refused");
     expect(resultTone("failed")).toBe("failed");
+  });
+
+  it("reads each status Sortie's supervisor session serves, and pauses it in any but paused", () => {
+    const st = (status: string) => ({ status, paused_at: null, paused_by: null, reason: null });
+    expect(["idle", "running", "paused", "budget_exhausted", "unavailable", "active"].map((s) => statusText(st(s))))
+      .toEqual(["Idle", "Running", "Paused", "Out of budget", "Unavailable", "Acting"]);
+    expect(["idle", "running", "budget_exhausted", "unavailable", "active"].every((s) => canPause(st(s)) && !canResume(st(s)))).toBe(true);
+    expect([canPause(st("paused")), canResume(st("paused")), canPause(st("off")), canResume(st("off"))]).toEqual([false, true, false, false]);
   });
 
   it("offers no pause for a supervisor that is off", async () => {

@@ -102,7 +102,7 @@ export interface SupervisorAction {
 
 /** One Sortie's supervisor status: whether it acts, and who paused it and when. */
 export interface SupervisorStatus {
-  /** "active", "paused" or "off". */
+  /** Sortie's "idle", "running", "paused", "budget_exhausted" or "unavailable"; "off" when it serves no status. */
   status: string;
   paused_at: number | null;
   paused_by: string | null;

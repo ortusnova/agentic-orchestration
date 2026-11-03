@@ -52,14 +52,18 @@ export function resultTone(result: string): "ok" | "refused" | "failed" {
   return result === "refused" || result === "rejected" ? "refused" : "failed";
 }
 
-const STATUS_TEXT: Record<string, string> = { active: "Acting", paused: "Paused", off: "Off" };
+/** Sortie's supervisor-session statuses, an older Sortie's "active", and the workbench's "off" for a Sortie that serves none. */
+const STATUS_TEXT: Record<string, string> = {
+  idle: "Idle", running: "Running", paused: "Paused", budget_exhausted: "Out of budget", unavailable: "Unavailable",
+  active: "Acting", off: "Off",
+};
 
 export function statusText(s: SupervisorStatus): string {
   return STATUS_TEXT[s.status] ?? capital(words(s.status));
 }
 
 /** Whether a person may pause it now, or resume it; neither when it is off. */
-export const canPause = (s: SupervisorStatus) => s.status === "active";
+export const canPause = (s: SupervisorStatus) => s.status !== "paused" && s.status !== "off";
 export const canResume = (s: SupervisorStatus) => s.status === "paused";
 
 export function when(at: number | null): string {

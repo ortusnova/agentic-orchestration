@@ -41,7 +41,7 @@ def supervisor_router(projects: ProjectManager, require_role) -> APIRouter:
         try:
             await target.supervisor(op, who.name or who.email or who.key)
         except SortieError as exc:
-            if exc.status == 404:
+            if exc.status == 404 or exc.code == "supervisor_not_configured":
                 raise HTTPException(status_code=409, detail={"code": "no_supervisor", "message":
                                     "this Sortie has no supervisor to pause or resume"}) from exc
             raise HTTPException(status_code=exc.status if exc.status >= 400 else 502,

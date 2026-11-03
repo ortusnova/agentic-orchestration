@@ -57,7 +57,7 @@ def test_a_recorded_merge_names_its_pull_request_merge_commit_and_time_beside_th
         settle(client)
         doc = client.get(f"{P}/graph").json()
         sup = doc["supervisor"]
-        assert sup["status"] == "active" and sup["total"] == 1
+        assert sup["status"] == "idle" and sup["total"] == 1
         a = sup["actions"][0]
         assert (a["action"], a["result"], a["identifier"], a["key"], a["label"]) == ("record_merge", "done", "T-1", "billing/b1", "b1")
         assert a["title"] == status(app, "billing/b1")["title"]
@@ -139,7 +139,7 @@ def test_pause_and_resume_change_the_supervisors_status_in_sortie(store):
         settle(client)
         r = client.post(f"{P}/supervisor/pause")
         assert r.status_code == 200, r.text
-        assert fake.supervisor_controls == [{"op": "pause", "author": "Local operator"}]
+        assert fake.supervisor_controls == [{"op": "pause", "by": "Local operator"}]
         assert fake.supervisor["status"] == "paused"
         sup = r.json()["supervisor"]
         assert sup["status"] == "paused" and sup["paused_by"] == "Local operator" and sup["paused_at"] == ts("2026-11-03T11:00:00Z")
@@ -148,9 +148,9 @@ def test_pause_and_resume_change_the_supervisors_status_in_sortie(store):
         fake.supervise("merge", "T-1", pull=PULL)
         r = client.post(f"{P}/supervisor/resume")
         assert r.status_code == 200, r.text
-        assert fake.supervisor["status"] == "active"
+        assert fake.supervisor["status"] == "idle"
         sup = r.json()["supervisor"]
-        assert sup["status"] == "active" and sup["paused_by"] is None
+        assert sup["status"] == "idle" and sup["paused_by"] is None
         assert (sup["actions"][0]["result"], sup["actions"][0]["detail"]) == ("refused", "the supervisor is paused")
 
 
@@ -174,7 +174,7 @@ def test_a_planner_sees_the_supervisor_but_cannot_pause_it(store):
     with TestClient(app) as client:
         sign_in_oidc(client, provider)
         settle(client)
-        assert client.get(f"{P}/graph").json()["supervisor"]["status"] == "active"
+        assert client.get(f"{P}/graph").json()["supervisor"]["status"] == "idle"
         r = client.post(f"{P}/supervisor/pause")
         assert r.status_code == 403 and r.json()["error"]["code"] == "role_required"
         assert fake.supervisor_controls == []
@@ -188,7 +188,7 @@ def test_the_pause_carries_the_approvers_name(store):
         sign_in_oidc(client, provider)
         settle(client)
         assert client.post(f"{P}/supervisor/pause").status_code == 200
-        assert fake.supervisor_controls == [{"op": "pause", "author": "Ana Ruiz"}]
+        assert fake.supervisor_controls == [{"op": "pause", "by": "Ana Ruiz"}]
 
 
 def test_a_sortie_with_no_supervisor(store):
@@ -232,7 +232,7 @@ def test_another_sorties_actions_show_beside_their_stories(store):
         sup = client.get(f"{P}/graph").json()["supervisor"]
         assert [(a["action"], a["identifier"], a["sortie"]) for a in sup["actions"]] == [
             ("release", "T-3", "p1"), ("fix_run", "T-2", "taichi")]
-        assert sup["status"] == "active"
+        assert sup["status"] == "idle"
 
 
 def test_an_unknown_operation_reaches_no_sortie(store):
@@ -266,6 +266,19 @@ def test_evidence_in_each_form_sortie_may_give():
         {"name": "run", "value": "https://ci/1", "url": "https://ci/1"}, {"name": "checks", "value": "lint, test", "url": None}]
 
 
+def test_sorties_supervisor_session_reads_with_who_paused_it_and_why():
+    view, _ = supervisor_view({"supervisor": {"status": "paused", "unavailable": None,
+                                              "paused": {"since": "2026-11-03T08:00:00Z", "by": "Ana Ruiz",
+                                                         "reason": "rewriting the prompt"}}}, [])
+    assert (view["status"], view["paused_by"], view["paused_at"], view["reason"]) == (
+        "paused", "Ana Ruiz", ts("2026-11-03T08:00:00Z"), "rewriting the prompt")
+    view, _ = supervisor_view({"supervisor": {"status": "unavailable", "unavailable": "no agent configured",
+                                              "paused": None}}, [])
+    assert (view["status"], view["paused_by"], view["reason"]) == ("unavailable", None, "no agent configured")
+    view, _ = supervisor_view({"supervisor": {"status": "active", "paused_at": None, "paused_by": None}}, [])
+    assert (view["status"], view["paused_by"], view["reason"]) == ("active", None, None)
+
+
 def test_a_supervisor_with_no_status_reads_from_paused():
     nodes = [{"plan_key": "c/s", "kind": "story", "title": "S", "tracker": {"identifier": "T-1", "url": None}}]
     view, by_key = supervisor_view({"supervisor": {"paused": True, "actions": [{"action": "x", "issue_identifier": "T-1",
@@ -291,15 +304,15 @@ def test_an_action_on_this_projects_epic_stays():
 
 def test_each_sorties_supervisor_status_shows_this_projects_first(store):
     app, p1, taichi = fleet_app(store)
-    taichi.supervisor.update(status="paused", paused_at="2026-11-03T08:00:00Z", paused_by="Ana Ruiz")
+    taichi.supervisor.update(status="paused", paused={"since": "2026-11-03T08:00:00Z", "by": "Ana Ruiz", "reason": ""})
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
         sup = client.get(f"{P}/graph").json()["supervisor"]
         assert [(s["name"], s["own"], s["status"], s["paused_by"]) for s in sup["sorties"]] == [
-            ("p1", True, "active", None), ("taichi", False, "paused", "Ana Ruiz")]
+            ("p1", True, "idle", None), ("taichi", False, "paused", "Ana Ruiz")]
         assert sup["sorties"][1]["paused_at"] == ts("2026-11-03T08:00:00Z")
-        assert sup["status"] == "active"
+        assert sup["status"] == "idle"
 
 
 def test_another_sorties_supervisor_pauses_and_resumes_in_that_sortie(store):
@@ -309,11 +322,11 @@ def test_another_sorties_supervisor_pauses_and_resumes_in_that_sortie(store):
         settle(client)
         r = client.post(f"{P}/supervisor/pause", params={"sortie": "taichi"})
         assert r.status_code == 200, r.text
-        assert taichi.supervisor_controls == [{"op": "pause", "author": "Local operator"}] and p1.supervisor_controls == []
-        assert {s["name"]: s["status"] for s in r.json()["supervisor"]["sorties"]} == {"p1": "active", "taichi": "paused"}
+        assert taichi.supervisor_controls == [{"op": "pause", "by": "Local operator"}] and p1.supervisor_controls == []
+        assert {s["name"]: s["status"] for s in r.json()["supervisor"]["sorties"]} == {"p1": "idle", "taichi": "paused"}
         r = client.post(f"{P}/supervisor/resume", params={"sortie": "taichi"})
         assert r.status_code == 200, r.text
-        assert taichi.supervisor["status"] == "active"
+        assert taichi.supervisor["status"] == "idle"
         assert client.post(f"{P}/supervisor/pause", params={"sortie": "p1"}).status_code == 200
         assert p1.supervisor["status"] == "paused"
 

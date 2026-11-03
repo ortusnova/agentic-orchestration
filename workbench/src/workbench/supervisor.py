@@ -10,11 +10,14 @@ based on and its result, and serves the newest in its state as
                              "evidence": "...", "result": "done" | "refused" | "rejected" | "failed",
                              "status", "detail", "pull_request": "owner/repo#N",
                              "merge_commit", "at"}],
-     "supervisor": {"status": "active" | "paused" | "off", "paused_at", "paused_by"}}
+     "supervisor": {"status": "idle" | "running" | "paused" | "budget_exhausted" | "unavailable",
+                    "unavailable": "why", "paused": {"since", "by", "reason"} | None, ...}}
 
 ``supervisor``, the supervisor session's status, comes with its pause and
 resume (openspec sortie-supervises-runs, supervisor-session); a Sortie that
-serves the actions without it reads as off, with nothing to pause. Every
+serves the actions without it reads as off, with nothing to pause. An older
+Sortie's ``"active"`` status, with ``paused_at`` and ``paused_by``, reads
+too. Every
 Sortie's actions show, each beside the story it touched, and each Sortie's
 status, with its own pause; the Sortie that dispatches the project comes
 first. Nothing here writes.
@@ -158,8 +161,13 @@ def _status_of(sup: dict[str, Any] | None) -> dict[str, Any]:
     status = sup.get("status")
     if not isinstance(status, str) or not status:
         status = "paused" if sup.get("paused") else "active"
-    return {"status": status, "paused_at": parked_at_of({"at": sup.get("paused_at")}),
-            "paused_by": sup.get("paused_by") or None, "reason": sup.get("reason") or None}
+    paused = sup.get("paused") if isinstance(sup.get("paused"), dict) else {}
+    reason = paused.get("reason") if status == "paused" else None
+    if status == "unavailable":
+        reason = sup.get("unavailable")
+    return {"status": status, "paused_at": parked_at_of({"at": paused.get("since") or sup.get("paused_at")}),
+            "paused_by": paused.get("by") or sup.get("paused_by") or None,
+            "reason": _text(reason or sup.get("reason")) or None}
 
 
 def _supervisor_of(state: dict[str, Any]) -> dict[str, Any] | None:
