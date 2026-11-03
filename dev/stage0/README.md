@@ -27,7 +27,7 @@ dev/stage0/test-notify-channel.sh     # check the operator's channel, with stubs
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
-make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
+make -C dev/stage0 test               # the edge's and stage0-live-proofs' tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
 ```
 
@@ -43,9 +43,10 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | p1's worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (rendered by `worker-config.sh`); it dials the edge at `127.0.0.1:7700` on p1 with no tunnel, and the edge names it `p1` |
 | Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit, `worker-daemon/` included, runs `stage0.sh` again once no agent runs, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put). Such a change drains the host first (see [Drain before a change](#drain-before-a-change)); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
 | Previews | unit `ortus-stage0-previews.timer` every minute, and one `ortus-stage0-preview@<identifier>` per ui story's pull request; see [Previews of ui stories](#previews-of-ui-stories) |
+| Live proofs | unit `ortus-stage0-live-proofs.timer` every minute (`run-live-proofs.sh`, `$STAGE0_HOME/bin/stage0-live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-stage0-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
 
@@ -82,7 +83,10 @@ by the same Sortie, like any other.
   Sortie a person still merges those. A `review: ui` story
   (`sortie-review:ui`) is never merged by Sortie: once its review and CI
   pass, it gets a preview ([below](#previews-of-ui-stories)) and the
-  operator merges it. `test-review-gate.sh` checks all of this against
+  operator merges it. A criterion that needs a live run its machine cannot
+  do is not settled by the review but by a live-proof job, and the pull
+  request merges only once that job proves it ([below](#live-proofs)).
+  `test-review-gate.sh` checks all of this against
   Sortie's own loader, exit and merge code: it needs the `sortie/`
   submodule, or `SORTIE_SRC` naming a Sortie checkout.
 
@@ -213,6 +217,75 @@ A preview runs the branch's code on this host with the kit's Sortie and
 GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
 tracker, and the branch has passed its criteria review and CI first.
 
+## Live proofs
+
+Some acceptance criteria need a live run that the story's own machine
+cannot do: a host its egress refuses, a sandbox, another repository (spec
+store `agent-platform/run-supervision`, "A live criterion a story's machine
+cannot run becomes a live-proof job"). For example, homelab's full vm chain
+needs Let's Encrypt staging, which `egress-profile.json` does not allow. The
+review names such a criterion after `live proof needed:` and does not
+settle it. The supervisor then requests a live proof:
+`POST /api/v1/<identifier>/live-proof`, with the criterion and why the
+machine could not run it as its `evidence`. Every minute
+`ortus-stage0-live-proofs.timer` runs `run-live-proofs.sh`, one pass of
+`stage0-live-proofs sync` (`live-proofs/`) against Sortie and GitHub:
+
+- **The request.** Each new `live_proof` action in Sortie's
+  `supervisor_actions` opens a live proof of its pull request. From then
+  on, the head gets the commit status `live-proof`, pending until the
+  criterion is proven. Sortie's `auto_merge` requires CI, and Sortie reads
+  CI as every status and check run of the head, so the pull request is not
+  merged.
+- **The job.** The pass asks Sortie for a fix run of the story
+  (`POST /api/v1/<identifier>/fix`, with the control token). The message
+  opens with `<!-- live-proof -->` and holds the pull request, the branch
+  and the criterion. While the story's own run still goes, Sortie refuses
+  the fix run, and the pass asks again a minute later. The fix run runs on
+  the story's branch, in the story's repository, on a worker whose profile
+  allows it: a homelab job only on a worker that declares `nested`, which is
+  taichi. The workflow's fix prompt runs it as a live proof. It follows the
+  repository's `AGENTS.md`: for homelab, `sandbox create --wait`, the
+  cheapest proof that runs the changed code, and an open issue for every
+  failure whose cause is unknown. It pushes its fixes as new commits, never
+  rewriting one.
+- **The egress.** While the job runs, its identifier is in
+  `$STAGE0_HOME/live-proofs/active`, and the edge sends its CONNECTs to the
+  live-proof nono (`ortus-stage0-nono-live-proof`, `run-nono.sh live-proof`,
+  on `STAGE0_NONO_LIVE_PROOF_PORT`, default 7691). That nono runs the kit's
+  profile, with its credentials, plus the hosts in `egress-live-proof.json`
+  (`stage0-live-proofs profile` renders it into
+  `$STAGE0_HOME/egress-profile-live-proof.json`). Add a host a live chain
+  needs to that file, not to `egress-profile.json`. The edge's journal
+  records each live-proof tunnel with `profile=live-proof`.
+- **The result.** The job comments its result on the pull request through
+  GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
+  `github_api` credential that nono holds. The comment's first line is
+  `<!-- live-proof-result -->`, followed by `Result: proven` or
+  `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
+  The pass reads only the kit's own account's comments written since the
+  request, and the newest sets the status:
+  - proven at the head: `success`, and Sortie merges once CI passes;
+  - unproven: `failure`;
+  - proven at an older commit: `pending` again, until the supervisor
+    requests a new proof.
+
+  A job with no result after 12 hours loses the live-proof egress.
+  The review comment triage passes over the result comment.
+- **The end.** When the pull request closes, the live proof ends. A new
+  request replaces the old one and starts a new job.
+
+The supervisor of record may also run a live proof by hand in a taichi
+sandbox (design D9) and post the same comment with the kit's account. A
+result posted before the job starts settles the proof, and the pass starts
+no job. `stage0-live-proofs` keeps its record in
+`$STAGE0_HOME/live-proofs/record.json`.
+`go test ./...` in `live-proofs/` checks the request, the job, the comment
+and the status against a fake Sortie and a fake GitHub. `test-review-gate.sh`
+checks the job's prompt, its placement on taichi by Sortie's matcher, and
+Sortie's merge gate on the status, with Sortie's GitHub adapter against a
+fake forge. `edge/` checks the live-proof egress.
+
 ## Drain before a change
 
 A change that must not land under a running agent drains the host first
@@ -263,7 +336,7 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 
 | Credential | Source |
 | --- | --- |
-| GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
+| GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. nono holds it for the jobs: a job's `SORTIE_GITHUB_TOKEN` is only the `github_api` placeholder, for GitHub's API, which a live-proof job comments its result with ([Live proofs](#live-proofs)) |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
 | The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
