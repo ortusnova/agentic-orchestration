@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,54 @@ def _recheck(value: str) -> float:
     if not 1 <= seconds <= MAX_DELIVERY_RECHECK:
         raise ConfigError(f"WORKBENCH_DELIVERY_RECHECK_SECONDS must be between 1 and {MAX_DELIVERY_RECHECK:g}")
     return seconds
+
+
+SORTIE_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _peers(env: dict[str, str]) -> tuple[tuple[str, str, str], ...]:
+    """WORKBENCH_SORTIES: other Sorties, as ``name=url`` separated by commas,
+    such as ``taichi=http://127.0.0.1:7781``. Each one's token is in
+    WORKBENCH_SORTIE_TOKEN_<NAME>, or in the file WORKBENCH_SORTIE_TOKEN_<NAME>_FILE
+    names; <NAME> is the name in capitals, with _ for -."""
+    out: list[tuple[str, str, str]] = []
+    own = env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie"
+    for item in (env.get("WORKBENCH_SORTIES") or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, sep, url = item.partition("=")
+        name, url = name.strip(), url.strip().rstrip("/")
+        if not sep or not SORTIE_NAME.fullmatch(name) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"WORKBENCH_SORTIES: {item!r} is not name=http(s)://host:port, with a lower-case name")
+        if name == own or any(p[0] == name for p in out):
+            raise ConfigError(f"WORKBENCH_SORTIES: the Sortie name {name!r} is used twice")
+        var = "WORKBENCH_SORTIE_TOKEN_" + name.upper().replace("-", "_")
+        token = env.get(var, "").strip()
+        if not token and env.get(var + "_FILE", "").strip():
+            try:
+                token = Path(env[var + "_FILE"].strip()).expanduser().read_text().strip()
+            except OSError as exc:
+                raise ConfigError(f"{var}_FILE: {exc}") from exc
+        out.append((name, url, token))
+    return tuple(out)
+
+
+def _proxies(env: dict[str, str], peers: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """WORKBENCH_SORTIE_PROXY_<NAME>: the proxy through which the workbench
+    reaches the brokers of the runs that Sortie holds, which listen on its
+    host's loopback, such as ``socks5://127.0.0.1:7781``, a SOCKS forward in
+    the SSH connection that forwards the Sortie."""
+    out: list[tuple[str, str]] = []
+    for name, _, _ in peers:
+        var = "WORKBENCH_SORTIE_PROXY_" + name.upper().replace("-", "_")
+        url = env.get(var, "").strip()
+        if not url:
+            continue
+        if not url.startswith(("socks5://", "socks5h://", "http://")):
+            raise ConfigError(f"{var}: {url!r} is not socks5://host:port or http://host:port")
+        out.append((name, url))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -95,6 +144,12 @@ class Config:
     oidc_scopes: str = "openid profile email"
     oidc_planner_group: str = ""
     oidc_approver_group: str = ""
+    # The name of the Sortie at sortie_url, as the workbench shows its host,
+    # and the other Sorties whose workers it shows: (name, url, token).
+    sortie_name: str = "sortie"
+    peer_sorties: tuple[tuple[str, str, str], ...] = ()
+    # The proxy that reaches each other Sortie's brokers: (name, proxy url).
+    peer_proxies: tuple[tuple[str, str], ...] = ()
     # Local mode on a non-loopback address, which `workbench serve` refuses otherwise.
     allow_local_mode: bool = False
     # Where the people who use this workbench can get its source, as the
@@ -148,6 +203,9 @@ class Config:
             huly_project=huly_project,
             sortie_url=need("WORKBENCH_SORTIE_URL").rstrip("/"),
             sortie_token=env.get("WORKBENCH_SORTIE_TOKEN", ""),
+            sortie_name=env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie",
+            peer_sorties=(peers := _peers(env)),
+            peer_proxies=_proxies(env, peers),
             password_hash=password_hash,
             secret_key=need("WORKBENCH_SECRET_KEY"),
             broker_command=shlex.split(env.get("WORKBENCH_BROKER_COMMAND", "acp-broker")),

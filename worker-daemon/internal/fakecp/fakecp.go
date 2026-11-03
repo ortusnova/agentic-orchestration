@@ -149,6 +149,20 @@ func (f *Fake) Declaration(worker string) (protocol.Declaration, bool) {
 	return d, ok
 }
 
+// Beats returns the bodies of the attempt's accepted heartbeats, in order.
+func (f *Fake) Beats(job string, attempt int) []protocol.Beat {
+	var out []protocol.Beat
+	for _, e := range f.Events() {
+		if e.Kind != "heartbeat" || e.Job != job || e.Attempt != attempt || e.Status != http.StatusOK {
+			continue
+		}
+		var b protocol.Beat
+		_ = json.Unmarshal(e.Body, &b)
+		out = append(out, b)
+	}
+	return out
+}
+
 // Offer queues a job.
 func (f *Fake) Offer(j Job) {
 	f.mu.Lock()
@@ -313,7 +327,7 @@ func (f *Fake) workerAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[4] {
 	case "heartbeat":
-		f.heartbeat(w, id, job, attempt)
+		f.heartbeat(w, id, job, attempt, body)
 	case "report":
 		f.report(w, id, job, attempt, body)
 	default:
@@ -363,6 +377,13 @@ func (f *Fake) checkIn(w http.ResponseWriter, id string, body []byte) {
 		if n.v < 0 {
 			invalid = append(invalid, n.p)
 		}
+	}
+	// Used and unmanaged are optional, as Sortie ignores what it does not know.
+	if v, ok := raw["used"]; ok {
+		_ = json.Unmarshal(v, &d.Used)
+	}
+	if v, ok := raw["unmanaged"]; ok {
+		_ = json.Unmarshal(v, &d.Unmanaged)
 	}
 	if len(missing) > 0 || len(invalid) > 0 {
 		reply(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_checkin", "message": "bad declaration"},
@@ -447,7 +468,7 @@ func (f *Fake) live(id, job string, attempt int) *lease {
 	return l
 }
 
-func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int) {
+func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, body []byte) {
 	k := key(job, attempt)
 	f.mu.Lock()
 	if code, ok := f.answer[k]; ok {
@@ -471,7 +492,7 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int) {
 	exp := l.expires
 	f.mu.Unlock()
 	reply(w, http.StatusOK, protocol.Lease{Expires: exp.UTC()})
-	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200})
+	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200, Body: body})
 }
 
 func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body []byte) {

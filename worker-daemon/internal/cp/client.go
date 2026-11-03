@@ -175,9 +175,10 @@ func (c *Client) Poll(ctx context.Context) (*protocol.Offer, error) {
 	return nil, refusal("poll", status, b)
 }
 
-// Heartbeat renews the lease on an attempt.
-func (c *Client) Heartbeat(ctx context.Context, job string, attempt int) (protocol.Lease, error) {
-	status, b, err := c.do(ctx, "heartbeat", protocol.AttemptPath(job, attempt, "heartbeat"), nil)
+// Heartbeat renews the lease on an attempt and carries the step the job
+// reports.
+func (c *Client) Heartbeat(ctx context.Context, job string, attempt int, beat protocol.Beat) (protocol.Lease, error) {
+	status, b, err := c.do(ctx, "heartbeat", protocol.AttemptPath(job, attempt, "heartbeat"), beat)
 	if err != nil {
 		return protocol.Lease{}, err
 	}

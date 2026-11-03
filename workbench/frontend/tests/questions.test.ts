@@ -105,8 +105,8 @@ describe("Scenario: A question on the home page", () => {
     expect($$(`[data-question='${KEY}'] .statement p`)).toHaveLength(2);
     expect($(`[data-question='${KEY}'] time`)!.getAttribute("datetime")).toBe("2026-11-01T18:35:26.000Z");
     expect($(`[data-question='${KEY}'] textarea`)).not.toBeNull();
-    expect(text("[data-tile='needs']")).toContain("1 question to answer");
-    expect(text("[data-tile='needs']")).toContain("nearest: worker-daemon, which asks a question");
+    // The Needs a person section holds the count; the lanes above do not repeat it.
+    expect($$("[data-tile]")).toHaveLength(0);
   });
 
   it("appears within one refresh, and leaves as soon as Sortie no longer reports the park", async () => {

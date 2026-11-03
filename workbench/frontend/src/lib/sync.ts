@@ -15,6 +15,8 @@ export interface StoryActions {
   supersede(key: string): Promise<unknown>;
   /** Answer a parked story's question, through Sortie. */
   answer(key: string, text: string): Promise<unknown>;
+  /** Give a story its session budget holds more sessions, through the Sortie that holds it. */
+  sessions?(key: string, sessions: number): Promise<unknown>;
 }
 
 /** Sync and story actions of one project. */
@@ -23,7 +25,7 @@ export function httpSync(slug: string): SyncClient {
   return {
     retry: () => api.retrySync(), approve: (t) => api.approve(t),
     pullBack: (k) => api.pullBack(k), cancel: (k) => api.cancel(k), supersede: (k) => api.supersede(k),
-    answer: (k, text) => api.answer(k, text),
+    answer: (k, text) => api.answer(k, text), sessions: (k, n) => api.grantSessions(k, n),
   };
 }
 

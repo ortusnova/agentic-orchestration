@@ -73,7 +73,21 @@ func fakeAgent() int {
 		time.Sleep(time.Hour)
 		return 0
 	}
-	if d, err := time.ParseDuration(os.Getenv("AGENT_DELAY")); err == nil {
+	// AGENT_STEPS: steps the agent reports, one per AGENT_DELAY, as a
+	// vm chain writes its steps to its step file.
+	if steps := os.Getenv("AGENT_STEPS"); steps != "" {
+		d, _ := time.ParseDuration(os.Getenv("AGENT_DELAY"))
+		for s := range strings.SplitSeq(steps, ",") {
+			f, err := os.OpenFile(os.Getenv("SORTIE_STEP_FILE"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "step file:", err)
+				return 8
+			}
+			_, _ = fmt.Fprintln(f, s)
+			_ = f.Close()
+			time.Sleep(d)
+		}
+	} else if d, err := time.ParseDuration(os.Getenv("AGENT_DELAY")); err == nil {
 		time.Sleep(d)
 	}
 	if err := modelRequest(); err != nil {
