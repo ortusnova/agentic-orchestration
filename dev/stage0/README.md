@@ -323,7 +323,7 @@ as p1's Sortie. p1's Sortie lists `homelab` closed to dispatch; this one
 lists only `homelab`, with no default, so every other story stays p1's.
 
 ```sh
-# On p1, once: Huly on the homelab host's loopback, through a remote SSH forward.
+# On p1, once: Huly on the homelab host's loopback, and its Sortie on p1's.
 dev/stage0/huly-tunnel.sh taichi
 # On taichi, once homelab's `make dev-host` has run there:
 STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
@@ -341,13 +341,19 @@ dev/stage0/stage0.sh                          # later runs read it from stage0.e
 
 p1's workbench shows taichi's workers beside p1's, and sends the answers,
 session grants and session views of the stories taichi's Sortie holds to it
-(`agent-platform/run-supervision`): forward taichi's Sortie to p1's
-loopback (`ssh -N -L 127.0.0.1:7781:127.0.0.1:7680 taichi`, kept up by a
-unit as the Huly tunnel is), put taichi's control token in
-`$STAGE0_HOME/sortie-token-taichi` on p1 (mode 0600), and set
-`STAGE0_PEER_SORTIES=taichi=http://127.0.0.1:7781` (and `STAGE0_SORTIE_NAME=p1`
-if p1's host name is another) in p1's `stage0.env`; `run-workbench.sh` passes
-them to the workbench as `WORKBENCH_SORTIES`.
+(`agent-platform/run-supervision`). `huly-tunnel.sh taichi` sets this up in
+the same SSH connection as the Huly forward: a local forward puts taichi's
+Sortie on p1's loopback (`127.0.0.1:7681`, the next free port for another
+host), and a SOCKS forward (`127.0.0.1:7781`) reaches the brokers of
+taichi's agents, which listen on taichi's loopback. It writes
+`$STAGE0_HOME/tunnels/taichi.env` for the unit, copies taichi's control
+token to `$STAGE0_HOME/sorties/taichi.token` (mode 0600) and its address and
+broker proxy to `sorties/taichi.env`, and restarts the workbench;
+`run-workbench.sh` passes each `sorties/<name>` to the workbench as
+`WORKBENCH_SORTIES`, `WORKBENCH_SORTIE_TOKEN_<NAME>_FILE` and
+`WORKBENCH_SORTIE_PROXY_<NAME>`. Run it again after `stage0.sh` first runs
+on taichi, when taichi has its token. p1's Sortie is named after p1's host
+name; set `STAGE0_SORTIE_NAME` in `stage0.env` to name it otherwise.
 
 Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
 and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without
