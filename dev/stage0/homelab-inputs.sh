@@ -135,7 +135,8 @@ homelab_pack() {
   # homelab's guest-setup.sh gives its guest user these ids: smolvm's shared
   # folders let a guest write only as their host owner, this user.
   printf '%s:%s\n' "$(id -u)" "$(id -g)" > "$stage/homelab/guest-uid"
-  cp "$KIT/pack/install-harness.sh" "$KIT/pack/agent-acp" "$KIT/pack/claude-settings.json" \
+  cp "$KIT/pack/install-harness.sh" "$KIT/pack/install-opencode-plugins.sh" \
+     "$KIT/pack/agent-acp" "$KIT/pack/claude-settings.json" \
      "$KIT/pack/opencode.json" "$stage/harness/"
   hash=$({
     (cd "$stage" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)

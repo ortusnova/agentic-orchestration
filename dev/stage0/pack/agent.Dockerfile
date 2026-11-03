@@ -2,7 +2,7 @@ ARG BASE
 FROM ${BASE}
 # Claude Code behind ACP, agent-acp and both harnesses' policy files, for root
 # (install-harness.sh, shared with the homelab pack).
-COPY install-harness.sh agent-acp claude-settings.json opencode.json /opt/stage0-harness/
+COPY install-harness.sh install-opencode-plugins.sh agent-acp claude-settings.json opencode.json /opt/stage0-harness/
 RUN /opt/stage0-harness/install-harness.sh root /root
 # The linters `make lint` runs in Go repositories such as ortusnova/sortie.
 ARG GOLANGCI_LINT_VERSION=2.14.0
