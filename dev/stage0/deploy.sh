@@ -3,7 +3,11 @@
 # (ortus-stage0-deploy.timer), move the live kit ($STAGE0_HOME/kit, the
 # worktree stage0.sh runs the units from) to origin/main.
 #
-#   - A change to the workbench rebuilds it and restarts its unit.
+#   - A change to the workbench rebuilds it and restarts its unit, at once:
+#     restarting the workbench stops no agent, so it never waits for a
+#     drain. When the same merge also changes the rest of the kit, only
+#     workbench/ moves ahead while the rest waits (recorded in
+#     deploy-workbench.at), and the later full apply builds it again.
 #   - A change to the rest of the kit (dev/, acp-broker/, smol-builder/) runs
 #     stage0.sh again, which restarts Sortie too, so it waits until no agent
 #     runs; until then the live kit stays where it is.
@@ -38,6 +42,26 @@ say() { echo "deploy: $*" >&2; }
 # shellcheck source=drain.sh
 . "$(dirname "$0")/drain.sh"
 resume() { dispatch_resume || say "Sortie did not resume dispatch; trying again in a minute"; }
+
+# workbench_ahead: while the rest of the kit waits for a drain, move only
+# workbench/ to the merged commit, rebuild it and restart it, once per
+# commit. A failed build puts workbench/ back.
+workbench_ahead() {
+  [[ -n $workbench && ${STAGE0_PROFILE:-control} == control ]] || return 0
+  [[ $(cat "$STAGE0_HOME/deploy-workbench.at" 2>/dev/null) == "$new" ]] && return 0
+  say "${new:0:8} changes the workbench: rebuilding it now; the rest of the kit waits"
+  git -C "$LIVE" checkout -q "$new" -- workbench
+  if (cd "$LIVE/workbench" && uv sync -q) && (cd "$LIVE/workbench/frontend" \
+    && { [[ -d node_modules ]] && ! grep -q '^workbench/frontend/package-lock.json$' <<< "$changed" || npm ci --silent; } \
+    && npx vite build --logLevel warn); then
+    systemctl --user restart ortus-stage0-workbench.service
+    echo "$new" > "$STAGE0_HOME/deploy-workbench.at"
+  else
+    say "the workbench build failed at ${new:0:8}; workbench/ back on ${old:0:8}"
+    git -C "$LIVE" checkout -q "$old" -- workbench
+    echo "$new" > "$STAGE0_HOME/deploy-workbench.at"
+  fi
+}
 
 exec 9> "$STAGE0_HOME/stage0.lock"
 flock -n 9 || { say "a stage0.sh runs; trying again in a minute"; exit 0; }
@@ -79,6 +103,7 @@ if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
   dispatch_pause "deploy of ${why[*]}" || draining="Sortie did not pause dispatch"
   busy=$(sortie_running) || busy=0
   if (( busy > 0 )); then
+    workbench_ahead
     [[ -n $kit ]] && say "${new:0:8} changes the kit; waiting until no agent runs ($busy now, $draining)"
     [[ ${#update_sortie[@]} -gt 0 ]] && say "Sortie ${sortie_new:0:8} merged; waiting until no agent runs ($busy now, $draining)"
     exit 0
