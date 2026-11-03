@@ -177,3 +177,9 @@ def test_an_unreachable_sortie_reads_stuck_and_an_older_state_still_gives_slots(
 def test_issues_of_other_projects_are_not_shown():
     other = taichi_state(running=[{"issue_identifier": "XYZ-1", "started_at": iso(NOW)}], pulls=[])
     assert worker(build_fleet([("taichi", other, None)], NODES, now=NOW), "taichi")["jobs"] == []
+
+
+def test_a_remote_sortie_with_no_worker_checked_in_still_shows_its_runs():
+    state = p1_state(running=[{"issue_identifier": "ONS-34", "started_at": iso(NOW - 10)}], workers={"workers": [], "queue": [], "leases": []})
+    p1 = worker(build_fleet([("p1", state, None)], NODES, now=NOW), "p1")
+    assert p1["jobs"][0]["identifier"] == "ONS-34"

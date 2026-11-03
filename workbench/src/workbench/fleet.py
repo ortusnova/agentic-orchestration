@@ -179,7 +179,8 @@ def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
             out.append(_Worker(w.get("id") or "worker", name, slots=d.get("run_slots"), used=_size(d.get("used")),
                                free=_size(d.get("free")), last_seen=ts(w.get("last_check_in")),
                                unmanaged=d.get("unmanaged") or w.get("unmanaged"), capabilities=caps, remote=True))
-        return out
+        if out:
+            return out
     host = state.get("host") if isinstance(state.get("host"), dict) else {}
     cap = ((state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
     return [_Worker(host.get("name") or name, name, slots=cap if isinstance(cap, int) and cap > 0 else None,
