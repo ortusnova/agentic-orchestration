@@ -7,6 +7,8 @@
 #                                              (default: HOST without its user@)
 #   dev/stage0/worker-host.sh remove NAME      close it and forget the worker
 #   dev/stage0/worker-host.sh list             each worker, its host and its edge port
+#   dev/stage0/worker-host.sh carry HOST       copy every merge record of HOST's Sortie
+#                                              into p1's, before HOST's Sortie stops
 #
 # HOST is an SSH destination that works without a prompt
 # (`ssh -o BatchMode=yes HOST true`). Run stage0.sh first: it sets up the
@@ -18,8 +20,10 @@ KIT=$(cd "$(dirname "$0")" && pwd)
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 TEMPLATE=ortus-stage0-worker-tunnel@.service
+# A worker host's STAGE0_HOME, as its own shell sees it (the default there).
+WORKER_HOST_HOME=${STAGE0_WORKER_HOST_HOME:-.local/share/ortus-nova/stage0}
 die() { printf 'worker-host.sh: %s\n' "$*" >&2; exit 1; }
-usage() { die "usage: $0 add HOST [NAME] | remove NAME | list"; }
+usage() { die "usage: $0 add HOST [NAME] | remove NAME | list | carry HOST"; }
 
 [[ -s $STAGE0_HOME/stage0.env ]] || die "$STAGE0_HOME/stage0.env is missing: run dev/stage0/stage0.sh first"
 # shellcheck source=/dev/null
@@ -48,14 +52,8 @@ case $cmd in
     name=${2:-${host#*@}}
     [[ $host =~ ^[A-Za-z0-9._@-]+$ ]] || die "HOST must be a plain SSH destination: $host"
     [[ $name =~ $EDGE_WORKER_NAME ]] || die "NAME must be letters, digits, '.', '_' or '-': $name"
-    [[ $name == p1 ]] && die "p1 is the control plane, not a worker host"
-    port=''
-    if [[ -e $STAGE0_WORKERS/$name.env ]]; then
-      port=$(worker_setting "$name" EDGE_PORT)
-    else
-      port=$STAGE0_EDGE_FIRST_PORT
-      while grep -qx "EDGE_PORT=$port" "$STAGE0_WORKERS"/*.env 2>/dev/null; do port=$((port + 1)); done
-    fi
+    [[ $name == p1 ]] && die "p1 is the control plane: stage0.sh runs its worker, with no tunnel"
+    port=$(edge_port "$name")
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" true || die "ssh $host does not work without a prompt"
     # The egress CA's certificate, so the worker's machines trust nono's
     # interception. A certificate, not a credential: its key stays on p1.
@@ -81,15 +79,37 @@ case $cmd in
     [[ $# == 1 ]] || usage
     name=$1
     [[ $name =~ $EDGE_WORKER_NAME && -e $STAGE0_WORKERS/$name.env ]] || die "no worker host $name"
+    worker_is_local "$name" && die "$name is p1's own worker, which stage0.sh runs"
     systemctl --user disable -q --now "ortus-stage0-worker-tunnel@$name.service" 2>/dev/null || true
     rm -f "$STAGE0_WORKERS/$name.env"
     apply
     echo "removed worker host $name"
     ;;
+  carry)
+    # Before a worker host's Sortie stops (its move from the homelab
+    # profile), p1's Sortie must hold every merge record it holds, or a
+    # story blocked by a story that merged there waits on p1 for ever
+    # (awaiting_merge_record). Run it again after a merge there; the host's
+    # stage0.sh refuses to stop its Sortie until no record is left behind.
+    [[ $# == 1 ]] || usage
+    host=$1
+    [[ $host =~ ^[A-Za-z0-9._@-]+$ ]] || die "HOST must be a plain SSH destination: $host"
+    db=$STAGE0_HOME/sortie/.sortie.db
+    [[ -s $db ]] || die "p1's Sortie has no database at $db"
+    rows=$(ssh -o BatchMode=yes "$host" python3 - dump "$WORKER_HOST_HOME/sortie/.sortie.db" < "$KIT/merges.py") \
+      || die "could not read the merge records of $host's Sortie"
+    carried=$(python3 "$KIT/merges.py" load "$db" <<< "$rows") || die "could not add $host's merge records to p1's Sortie"
+    ssh -o BatchMode=yes "$host" "mkdir -p $WORKER_HOST_HOME && cat > $WORKER_HOST_HOME/merges-carried.json" <<< "$carried" \
+      || die "could not tell $host which merge records p1's Sortie holds"
+    n=$(python3 -c 'import json, sys; print(len(json.load(sys.stdin)))' <<< "$carried")
+    echo "p1's Sortie holds the $n merge record(s) of $host's Sortie; on $host, STAGE0_PROFILE=worker dev/stage0/stage0.sh may stop it now"
+    ;;
   list)
     [[ $# == 0 ]] || usage
     for name in $(worker_names); do
-      printf '%s\t%s\tedge port %s\n' "$name" "$(worker_setting "$name" WORKER_HOST)" "$(worker_setting "$name" EDGE_PORT)"
+      host=$(worker_setting "$name" WORKER_HOST)
+      worker_is_local "$name" && host=local
+      printf '%s\t%s\tedge port %s\n' "$name" "$host" "$(worker_setting "$name" EDGE_PORT)"
     done
     ;;
   *) usage ;;

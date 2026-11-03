@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Checks the operator's channel (notify-channel.sh, spec store
-# agent-platform/run-supervision): the entry each kind renders into both
-# workflows, the credential file only the operator writes, what
-# run-sortie.sh and run-workbench.sh hand on, and that huly-tunnel.sh gives
-# the workbench the homelab host's Sortie. ssh, systemctl, the workbench and
-# Sortie are stubs; test-review-gate.sh loads the same entries with Sortie's
+# agent-platform/run-supervision): the entry each kind renders into the
+# workflow, the credential file only the operator writes, what
+# run-sortie.sh and run-workbench.sh hand on, and that with no channel, the
+# default, both start. The workbench and Sortie are stubs; test-review-gate.sh loads the same entries with Sortie's
 # own loader and delivers a question through them.
 # shellcheck disable=SC2015,SC2016 # each check is "test && ok || fail"; the stubs' $ expand when they run
 set -euo pipefail
@@ -48,7 +47,7 @@ notify_credential "$cred" 2>/dev/null && fail "a group-writable credential was a
 chmod 600 "$cred"
 notify_credential "$cred" && ok "a 0600 credential of the operator's is taken" || fail "a 0600 credential was refused"
 
-# Both workflows, rendered as stage0.sh renders them, carry the entry.
+# The workflow, rendered as stage0.sh renders it, carries the entry.
 render() { # render WORKFLOW OUT ENTRY
   local vars
   # shellcheck disable=SC2016 # literal ${VAR} patterns, not expansions
@@ -57,16 +56,15 @@ render() { # render WORKFLOW OUT ENTRY
   env $(for v in $vars; do printf '%s=x ' "$v"; done) STAGE0_KIT="$KIT" STAGE0_NOTIFY_ENTRY="$3" \
     python3 "$ROOT/dev/forge/render.py" "$1" "$2"
 }
-for wf in WORKFLOW.md WORKFLOW-homelab.md; do
-  render "$KIT/$wf" "$tmp/$wf" "$(notify_entry slack)"
-  section=$(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")
-  if [[ $section == *"kind: tracker_comment"* && $section == *"$(notify_entry slack)"* ]]; then
-    ok "$wf sends each question to the channel"
-  else fail "$wf notifications: $section"; fi
-  render "$KIT/$wf" "$tmp/$wf" ""
-  [[ $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf" | grep -c 'kind:') == 1 ]] && ok "$wf with no channel keeps the comments only" \
-    || fail "$wf with no channel: $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")"
-done
+wf=WORKFLOW.md
+render "$KIT/$wf" "$tmp/$wf" "$(notify_entry slack)"
+section=$(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")
+if [[ $section == *"kind: tracker_comment"* && $section == *"$(notify_entry slack)"* ]]; then
+  ok "$wf sends each question to the channel"
+else fail "$wf notifications: $section"; fi
+render "$KIT/$wf" "$tmp/$wf" ""
+[[ $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf" | grep -c 'kind:') == 1 ]] && ok "$wf with no channel keeps the comments only" \
+  || fail "$wf with no channel: $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")"
 
 # run-sortie.sh and run-workbench.sh: a stub kit, Sortie and workbench that
 # print what they were handed. Both scripts put $STAGE0_HOME/bin first on PATH.
@@ -116,37 +114,5 @@ out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
   || fail "run-workbench.sh with no channel: $out"
 echo STAGE0_NOTIFY_KIND=slack >> "$home/stage0.env"
 mv "$home/notify-credential.off" "$home/notify-credential"
-
-# huly-tunnel.sh: the tunnel carries the host's Sortie to p1's loopback, and
-# the workbench gets its address and token.
-cat > "$tmp/bin/ssh" <<'EOF'
-#!/bin/sh
-case "$*" in
-  *sortie-token*) echo "taichi-control-token" ;;
-  *STAGE0_SORTIE_PORT*) echo 7680 ;;
-esac
-echo "ssh $*" >> "$CALLS"
-EOF
-printf '#!/bin/sh\necho "systemctl $*" >> "$CALLS"\n' > "$tmp/bin/systemctl"
-chmod +x "$tmp/bin/ssh" "$tmp/bin/systemctl"
-export CALLS=$tmp/calls
-rm -rf "$home/sorties"
-out=$(run "$KIT/huly-tunnel.sh" brian@taichi.lan)
-[[ $(cat "$home/sorties/taichi.token" 2>/dev/null) == taichi-control-token && $(stat -c %a "$home/sorties/taichi.token") == 600 ]] \
-  && ok "the workbench gets taichi's Sortie token, mode 0600" || fail "huly-tunnel.sh token: $out"
-grep -qx SORTIE_URL=http://127.0.0.1:7681 "$home/sorties/taichi.env" 2>/dev/null && ok "taichi's Sortie is at 127.0.0.1:7681 on p1" || fail "huly-tunnel.sh env: $out"
-grep -qx 'SORTIE_FORWARD=127.0.0.1:7681:127.0.0.1:7680' "$home/tunnels/brian@taichi.lan.env" && ok "the tunnel forwards p1's 7681 to taichi's Sortie" \
-  || fail "tunnel env: $(cat "$home/tunnels/brian@taichi.lan.env" 2>/dev/null)"
-unit=$tmp/.config/systemd/user/ortus-stage0-huly-tunnel@.service
-grep -q -- "-R 127.0.0.1:8087:127.0.0.1:8087 -L \${SORTIE_FORWARD} -D \${SORTIE_SOCKS} %i" "$unit" && grep -q "EnvironmentFile=$home/tunnels/%i.env" "$unit" \
-  && ok "the unit opens both forwards" || fail "unit: $(cat "$unit" 2>/dev/null)"
-grep -q 'try-restart ortus-stage0-workbench.service' "$CALLS" && ok "the workbench restarts onto taichi's Sortie" || fail "calls: $(cat "$CALLS")"
-run "$KIT/huly-tunnel.sh" mini > /dev/null
-grep -qx 'SORTIE_FORWARD=127.0.0.1:7682:127.0.0.1:7680' "$home/tunnels/mini.env" && ok "a second host gets the next port" || fail "second host: $(cat "$home/tunnels/mini.env")"
-run "$KIT/huly-tunnel.sh" brian@taichi.lan > /dev/null
-grep -qx 'SORTIE_LOCAL_PORT=7681' "$home/tunnels/brian@taichi.lan.env" && ok "the same host keeps its port" || fail "port moved"
-run "$KIT/huly-tunnel.sh" --remove brian@taichi.lan > /dev/null
-[[ ! -e $home/sorties/taichi.env && ! -e $home/sorties/taichi.token && ! -e "$home/tunnels/brian@taichi.lan.env" ]] \
-  && ok "removing the tunnel removes taichi's Sortie from the workbench" || fail "remove left $(ls "$home/sorties" "$home/tunnels")"
 
 exit $failed

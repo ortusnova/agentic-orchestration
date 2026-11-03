@@ -102,7 +102,7 @@ func (c *fakeChannel) texts() []string {
 	return out
 }
 
-// Both workflows send each question for a person to the operator's channel:
+// The workflow sends each question for a person to the operator's channel:
 // every kind loads, with the credential from Sortie's environment, and lists
 // the events of a person's question.
 func TestStage0_EveryKindOfChannelLoads(t *testing.T) {
@@ -132,7 +132,7 @@ func TestStage0_EveryKindOfChannelLoads(t *testing.T) {
 	}
 }
 
-// Scenario: A question on taichi's Sortie (and p1's). A story that stops
+// Scenario: A question, wherever its story runs. A story that stops
 // blocked with a question, the agent's park in its build or the review's
 // question, reaches the operator's channel through Sortie's notifications,
 // with the question and the story.

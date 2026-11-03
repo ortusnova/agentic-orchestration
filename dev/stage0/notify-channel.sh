@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The operator's channel (spec store agent-platform/run-supervision: a
-# person is alerted, wherever the question is held). Both workflows send each
+# person is alerted, wherever the question is held). The workflow sends each
 # question for a person to it through Sortie's notifications; the workbench
 # pushes the same questions there with a link to where each is answered, and
 # again every 4 hours while one stays open. The operator chooses it in
@@ -12,7 +12,8 @@
 #
 # and writes its credential, the webhook URL or the Telegram bot's token, into
 # $STAGE0_HOME/notify-credential, mode 0600. Nothing in the kit writes that
-# file. Sourced by stage0.sh, run-sortie.sh and run-workbench.sh.
+# file. Sourced by stage0.sh and run-sortie.sh; run-workbench.sh hands the
+# file's path to the workbench. Optional: with no kind, nothing needs it.
 
 # What Sortie sends there: a run that stopped for a person (an agent's park,
 # a review that cannot settle a criterion), a question its broker escalates,

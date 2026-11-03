@@ -25,7 +25,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
-var stage0Workflows = []string{"WORKFLOW.md", "WORKFLOW-homelab.md"}
+// One Sortie, one workflow (agent-platform-workers D18): the homelab profile is retired.
+var stage0Workflows = []string{"WORKFLOW.md"}
 
 // reviewHuman is the label plan sync keeps on a story with review: human.
 const reviewHuman = "sortie-review:human"
@@ -38,6 +39,8 @@ var stage0Values = map[string]string{
 	"STAGE0_HULY_URL":       "http://127.0.0.1:8087",
 	// No operator channel; stage0_notify_test.go renders each kind.
 	"STAGE0_NOTIFY_ENTRY": "",
+	// The remote kind's flow URLs need a real port.
+	"STAGE0_EDGE_WORKER_PORT": "7700",
 
 	"STAGE0_AO_REPO_PROJECT":      "ortusnova/agentic-orchestration",
 	"STAGE0_HOMELAB_REPO_PROJECT": "ortusnova/homelab",
