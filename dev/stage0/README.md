@@ -26,6 +26,10 @@ dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: m
 dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/test-notify-channel.sh     # check the operator's channel, with stubs
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
+dev/stage0/test-supervisor.sh         # check the supervisor's token, prompt, pause and status, with stubs
+dev/stage0/supervisor.sh status       # the supervisor's status, budget, open questions and recent actions with their evidence
+dev/stage0/supervisor.sh pause [WHY]  # pause the supervisor, until resume, across restarts
+dev/stage0/supervisor.sh resume       # resume it; a session starts at once for what waited
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
 make -C dev/stage0 test               # the edge's and stage0-live-proofs' tests and every test-*.sh but the live one
@@ -47,6 +51,7 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Live proofs | unit `ortus-stage0-live-proofs.timer` every minute (`run-live-proofs.sh`, `$STAGE0_HOME/bin/stage0-live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-stage0-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
+| Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
 | Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
@@ -241,6 +246,57 @@ A preview runs the branch's code on this host with the kit's Sortie and
 GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
 tracker, and the branch has passed its criteria review and CI first.
 
+## The supervisor
+
+Sortie runs one supervisor agent session at a time for what its rules
+cannot settle (spec store `agent-platform/run-supervision`, design D9): a
+parked story whose pull request already merged, a question whose premise
+the forge contradicts, a pull request nobody moves, a failure in no fault
+class. The workflow's `supervisor` section starts it on a park, on a
+stopped failure in no class, on a pull request reaction with no progress
+for an hour, on a free slot with nothing to dispatch while stories are
+held, and on a sweep every 30 minutes. It runs on p1, in a slot of its own,
+never one of a story's, with the host's opencode (the stories' model and
+the Anthropic sign-in plugin, from `supervisor-opencode.json`) and `gh`, within 96
+sessions and 3,000,000 tokens a UTC day.
+
+- **Its prompt** is `supervisor.md`. `stage0.sh` installs it beside the
+  rendered workflow, and Sortie reads it at each session's start, so a
+  merged change to it reaches the next session once the deploy has run
+  `stage0.sh`. It states the rules: check the forge before believing a
+  claim; merge only what passed its review and CI and whose live criteria
+  are proven; never rewrite a pushed commit or edit a started story; never
+  merge a UI story before the operator approves it; ask a person for
+  credentials, keys, approvals and decisions, one question per decision;
+  record evidence with every action.
+- **Its token** is `supervisor-token`, which `stage0.sh` mints once.
+  Sortie accepts it only on the supervisor's routes (answer, release,
+  grant sessions, record a merge, start a fix run, draft, merge, file an
+  issue, request a live proof, hold, ask a person); every other control
+  route answers it `403`, and a request without `evidence` is refused.
+- **What it did.** `dev/stage0/supervisor.sh status` prints its status,
+  its budget, its running or last session, the questions it raised that
+  are still open, and its 50 newest actions, each with its result, pull
+  request, merge commit and evidence. They come from Sortie's state
+  (`curl -s http://127.0.0.1:7680/api/v1/state`: `supervisor`,
+  `supervisor_actions`, and `platform_faults` of class
+  `supervisor_question`). Each session's start and end, with its trigger,
+  outcome and tokens, is in `journalctl --user -u ortus-stage0-sortie`
+  (`supervisor session started`, `supervisor session ended`).
+- **Its questions.** For a credential, a key, an approval, a decision, or
+  an action it cannot check, it raises a question naming the action, where
+  to take it, the stories it holds and what it checked. The stories stay
+  out of dispatch until you take the action and mark it done:
+  `POST /api/v1/platform-faults/<id>/action-done` with the control token,
+  after which Sortie checks it again and releases them.
+- **Pause it.** `dev/stage0/supervisor.sh pause [why]` stops its running
+  session and starts no new one; the triggers wait. `dev/stage0/supervisor.sh
+  resume` starts a session at once for what waited. Sortie forgets a pause
+  when it restarts, as on each deploy, so the kit records yours in
+  `$STAGE0_HOME/supervisor.paused` and the Sortie unit pauses it again after
+  each start, until you resume it. Pausing dispatch does not pause the
+  supervisor, and pausing the supervisor does not pause dispatch.
+
 ## Live proofs
 
 Some acceptance criteria need a live run that the story's own machine
@@ -361,6 +417,7 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
 | The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
+| The supervisor's token | `supervisor-token` in the stage-0 home, mode 0600, minted by `stage0.sh` (`supervisor.sh`); Sortie accepts it only on the supervisor's routes and hands it to the supervisor session only |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no

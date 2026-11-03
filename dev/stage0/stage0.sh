@@ -34,7 +34,7 @@
 # Needs (control): smolvm 1.32.4 or later, podman, Go, uv, npm, the openspec CLI, gh signed in,
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
-# planning sessions.
+# planning sessions and the supervisor.
 # Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's tunnel; for
 # homelab jobs, python3 and homelab's dev host (`make dev-host` in homelab).
 set -euo pipefail
@@ -200,7 +200,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH ;; esac
   needed=(smolvm go git curl sha256sum)
 else
-  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh)
+  # opencode: the planning sessions and the supervisor run the host's.
+  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh opencode)
 fi
 for cmd in "${needed[@]}"; do
   command -v "$cmd" >/dev/null || die "$cmd is not on PATH"
@@ -363,6 +364,11 @@ print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-
 fi
 secret "$STAGE0_HOME/sortie-token"
 secret "$STAGE0_HOME/viewer-token"
+# The supervisor's token and prompt (supervisor.sh), which the workflow's
+# supervisor section reads.
+# shellcheck source=supervisor.sh
+. "$KIT/supervisor.sh"
+supervisor_install "$STAGE0_HOME" "$KIT" || die "could not install the supervisor"
 # The edge reaches nono with this; nono intercepts TLS for the credential
 # hosts with the egress CA, whose certificate each worker gets (worker-host.sh,
 # worker-config.sh) and whose key never leaves this host.

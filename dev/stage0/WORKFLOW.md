@@ -123,6 +123,29 @@ ${STAGE0_NOTIFY_ENTRY}
 server:
   port: ${STAGE0_SORTIE_PORT}
   control_token: $STAGE0_SORTIE_TOKEN
+  # The supervisor's token (supervisor.sh): Sortie accepts it only on the
+  # supervisor's routes, and records each request with its evidence.
+  supervisor_token: $STAGE0_SUPERVISOR_TOKEN
+
+# The supervisor (agent-platform/run-supervision, design D9): one agent
+# session at a time, for what the rules above cannot settle. Sortie starts
+# it on a park, on a stopped failure in no fault class, on a pull request
+# reaction with no progress for an hour, on a free slot with nothing to
+# dispatch while stories are held, and on a sweep every 30 minutes. It runs
+# on p1, in a slot of its own beside the stories' (never one of
+# max_concurrent_agents), with the host's opencode and the kit's settings
+# for it, model included (run-sortie.sh, supervisor-opencode.json: Sortie
+# warns of an opencode block here as an unknown key, since no story runs
+# that kind), the prompt the kit installs beside this file (supervisor.md),
+# and its own
+# daily budget: the sweeps take 48 sessions a day, the events the rest. The
+# operator pauses it with POST /api/v1/supervisor/pause (README.md).
+supervisor:
+  agent: opencode
+  prompt: supervisor.md
+  sweep_interval_ms: 1800000
+  max_sessions_per_day: 96
+  max_tokens_per_day: 3000000
 
 polling:
   interval_ms: 15000

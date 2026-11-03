@@ -88,6 +88,12 @@ func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The supervisor's prompt, beside the workflow, as stage0.sh installs it.
+	if prompt, err := os.ReadFile(filepath.Join(kit, "supervisor.md")); err == nil {
+		if err := os.WriteFile(filepath.Join(dir, "supervisor.md"), prompt, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	mgr, err := workflow.NewManager(path, discardLogger())
 	if err != nil {
 		t.Fatalf("Sortie refused %s: %v", name, err)
