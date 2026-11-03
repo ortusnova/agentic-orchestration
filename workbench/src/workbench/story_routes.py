@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .auth import APPROVER, Identity
+from .faults import fault_of
 from .plan_overlay import needs_spec, tracker_by_key
 from .projects import ProjectManager, ProjectRuntime
 from .sortie import SortieError
@@ -29,6 +30,10 @@ class StoryBody(BaseModel):
 class AnswerBody(BaseModel):
     key: str
     text: str
+
+
+class FaultBody(BaseModel):
+    id: str
 
 
 class SessionsBody(BaseModel):
@@ -201,6 +206,42 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         # The park is released: the question leaves the list now, not at the next poll.
         await rt.hub.poll_once()
         return {"answered": body.key, "identifier": ident, "by": who.public(), "node": node(rt, body.key)}
+
+    @router.post("/faults/done")
+    async def fault_done(slug: str, body: FaultBody, who: Identity = Depends(approver)) -> dict:
+        """Say that the person action of a platform fault is done: the Sortie
+        that holds the fault checks it again at once, and releases the
+        stories it holds when the check passes."""
+        rt = projects.get(slug)
+        fault = next((f for f in rt.hub.faults if f["id"] == body.id), None)
+        sortie = rt.hub.sortie_named(fault["sortie"]) if fault else None
+        if fault is None or sortie is None:
+            raise HTTPException(status_code=404, detail={"code": "platform_fault_not_found",
+                                                         "message": f"no open platform fault {body.id} holds this project's stories"})
+        writable(rt)
+        author = who.name or who.email or who.key
+        try:
+            result = await sortie.platform_fault_done(fault["id"], author)
+        except SortieError as exc:
+            if exc.status == 404:
+                await rt.hub.poll_once()
+                raise HTTPException(status_code=404, detail={"code": exc.code or "platform_fault_not_found",
+                                                             "message": "the fault is no longer open: Sortie cleared it"}) from exc
+            raise sortie_failure(exc) from exc
+        resolved = bool(result.get("resolved"))
+        if rt.registry is not None:
+            for ident in [s["identifier"] for s in fault["stories"] if s["key"]]:
+                await asyncio.to_thread(rt.registry.record_command, rt.project.id, ident, None, "fault_done",
+                                        fault["action"], who.key, who.name)
+        log.info("project %s: %s marked platform fault %s done on %s; resolved: %s", slug, who.key, fault["id"],
+                 sortie.name, resolved)
+        # A passing check released the stories: the fault leaves the list now.
+        await rt.hub.poll_once()
+        after = fault_of(sortie.name, result.get("platform_fault") or {})
+        return {"done": fault["id"], "resolved": resolved, "sortie": sortie.name, "by": who.public(),
+                "released": fault["keys"] if resolved else [],
+                "last_check_error": (after or {}).get("last_check_error"),
+                "fault": next((f for f in rt.hub.faults if f["id"] == fault["id"]), None)}
 
     @router.post("/stories/sessions")
     async def sessions(slug: str, body: SessionsBody, who: Identity = Depends(approver)) -> dict:

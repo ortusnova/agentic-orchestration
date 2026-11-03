@@ -109,6 +109,14 @@ class SortieClient:
         return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/sessions",
                                    json={"add": sessions, "by": author, "reason": reason})
 
+    async def platform_fault_done(self, fault_id: str, author: str) -> dict[str, Any]:
+        """Mark the person action of an open platform fault done: Sortie
+        checks the fault again at once and answers after the check, with
+        ``resolved`` and the fault. Sortie answers 404
+        ``platform_fault_not_found`` when no open fault has the id."""
+        return await self._request("POST", f"/api/v1/platform-faults/{quote(fault_id, safe='')}/action-done",
+                                   json={"by": author}, timeout=120)
+
     async def run_events(self, dispatch_id: str) -> dict[str, Any]:
         """The agent events Sortie kept of one run, oldest first."""
         return await self._request("GET", f"/api/v1/runs/{quote(dispatch_id, safe='')}/events")
@@ -168,6 +176,9 @@ class ProjectSortie:
 
     async def grant_sessions(self, identifier: str, sessions: int, author: str) -> dict[str, Any]:
         return await self.client.grant_sessions(identifier, sessions, author)
+
+    async def platform_fault_done(self, fault_id: str, author: str) -> dict[str, Any]:
+        return await self.client.platform_fault_done(fault_id, author)
 
     async def run_events(self, dispatch_id: str) -> dict[str, Any]:
         return await self.client.run_events(dispatch_id)
