@@ -95,6 +95,17 @@ def test_a_run_more_than_the_slots_hold_at_once_is_counted_not_drawn():
     assert sum(len(lane["past"]) for lane in p1["lanes"]) == 3 and p1["past_hidden"] == 1
 
 
+def test_a_past_run_of_a_job_only_one_worker_takes_ran_there(tmp_path):
+    w = RunWorkers(tmp_path / "w.json")
+    w.observe("p1", {"retrying": [{"issue_identifier": "ONS-93", "issue_labels": HOMELAB}],
+                     "waits": [slot_wait("ONS-93", NOW - 20, worker="taichi")]})
+    again = RunWorkers(tmp_path / "w.json")
+    assert again.worker_of("p1", run("ONS-93", NOW - 900, NOW - 100)) == "taichi"
+    # Several workers can take homelab's jobs now: Sortie names none.
+    again.observe("p1", {"waits": [slot_wait("ONS-93", NOW - 20)]})
+    assert again.worker_of("p1", run("ONS-93", NOW - 900, NOW - 100)) is None
+
+
 def test_the_worker_of_a_run_survives_a_restart(tmp_path):
     path = tmp_path / "run-workers" / "p.json"
     RunWorkers(path).observe("p1", {"running": [{"issue_identifier": "ONS-90", "dispatch_id": "d-ONS-90", "worker": "taichi"},
@@ -103,7 +114,7 @@ def test_the_worker_of_a_run_survives_a_restart(tmp_path):
     again = RunWorkers(path)
     assert again.worker_of("p1", {"dispatch_id": "d-ONS-90"}) == "taichi"
     assert again.worker_of("p1", {"dispatch_id": "d-ONS-91"}) is None
-    assert list(json.loads(path.read_text())) == ["p1/d-ONS-90"]
+    assert list(json.loads(path.read_text())["runs"]) == ["p1/d-ONS-90"]
 
 
 def forecast(runs: list[dict], waits: list[dict]) -> dict:
@@ -210,3 +221,44 @@ def test_the_home_lanes_show_the_past_and_the_forecast_from_the_fake_sortie(stor
         assert [x["identifier"] for x in p1["lanes"][0]["past"]] == ["T-3"]
         assert [x["identifier"] for x in p1["lanes"][0]["next"]] == ["T-2"]
         assert p1["lanes"][0]["next"][0]["starts_at"] == p1["lanes"][0]["job"]["ends_at"]
+
+
+HOMELAB = ["sortie-repository:homelab"]
+
+
+def test_a_retry_is_projected_once_it_comes_due_on_the_worker_its_repository_needs():
+    h = history_with([run(f"ONS-9{i}", NOW - 90000 - 1000, NOW - 90000) for i in range(3)], [])
+    # Sortie named taichi as the one worker for a homelab job, ONS-84; a retry names none.
+    seen = state(RUNS, [slot_wait("ONS-84", NOW - 20, worker="taichi")])
+    seen["retrying"] = [{"issue_identifier": "ONS-84", "issue_labels": HOMELAB, "attempt": 1, "due_at": iso(NOW - 30)}]
+    h.workers.observe("p1", seen)
+    s = state(RUNS)
+    s["retrying"] = [{"issue_identifier": "ONS-82", "issue_labels": HOMELAB, "attempt": 2, "due_at": iso(NOW + 600)},
+                     {"issue_identifier": "ONS-80", "attempt": 1, "due_at": iso(NOW + 60)}]
+    h.workers.observe("p1", s)
+    fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=h)
+    p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
+    by = {x["identifier"]: (w["name"], x) for w in (p1, t) for lane in w["lanes"] for x in lane["next"]}
+    assert by["ONS-80"][0] == "p1" and by["ONS-80"][1]["starts_at"] == NOW + 60
+    assert by["ONS-82"][0] == "taichi" and by["ONS-82"][1]["starts_at"] == NOW + 600
+
+
+def test_while_dispatch_is_paused_for_a_deploy_the_queue_resumes_after_the_runs_end():
+    s = state(RUNS, [slot_wait("ONS-80", NOW - 40)])
+    s["dispatch_paused"] = {"since": iso(NOW - 60), "by": "operator", "reason": "deploy"}
+    s["waits"].append({"kind": "drain", "worker": "p1", "reason": "dispatch is paused by operator", "since": iso(NOW - 60)})
+    fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=history_with([], []))
+    x = next(x for w in fleet["workers"] for lane in w["lanes"] for x in lane["next"])
+    # The last run, ONS-48 on taichi, ends at NOW+1200: the deploy applies then.
+    assert x["identifier"] == "ONS-80" and x["starts_at"] == NOW + 1200
+    assert x["basis"].endswith("after the deploy, once the runs here end")
+    assert fleet["waiting"] == []
+
+
+def test_a_retry_that_needs_a_capability_goes_only_where_a_worker_declares_it():
+    s = state(RUNS)
+    s["retrying"] = [{"issue_identifier": "ONS-84", "attempt": 1, "due_at": iso(NOW - 5), "worker_wait": {"capabilities": ["nested"]}},
+                     {"issue_identifier": "ONS-80", "attempt": 1, "due_at": iso(NOW - 5), "worker_wait": {"capabilities": ["gpu"]}}]
+    fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=history_with([], []))
+    assert lane_idents(worker(fleet, "taichi"), "next") == [[], ["ONS-84"]]
+    assert [(x["identifier"], x["kind"], x["reason"]) for x in fleet["waiting"]] == [("ONS-80", "capability", "no worker has gpu")]

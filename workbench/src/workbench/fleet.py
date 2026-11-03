@@ -330,8 +330,11 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                     release: str | None, since: float | None, title: str | None = None) -> None:
             if not ident or ident in queue:
                 return
+            if eligible is None and kind == "slot" and history is not None:
+                # A retry names no worker; its repository's jobs may need one.
+                eligible = history.workers.eligible(name, ident)
             queue[ident] = {**stories.ref(ident, title), "kind": kind, "eligible": eligible, "reason": reason,
-                            "release": release, "since": since}
+                            "release": release, "since": since, "not_before": None}
 
         forecasts[name] = {"queue": queue, "state": state}
 
@@ -476,6 +479,21 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                                 "reason": reason, "release": "a worker with it checks in" if kind == "capability" else "a slot frees",
                                 "since": ts(q.get("queued_at"))})
 
+        # A run that failed waits for its retry to come due, then for a slot.
+        for r in state.get("retrying") or []:
+            ident = r.get("issue_identifier")
+            due = ts(r.get("due_at"))
+            if ours(ident) and ident not in queue:
+                caps = (r.get("worker_wait") or {}).get("capabilities") if isinstance(r.get("worker_wait"), dict) else None
+                able = [w.name for w in mine if all(c in w.capabilities for c in caps)] if caps else None
+                enqueue(ident, "slot" if able is None or able else "capability", able or None,
+                        f"retry {r.get('attempt') or ''}".strip() + " comes due" if able is None or able
+                        else f"no worker has {', '.join(caps or [])}", None, due or now, r.get("issue_title"))
+                queue[ident]["not_before"] = due
+        if isinstance(state.get("dispatch_paused"), dict):
+            # Paused for a deploy: it applies once the runs end, and the queue then resumes.
+            forecasts[name]["paused"] = True
+
         # Every open pull request of a story, and what it waits on.
         seen_pulls = set()
         for p in state.get("pulls") or []:
@@ -550,12 +568,17 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
         # A job on a lane already runs, whatever else lists it.
         placed = {j["identifier"] for w in docs if w["sortie"] == s["name"] for j in w["jobs"]}
         placed |= {x["identifier"] for w in docs if w["sortie"] == s["name"] for x in w["stuck"]}
+        # In the order Sortie takes them: the first to wait first, a retry once it comes due.
         queue = sorted((q for q in f["queue"].values() if q["identifier"] not in placed),
-                       key=lambda q: (q["since"] if q["since"] is not None else float("inf"), q["identifier"] or ""))
+                       key=lambda q: (max(x for x in (q["since"], q["not_before"], -1.0) if x is not None)
+                                      if q["since"] is not None else float("inf"), q["identifier"] or ""))
         estimate = _estimator(f["state"], (history.medians.get(s["name"]) if history is not None else None) or {})
         for q in queue:
             q["rule"] = estimate.rule_of(q["identifier"])
-        waiting += project(s["name"], queue, docs, estimate, now)
+        resume = None
+        if f.get("paused"):
+            resume = max([now] + [j["ends_at"] for w in docs if w["sortie"] == s["name"] for j in w["jobs"]])
+        waiting += project(s["name"], queue, docs, estimate, now, resume_at=resume)
 
     return {"generated_at": now, "sorties": sorties, "workers": docs, "pulls": pulls, "where": where,
             "waiting": waiting}

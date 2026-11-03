@@ -72,59 +72,91 @@ def rule_medians(runs: Iterable[dict[str, Any]]) -> dict[str, tuple[float, int]]
 
 class RunWorkers:
     """Which worker each run ran on, by Sortie and dispatch id, as the
-    workbench saw it running; kept in a file so a restart keeps it."""
+    workbench saw it running; and which workers can take a repository's
+    jobs, as Sortie said when it named the one worker that can take one.
+    Kept in a file so a restart keeps it."""
+
+    LABEL = "sortie-repository:"
 
     def __init__(self, path: Path | None = None, clock=time.time):
         self.path = path
         self.clock = clock
         self.seen: dict[str, dict[str, Any]] = {}
+        self.repos: dict[str, list[str]] = {}
+        self.issues: dict[str, str] = {}
         if path is not None and path.exists():
             try:
                 data = json.loads(path.read_text())
-                self.seen = {k: v for k, v in data.items() if isinstance(v, dict) and v.get("worker")}
-            except (OSError, ValueError):
+                self.seen = {k: v for k, v in (data.get("runs") or {}).items() if isinstance(v, dict) and v.get("worker")}
+                self.repos = {k: [str(x) for x in v] for k, v in (data.get("repos") or {}).items() if isinstance(v, list) and v}
+                self.issues = {k: v for k, v in (data.get("issues") or {}).items() if isinstance(v, str)}
+            except (OSError, ValueError, AttributeError):
                 log.warning("could not read %s; the past runs start empty", path)
 
-    @staticmethod
-    def _key(sortie: str, dispatch: str) -> str:
-        return f"{sortie}/{dispatch}"
+    def _repo_of(self, sortie: str, ident: str | None) -> str | None:
+        return self.issues.get(f"{sortie}/{ident}")
 
     def observe(self, sortie: str, state: dict[str, Any] | None) -> None:
         if not state:
             return
+        before = json.dumps([self.seen, self.repos, self.issues], sort_keys=True)
         now = self.clock()
         leases = {x.get("job"): x for x in ((state.get("workers") or {}).get("leases") or []) if isinstance(x, dict)}
         host = (state.get("host") or {}).get("name") if isinstance(state.get("host"), dict) else None
-        changed = False
         for r in state.get("running") or []:
             if not isinstance(r, dict) or not r.get("dispatch_id"):
                 continue
             # A job Sortie counts as running that no worker took has no
             # worker yet: it ran nowhere.
             w = r.get("worker") or (leases.get(r.get("issue_identifier")) or {}).get("worker") or host
-            if not w:
+            if w:
+                self.seen[f"{sortie}/{r['dispatch_id']}"] = {"worker": w, "at": now}
+        for k in ("running", "retrying", "held", "parked", "budget_exhausted"):
+            for r in state.get(k) or []:
+                if not isinstance(r, dict) or not r.get("issue_identifier"):
+                    continue
+                repo = next((str(x)[len(self.LABEL):] for x in r.get("issue_labels") or [] if str(x).startswith(self.LABEL)), None)
+                if repo:
+                    self.issues[f"{sortie}/{r['issue_identifier']}"] = repo
+        for x in state.get("waits") or []:
+            if not isinstance(x, dict) or x.get("kind") != "slot":
                 continue
-            key = self._key(sortie, r["dispatch_id"])
-            if (self.seen.get(key) or {}).get("worker") != w:
-                changed = True
-            self.seen[key] = {"worker": w, "at": now}
+            repo = self._repo_of(sortie, x.get("issue_identifier"))
+            if not repo:
+                continue
+            # Sortie names the one worker that can take a job; a job that
+            # any of several can take names none.
+            if x.get("worker"):
+                self.repos[f"{sortie}/{repo}"] = [x["worker"]]
+            else:
+                self.repos.pop(f"{sortie}/{repo}", None)
         horizon = now - REMEMBER_SECONDS
-        stale = [k for k, v in self.seen.items() if (v.get("at") or 0) < horizon]
-        for k in stale:
+        for k in [k for k, v in self.seen.items() if (v.get("at") or 0) < horizon]:
             del self.seen[k]
-        if (changed or stale) and self.path is not None:
+        if self.path is not None and json.dumps([self.seen, self.repos, self.issues], sort_keys=True) != before:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = self.path.with_suffix(".tmp")
-                tmp.write_text(json.dumps(self.seen))
+                tmp.write_text(json.dumps({"runs": self.seen, "repos": self.repos, "issues": self.issues}))
                 tmp.replace(self.path)
             except OSError:
                 log.warning("could not keep the runs' workers in %s", self.path)
 
+    def eligible(self, sortie: str, ident: str | None) -> list[str] | None:
+        """The workers that can take the issue's jobs, when Sortie named the
+        one for its repository; None when any can."""
+        repo = self._repo_of(sortie, ident)
+        return self.repos.get(f"{sortie}/{repo}") if repo else None
+
     def worker_of(self, sortie: str, run: dict[str, Any]) -> str | None:
         if run.get("ssh_host"):
             return run["ssh_host"]
-        return (self.seen.get(self._key(sortie, run.get("dispatch_id") or "")) or {}).get("worker")
+        seen = (self.seen.get(f"{sortie}/{run.get('dispatch_id') or ''}") or {}).get("worker")
+        if seen:
+            return seen
+        # A run of a job only one worker can take ran there.
+        only = self.eligible(sortie, run.get("issue_identifier"))
+        return only[0] if only and len(only) == 1 else None
 
 
 class RunHistory:
@@ -229,23 +261,27 @@ def past_runs(sortie: str, runs: list[dict[str, Any]], workers: list[dict[str, A
 
 
 def project(sortie: str, queue: list[dict[str, Any]], workers: list[dict[str, Any]], estimate,
-            now: float) -> list[dict[str, Any]]:
+            now: float, resume_at: float | None = None) -> list[dict[str, Any]]:
     """Place the jobs that wait for a slot, in order, each in the slot that
     frees first on a worker that can take it, for its estimated length.
     ``queue`` items name the workers that can take them (``eligible``, None
     for any); ``estimate(item)`` gives (seconds, basis). Returns the jobs
     no slot can take: none of their workers is here, or all of them drain
-    for a deploy, or the job waits for a capability no worker has."""
+    for a deploy, or the job waits for a capability no worker has. With
+    ``resume_at``, the Sortie's dispatch is paused for a deploy that applies
+    once its runs end: no job starts before then, on any worker. An item's
+    ``not_before`` is when its retry comes due."""
     mine = [w for w in workers if w["sortie"] == sortie]
     slots: list[dict[str, Any]] = []
     for wi, w in enumerate(mine):
         w["later"] = 0
         for lane in w["lanes"]:
             lane["next"] = []
-            if lane.get("extra") or w.get("draining") or w.get("gone"):
+            if lane.get("extra") or w.get("gone") or (w.get("draining") and resume_at is None):
                 continue
             j = lane.get("job")
-            slots.append({"worker": w, "wi": wi, "lane": lane, "free": max(now, j["ends_at"]) if j else now})
+            free = max(now, j["ends_at"]) if j else now
+            slots.append({"worker": w, "wi": wi, "lane": lane, "free": max(free, resume_at or now)})
     waiting = []
     for item in queue:
         names = item.get("eligible")
@@ -259,12 +295,16 @@ def project(sortie: str, queue: list[dict[str, Any]], workers: list[dict[str, An
             waiting.append({**ref, "sortie": sortie, "kind": item.get("kind") or "slot", "reason": reason,
                             "release": item.get("release"), "since": item.get("since")})
             continue
-        s = min(fit, key=lambda s: (s["free"], s["wi"], s["lane"]["slot"]))
-        if s["free"] - now > FUTURE_SECONDS:
+        due = item.get("not_before") or now
+        s = min(fit, key=lambda s: (max(s["free"], due), s["wi"], s["lane"]["slot"]))
+        start = max(s["free"], due)
+        if start - now > FUTURE_SECONDS:
             s["worker"]["later"] += 1
             continue
         seconds, basis = estimate(item)
-        s["lane"]["next"].append({**ref, "starts_at": s["free"], "ends_at": s["free"] + seconds, "estimate": seconds,
+        if resume_at is not None and resume_at > now:
+            basis += "; after the deploy, once the runs here end"
+        s["lane"]["next"].append({**ref, "starts_at": start, "ends_at": start + seconds, "estimate": seconds,
                                   "basis": basis, "rule": item.get("rule"), "since": item.get("since")})
-        s["free"] += seconds
+        s["free"] = start + seconds
     return waiting
