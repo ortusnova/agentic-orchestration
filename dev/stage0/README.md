@@ -296,8 +296,8 @@ its token on p1 (`notify-tokens/taichi.token`, which the workbench takes)
 and copies it to the same place in the host's stage-0 home, and the tunnel
 p1 opens to the host also forwards p1's workbench to the host's loopback, on
 port 7790 (`STAGE0_WORKBENCH_TUNNEL_PORT`). A Sortie on the host posts there
-with its own token: `run-sortie.sh` with `STAGE0_WORKBENCH_NOTIFY_PORT=7790`
-puts `http://127.0.0.1:7790/api/notifications/taichi/<token>` in its
+with its own token: `run-sortie.sh` on a host of the worker profile (or with
+`STAGE0_WORKBENCH_NOTIFY_PORT=7790`) puts `http://127.0.0.1:7790/api/notifications/taichi/<token>` in its
 environment. A worker host added before this gets the forward at p1's next
 `stage0.sh`, which says when a host still needs `worker-host.sh add` for its
 token. Since `agent-platform/one-sortie` the kit runs no Sortie on a worker

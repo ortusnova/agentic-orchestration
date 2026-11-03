@@ -49,7 +49,9 @@ STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
 # The workbench, the default destination of the workflow's notifications.
 export SORTIE_WORKBENCH_NOTIFY_URL
 # p1's workbench is on this host's port, or on a worker host the tunnel's.
-SORTIE_WORKBENCH_NOTIFY_URL=$(workbench_notify_url "$STAGE0_HOME" "${STAGE0_WORKBENCH_NOTIFY_PORT:-$STAGE0_WORKBENCH_PORT}") \
+workbench_port=${STAGE0_WORKBENCH_PORT:-8793}
+[[ ${STAGE0_PROFILE:-control} == worker ]] && workbench_port=$STAGE0_WORKBENCH_TUNNEL_PORT
+SORTIE_WORKBENCH_NOTIFY_URL=$(workbench_notify_url "$STAGE0_HOME" "${STAGE0_WORKBENCH_NOTIFY_PORT:-$workbench_port}") \
   || die "Sortie has no token for the workbench's notifications"
 # The operator's channel (notify-channel.sh): its webhook URL or bot token,
 # from the file only the operator writes, for the workflow's notifications.

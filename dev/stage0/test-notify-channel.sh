@@ -151,6 +151,12 @@ out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
 [[ $out == *"Sortie has no token for the workbench's notifications"* && $out != *SORTIE_WORKBENCH_NOTIFY_URL=* ]] \
   && ok "Sortie does not start without the host's token" || fail "run-sortie.sh with no token: $out"
 mv "$home/p1.token.off" "$home/notify-tokens/p1.token"
+# A Sortie on a worker host posts to p1's workbench through the tunnel.
+echo STAGE0_PROFILE=worker >> "$home/stage0.env"
+out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
+[[ $out == "SORTIE_WORKBENCH_NOTIFY_URL=http://127.0.0.1:7790/api/notifications/p1/p1-notify-token" ]] \
+  && ok "a worker host's Sortie posts through the tunnel" || fail "run-sortie.sh on a worker host: $out"
+sed -i '/^STAGE0_PROFILE=/d' "$home/stage0.env"
 out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
 [[ $out == *WORKBENCH_SORTIES=taichi=* && $out != *WORKBENCH_NOTIFY_KIND* && $out != *WORKBENCH_NOTIFY_CREDENTIAL* ]] && ok "with no channel the workbench starts, with no channel" \
   || fail "run-workbench.sh with no channel: $out"
