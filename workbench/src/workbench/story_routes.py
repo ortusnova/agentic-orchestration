@@ -80,7 +80,7 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         if body.epic:
             # Batch 0: every story of an epic none of whose stories is approved yet.
             # A story its pull requests deliver is no one's to approve, and
-            # a ui story is approved by the merge of its pull request.
+            # a ui story was approved as its design prototype, before it was written.
             keys = [k for k in stories if k.split("/", 1)[0] == body.epic and not stories[k].get("delivered_by")
                     and stories[k].get("review") != "ui"]
             if not keys:
@@ -100,8 +100,8 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             ui = [k for k in keys if stories[k].get("review") == "ui"]
             if ui:
                 raise HTTPException(status_code=409, detail={"code": "ui_story", "keys": ui, "message":
-                                    f"{', '.join(ui)} has review: ui: it is built without an approval, "
-                                    "and merging its pull request approves it"})
+                                    f"{', '.join(ui)} has review: ui: it was approved as its design prototype, and Sortie "
+                                    "merges it once its review, CI and click-proofs pass: nothing to approve"})
         # A story with no spec is never approved; the epic's batch leaves it out.
         unspecified = without_spec(rt, snap["graph"], approvals, keys)
         if unspecified and (not body.epic or len(unspecified) == len(keys)):

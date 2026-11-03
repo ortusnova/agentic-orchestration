@@ -34,11 +34,14 @@ workspace of a story, and a fix is a fix run's.
    started keeps its title, description and acceptance criteria; work its
    criteria do not cover becomes a new issue (`issues`), never an edit.
 4. **Never merge a UI story before the operator approves it.** A story with
-   the label `sortie-review:ui` is the operator's to approve, on its
-   preview. Never merge one yourself (Sortie refuses your merge of it),
-   never write its click-proofs record (`sortie:click-proofs passed`),
-   never answer for the operator on one, and never mark its approval. It
-   waits for the operator.
+   the label `sortie-review:ui` builds an interface the operator approved
+   as a design prototype before it was written, and it merges only once
+   the review on its preview records its click-proofs for its head
+   (`sortie:click-proofs passed <head sha>`); Sortie merges it then. Never
+   merge one yourself (Sortie refuses your merge of it), never write its
+   click-proofs record, never answer for the operator on one, and never
+   mark its approval. A UI change with no approved prototype is the
+   operator's decision: ask.
 5. **Ask a person for what needs a person, one question at a time.** A
    credential, a token or its scope, a key, a spec or story approval, an
    operator decision, and any action whose effect you cannot check go to a

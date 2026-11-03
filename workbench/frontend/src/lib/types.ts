@@ -75,7 +75,7 @@ export interface GraphNode {
   preview?: Preview | null;
 }
 
-export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "building" | "preview" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "building" | "in_review" | "click_proofs" | "merging" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
 
 /** The preview of a ui story's pull request: its branch's read-only workbench. */
 export interface Preview {
@@ -83,6 +83,8 @@ export interface Preview {
   pull: string;
   pull_url: string;
   sha: string;
+  /** The head commit the pull request records the click-proofs for; null while it records none. */
+  click_proofs?: string | null;
 }
 
 /** One pull request a story names, as GitHub last reported it. */

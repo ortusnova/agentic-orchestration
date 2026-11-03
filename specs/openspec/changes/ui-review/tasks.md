@@ -13,4 +13,4 @@
 
 - [x] 3.1 The workflow routes `sortie-review:ui` through the review, never auto-merges it, and starts a fix run on an operator comment; checked against Sortie (`test-review-gate.sh`).
 - [x] 3.2 `preview.sh`, `run-previews.sh` and the units; checked by `test-preview.sh`.
-- [ ] 3.3 Live on p1: with `worker-activity-view` on `review: ui`, its preview is up at its address, linked from the pull request and the workbench; a comment adds a commit the preview shows; the merge makes it Done.
+- [ ] 3.3 Live on p1: with `worker-activity-view` on `review: ui`, its preview is up at its address, linked from the pull request and the workbench; a comment adds a commit the preview shows; the merge makes it Done. Superseded: the operator no longer merges a ui story, and its live proof is `ui-merges-after-review` 2.2.
