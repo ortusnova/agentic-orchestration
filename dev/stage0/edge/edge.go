@@ -258,7 +258,11 @@ func (e *Edge) Handler(worker string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		g, ok := e.admit(r.Context(), bearer(r.Header.Get("Authorization")), flow)
+		g, ok, err := e.admit(r.Context(), bearer(r.Header.Get("Authorization")), flow)
+		if err != nil {
+			unavailable(w)
+			return
+		}
 		if !ok {
 			e.log.Info("flow refused", slog.String("worker", worker), slog.String("flow", flow), slog.String("path", r.URL.Path))
 			w.Header().Set("WWW-Authenticate", `Bearer realm="sortie-job"`)
@@ -281,20 +285,30 @@ func isClean(p string) bool {
 	return c == p
 }
 
-// admit asks Sortie what token grants, and admits it only for flow.
-func (e *Edge) admit(ctx context.Context, token, flow string) (Grant, bool) {
+// admit asks Sortie what token grants, and admits it only for flow. An
+// error means Sortie could not answer, as while it restarts: nothing is
+// admitted, but the token is not refused either.
+func (e *Edge) admit(ctx context.Context, token, flow string) (Grant, bool, error) {
 	if token == "" {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
 	g, err := e.introspect(ctx, token)
 	if err != nil {
 		e.log.Warn("introspection failed", slog.String("flow", flow), slog.String("error", err.Error()))
-		return Grant{}, false
+		return Grant{}, false, err
 	}
 	if g == nil || g.Flow != flow {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
-	return *g, true
+	return *g, true, nil
+}
+
+// unavailable answers a request whose token Sortie could not check. It is
+// 503, which a worker retries while keeping its machine; a 401 would tell
+// it the control plane no longer knows the job.
+func unavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "Sortie cannot check the job token now; try again", http.StatusServiceUnavailable)
 }
 
 // introspect returns the grant of a live token, nil for any other.
@@ -361,7 +375,11 @@ func proxyToken(r *http.Request) string {
 // here, with the job and attempt the token belongs to.
 func (e *Edge) serveEgress(w http.ResponseWriter, r *http.Request, worker string) {
 	host := r.Host
-	g, ok := e.admit(r.Context(), proxyToken(r), egressFlow)
+	g, ok, err := e.admit(r.Context(), proxyToken(r), egressFlow)
+	if err != nil {
+		unavailable(w)
+		return
+	}
 	if !ok {
 		e.log.Info("flow refused", slog.String("worker", worker), slog.String("flow", egressFlow), slog.String("host", host))
 		w.Header().Set("Proxy-Authenticate", `Bearer realm="sortie-job"`)

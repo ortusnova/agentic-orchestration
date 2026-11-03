@@ -342,7 +342,10 @@ What the edge does with a request on a worker's port:
   Sortie's `POST /api/v1/tokens/introspect` (with the control token) about
   the request's `Authorization: Bearer` job token, and admits it only when
   the token is live and granted for that flow; anything else gets `401`
-  and never reaches the service.
+  and never reaches the service. While Sortie cannot answer, as while it
+  restarts, the request gets `503` instead and still reaches nothing: the
+  worker daemon dials again and keeps its machine, where a `401` would
+  tell it the job is gone. The egress flow answers the same way.
 - **Egress.** A `CONNECT` is the egress flow; its job token is the
   `Proxy-Authorization` (Bearer, or Basic as in
   `HTTPS_PROXY=http://job:<token>@127.0.0.1:7700`). Once admitted, the

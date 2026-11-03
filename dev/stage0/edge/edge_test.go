@@ -171,13 +171,21 @@ func TestFlowRequestsTheEdgeRefuses(t *testing.T) {
 		t.Errorf("Sortie's worker API was reached: %q", h.sortie.paths)
 	}
 
-	// While Sortie cannot answer, nothing is admitted.
+	// While Sortie cannot answer, as while it restarts, nothing is
+	// admitted, and the answer is 503, not 401: the worker dials again
+	// and keeps its machine, where a 401 would tell it the job is gone.
 	tok := h.sortie.mint("stdio")
 	h.sortie.Close()
 	req, _ := http.NewRequest(http.MethodGet, "/stdio/x", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	if status, _ := h.do("taichi", req); status != http.StatusUnauthorized {
-		t.Errorf("with Sortie down: %d, want 401", status)
+	if status, _ := h.do("taichi", req); status != http.StatusServiceUnavailable {
+		t.Errorf("with Sortie down: %d, want 503", status)
+	}
+	if h.services["stdio"].hits() != 0 {
+		t.Error("the stdio service was reached with Sortie down")
+	}
+	if status := h.connect("taichi", "api.anthropic.com:443", h.sortie.mint("egress")); status != http.StatusServiceUnavailable {
+		t.Errorf("egress with Sortie down: %d, want 503", status)
 	}
 }
 
