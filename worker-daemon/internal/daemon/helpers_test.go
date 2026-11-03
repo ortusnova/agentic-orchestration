@@ -376,6 +376,27 @@ func (h *harness) start() {
 	}()
 }
 
+// restartDaemon stops the daemon as systemd stops it and starts a new
+// one on the same host: the same configuration, state directory and
+// machines.
+func (h *harness) restartDaemon() {
+	h.t.Helper()
+	h.stop()
+	h.startNewDaemon()
+}
+
+// startNewDaemon starts a new daemon on the host, after h.stop.
+func (h *harness) startNewDaemon() {
+	h.t.Helper()
+	d, err := daemon.New(daemon.Options{Config: h.cfg, Probe: h.probe, Backend: h.backend,
+		Log: slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.d, h.done = d, make(chan struct{})
+	h.start()
+}
+
 func (h *harness) stop() {
 	if h.cancel == nil {
 		return

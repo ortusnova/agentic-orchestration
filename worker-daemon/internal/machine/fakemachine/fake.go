@@ -91,6 +91,15 @@ func (b *Backend) Machine(name string) *Machine {
 	return nil
 }
 
+// Reopen implements [machine.Reopener]: the machine named in spec,
+// while it is not deleted.
+func (b *Backend) Reopen(_ context.Context, spec machine.Spec) (machine.Machine, error) {
+	if m := b.Machine(spec.Name); m != nil && !m.Deleted() {
+		return m, nil
+	}
+	return nil, nil
+}
+
 // Create implements [machine.Backend].
 func (b *Backend) Create(_ context.Context, spec machine.Spec) (machine.Machine, error) {
 	root := filepath.Join(b.Dir, spec.Name)
