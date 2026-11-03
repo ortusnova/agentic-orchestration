@@ -34,6 +34,9 @@ FUTURE_SECONDS = 6 * 3600.0
 # As Sortie estimates a running job's end: the median of a rule's newest
 # succeeded runs.
 MEDIAN_RUNS = 20
+# How long a slot takes to start its next job once the last one ends, as the
+# lanes prototype allows: Sortie's next poll, then the job's machine starts.
+DISPATCH_GAP = 120.0
 # How long a remembered run's worker is kept.
 REMEMBER_SECONDS = 2 * 86400.0
 
@@ -277,7 +280,7 @@ def project(sortie: str, queue: list[dict[str, Any]], workers: list[dict[str, An
             if lane.get("extra") or w.get("gone") or (w.get("draining") and resume_at is None):
                 continue
             j = lane.get("job")
-            free = max(now, j["ends_at"]) if j else now
+            free = max(now, j["ends_at"] + DISPATCH_GAP) if j else now
             slots.append({"worker": w, "wi": wi, "lane": lane, "free": max(free, resume_at or now)})
     waiting = []
     for item in queue:
@@ -303,5 +306,5 @@ def project(sortie: str, queue: list[dict[str, Any]], workers: list[dict[str, An
             basis += "; after the deploy, once the runs here end"
         s["lane"]["next"].append({**ref, "starts_at": start, "ends_at": start + seconds, "estimate": seconds,
                                   "basis": basis, "rule": item.get("rule"), "since": item.get("since")})
-        s["free"] = start + seconds
+        s["free"] = start + seconds + DISPATCH_GAP
     return waiting

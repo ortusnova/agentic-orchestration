@@ -14,7 +14,7 @@ from tests.workbench.fake_sortie import FakeSortie
 from tests.workbench.test_approvals import app_for, billing
 from tests.workbench.test_fleet import NODES, NOW, iso, story, worker
 from workbench.fleet import build_fleet, lanes_summary
-from workbench.timeline import RunHistory, RunWorkers, rule_medians
+from workbench.timeline import DISPATCH_GAP as GAP, RunHistory, RunWorkers, rule_medians
 
 MORE = NODES + [story(i, f"homelab/{k}") for i, k in (("ONS-80", "q1"), ("ONS-81", "q2"), ("ONS-82", "q3"),
                                                       ("ONS-83", "q4"), ("ONS-84", "nested"), ("ONS-90", "ran-a"),
@@ -137,14 +137,15 @@ def test_the_queue_is_projected_in_order_onto_the_slot_that_frees_first():
     p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
     # In the order they began to wait: ONS-80 takes p1's free slot now, ONS-81
     # taichi's; ONS-82 only taichi can take: its slot 2 frees first, after
-    # ONS-81's median; ONS-83 takes p1's slot that frees first, at NOW+300.
+    # ONS-81's median; ONS-83 takes p1's slot that frees first, at NOW+300;
+    # each a dispatch gap after the job before it.
     assert lane_idents(p1, "next") == [["ONS-83"], [], ["ONS-80"]]
     assert lane_idents(t, "next") == [[], ["ONS-81", "ONS-82"]]
     by = {x["identifier"]: x for w in (p1, t) for lane in w["lanes"] for x in lane["next"]}
     assert by["ONS-80"]["starts_at"] == NOW and by["ONS-80"]["ends_at"] == NOW + 1000
     assert by["ONS-81"]["starts_at"] == NOW
-    assert by["ONS-82"]["starts_at"] == NOW + 1000 and by["ONS-82"]["ends_at"] == NOW + 2000
-    assert by["ONS-83"]["starts_at"] == NOW + 300
+    assert by["ONS-82"]["starts_at"] == NOW + 1000 + GAP and by["ONS-82"]["ends_at"] == NOW + 2000 + GAP
+    assert by["ONS-83"]["starts_at"] == NOW + 300 + GAP
     assert by["ONS-80"]["basis"] == "the median of 3 succeeded build runs"
     assert fleet["waiting"] == []
 
@@ -160,7 +161,7 @@ def test_the_forecast_flows_again_when_a_slot_opens():
     assert lane_idents(t, "next") == [[], ["ONS-82"]]
     by = {x["identifier"]: x for w in (p1, t) for lane in w["lanes"] for x in lane["next"]}
     assert by["ONS-81"]["starts_at"] == NOW and by["ONS-82"]["starts_at"] == NOW
-    assert by["ONS-83"]["starts_at"] == NOW + 900
+    assert by["ONS-83"]["starts_at"] == NOW + 900 + GAP
 
 
 def test_a_job_no_worker_can_take_is_not_projected_and_waits_with_its_reason():
@@ -222,7 +223,7 @@ def test_the_home_lanes_show_the_past_and_the_forecast_from_the_fake_sortie(stor
         p1 = lanes["workers"][0]
         assert [x["identifier"] for x in p1["lanes"][0]["past"]] == ["T-3"]
         assert [x["identifier"] for x in p1["lanes"][0]["next"]] == ["T-2"]
-        assert p1["lanes"][0]["next"][0]["starts_at"] == p1["lanes"][0]["job"]["ends_at"]
+        assert p1["lanes"][0]["next"][0]["starts_at"] == p1["lanes"][0]["job"]["ends_at"] + GAP
 
 
 HOMELAB = ["sortie-repository:homelab"]
