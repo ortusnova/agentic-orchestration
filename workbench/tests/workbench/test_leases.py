@@ -47,6 +47,7 @@ def test_a_story_under_a_live_lease_waits_on_the_supervisor_and_asks_no_person(s
         run = b1["run_state"]
         assert run["status"] == "waiting" and run["kind"] == "supervisor" and run["action"] is None
         assert run["why"] == f"waiting on the supervisor: {REASON}" and run["lease"]["evidence"] == EVIDENCE
+        assert run["release"] == "the supervisor, who renews its lease by 2026-11-03 14:00 UTC or the story turns stuck for a person"
 
 
 def test_a_story_whose_lease_expired_is_stuck_for_a_person(store):

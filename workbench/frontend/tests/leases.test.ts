@@ -61,7 +61,7 @@ function homeGraph(w: Worker, verdict: string, reasons: { code: string; text: st
 describe("A story the supervisor holds", () => {
   it("waits on the supervisor in the lanes, with the evidence and the expiry, and no Answer", async () => {
     const x: Wait = { identifier: "ONS-54", key: "homelab/vm-acceptance", label: "vm-acceptance", title: "VM acceptance", sortie: "taichi",
-      kind: "supervisor", reason: `waiting on the supervisor: ${REASON}`, release: "the supervisor releases it", since: NOW - 1200, lease: lease() };
+      kind: "supervisor", reason: `waiting on the supervisor: ${REASON}`, release: "the supervisor, who renews its lease by 2026-11-03 10:50 UTC or the story turns stuck for a person", since: NOW - 1200, lease: lease() };
     const w = worker({ waits: [x], reasons: [{ code: "idle", text: "nothing runs; 1 item waiting" }] });
     app = mount(HomeHarness, { target: document.body, props: { initial: homeGraph(w, "waiting",
       [{ code: "supervisor", text: "1 story waits on 1 supervisor hold: the supervisor proves them" }]) } });
@@ -104,7 +104,7 @@ describe("A story the supervisor holds", () => {
     };
     const now = Date.now() / 1000;
     const n = synced("homelab/vm-acceptance", "In Progress", { question: null, run_state: { status: "waiting", worker: "taichi", sortie: "taichi", slot: null,
-      why: `waiting on the supervisor: ${REASON}`, release: "the supervisor releases it", kind: "supervisor", action: null, phase: null, step: null, pull: null,
+      why: `waiting on the supervisor: ${REASON}`, release: "the supervisor, who renews its lease by 2026-11-03 10:50 UTC or the story turns stuck for a person", kind: "supervisor", action: null, phase: null, step: null, pull: null,
       lease: lease({ renewed_at: now - 600, until: now + 3000 }) } });
     app = mount(ChatHarness, { target: document.body, props: { initial: graph([synced("homelab"), n]), session: noSession, actions: {} as StoryActions,
       initialView: { epic: "homelab", selected: n.plan_key, showCross: true } } });
@@ -112,6 +112,7 @@ describe("A story the supervisor holds", () => {
     expect(text("[data-run-state='waiting'] b")).toBe("Waiting on the supervisor");
     expect(text("[data-run-state] [data-why]")).toBe(`waiting on the supervisor: ${REASON}`);
     expect(text("[data-run-state] [data-lease]")).toContain(`evidence: ${EVIDENCE} · renewed 10 min ago · runs out at`);
+    expect(text("[data-run-state] [data-release]")).toBe("Released by the supervisor, who renews its lease by 2026-11-03 10:50 UTC or the story turns stuck for a person.");
     expect(document.querySelector("[data-act='answer']")).toBeNull();
   });
 

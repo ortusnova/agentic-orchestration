@@ -325,8 +325,8 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                                 "reason": expired_text(held), "lease": held, "action": "story"})
             else:
                 w.waits.append({**stories.ref(ident), "sortie": name, "kind": "supervisor", "reason": waiting_text(held),
-                                "release": f"the supervisor releases it; if it does not renew its lease by "
-                                           f"{clock(held['until'])}, the story turns stuck for a person",
+                                "release": f"the supervisor, who renews its lease by {clock(held['until'])} "
+                                           f"or the story turns stuck for a person",
                                 "since": held["held_since"], "lease": held})
 
         for p in state.get("parked") or []:
