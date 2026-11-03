@@ -98,6 +98,20 @@ echo pass > "$STAGE0_HOME/nono-pass"
   && ok "the edge names p1's worker by the port the workflow's flows use" || fail "edge: $(cat "$STAGE0_HOME/edge.json")"
 [[ $(edge_port mac) == 7702 ]] && ok "a new worker host gets the next free port" || fail "next port: $(edge_port mac)"
 
+# Sortie's agent cap is a ceiling above the workers' run slots, not p1's own
+# slots: the matcher holds each worker to its slots (a fixed 3 for p1 and
+# taichi together left taichi idle while 10 stories waited, 2026-11-03).
+cap=$(STAGE0_MAX_AGENTS=3 sortie_agent_cap)
+(( cap >= 3 + 2 )) && ok "the default cap ($cap) is above p1's 3 slots and taichi's 2" || fail "default cap: $cap"
+[[ $(STAGE0_SORTIE_MAX_AGENTS='' sortie_agent_cap) == "$cap" ]] && ok "an empty STAGE0_SORTIE_MAX_AGENTS is the default" || fail "empty override"
+[[ $(STAGE0_SORTIE_MAX_AGENTS=4 sortie_agent_cap) == 4 ]] && ok "STAGE0_SORTIE_MAX_AGENTS overrides the cap" || fail "override: $(STAGE0_SORTIE_MAX_AGENTS=4 sortie_agent_cap)"
+for bad in 0 -1 three; do
+  if STAGE0_SORTIE_MAX_AGENTS=$bad sortie_agent_cap > /dev/null 2>&1; then fail "cap $bad was taken"; else ok "cap $bad is refused"; fi
+done
+# shellcheck disable=SC2016 # the placeholders, literally
+grep -q 'max_concurrent_agents: ${STAGE0_SORTIE_MAX_AGENTS}' "$KIT/WORKFLOW.md" && ! grep -q '${STAGE0_MAX_AGENTS}' "$KIT/WORKFLOW.md" \
+  && ok "the workflow's cap is sortie_agent_cap's, not a worker's slots" || fail "WORKFLOW.md's max_concurrent_agents"
+
 # A worker host's Sortie is stopped and its unit removed, once.
 echo unit > "$tmp/units/ortus-stage0-sortie.service"
 echo env > "$STAGE0_HOME/profile.env"

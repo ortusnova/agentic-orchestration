@@ -141,8 +141,11 @@ STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
 STAGE0_HOMELAB_REPO_BASE=master
 STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
 STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
-# Agents at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
+# p1's own worker's jobs at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
 STAGE0_MAX_AGENTS=3
+# Sortie's cap on agents at once, on every worker together: unset, a ceiling
+# above the workers' slots, which the matcher holds (worker-config.sh).
+STAGE0_SORTIE_MAX_AGENTS=
 # The stage-1 edge (README.md): nono's port on p1, and the port each worker
 # host's tunnel ends on, on that host's loopback.
 STAGE0_NONO_PORT=7690
@@ -380,6 +383,8 @@ render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://12
   || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
 say "Rendering Sortie's workflow"
+STAGE0_SORTIE_MAX_AGENTS=$(sortie_agent_cap) || die "the Sortie-wide agent cap is wrong ($ENV_FILE)"
+export STAGE0_SORTIE_MAX_AGENTS
 STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
 validated=$("$KIT/run-sortie.sh" validate 2>&1) || die "Sortie refused the workflow ($KIT/run-sortie.sh validate): $validated"
 # A key Sortie does not know is one it ignores: the workflow would not do

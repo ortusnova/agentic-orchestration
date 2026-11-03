@@ -27,6 +27,24 @@ json_str() {
   printf '"%s"' "$s"
 }
 
+# sortie_agent_cap's default: above every worker's run slots together
+# (p1 3, taichi 2 in 2026-11). Raise it when the workers' slots pass it.
+STAGE0_SORTIE_AGENT_CEILING=16
+
+# sortie_agent_cap: Sortie's agent.max_concurrent_agents on p1. Under the
+# remote kind the matcher places a job only on a worker with a free run slot
+# and the CPU, memory and disk the job requires (sortie Matcher.Placeable),
+# so every worker's own limit already holds, and a worker can join or leave
+# without a Sortie restart. The Sortie-wide cap is then only a ceiling above
+# the workers' slots together; a lower one leaves free workers idle while
+# stories wait. STAGE0_SORTIE_MAX_AGENTS overrides it. STAGE0_MAX_AGENTS is
+# p1's own worker's run slots, not this cap.
+sortie_agent_cap() {
+  local cap=${STAGE0_SORTIE_MAX_AGENTS:-$STAGE0_SORTIE_AGENT_CEILING}
+  [[ $cap =~ ^[1-9][0-9]*$ ]] || { echo "STAGE0_SORTIE_MAX_AGENTS is $cap; want a positive whole number" >&2; return 1; }
+  echo "$cap"
+}
+
 # The setup every image runs first: the egress CA's certificate, from
 # ORTUS_EGRESS_CA (env_files), into the system's trust store.
 guest_ca_setup() {
