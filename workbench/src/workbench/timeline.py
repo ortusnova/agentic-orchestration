@@ -3,14 +3,17 @@ ran before now, and what it is expected to run after.
 
 Past: the runs Sortie's run history holds that ended in the lanes' window,
 each on the worker it ran on, packed into the worker's slot rows so that no
-two overlap in a row. Sortie's run history does not record the worker of a
-run under the remote kind, so the workbench records it as it sees each run
-running (``RunWorkers``); a run it never saw on a worker is counted, not
-drawn.
+two overlap in a row. The worker is the run's ``worker``, which Sortie
+records under the remote kind; for a run recorded without one, the worker
+the workbench saw it running on (``RunWorkers``). A run on no known worker
+is counted, not drawn.
 
 Future: the jobs that wait for a slot, in the order they began to wait,
 each placed in the slot that frees first on a worker that can take it,
-for the median length of its rule's succeeded runs. It is a forecast: it
+for the median length of its rule's succeeded runs. The workers that can
+take a job are those that meet its repository's ``requires``, as Sortie
+serves them in ``config.repositories``; from a Sortie that serves none, the
+one worker Sortie last named for the repository. It is a forecast: it
 flows again at every refresh, as slots open. A job no worker can take is
 not placed; it waits, with why.
 """
@@ -73,11 +76,31 @@ def rule_medians(runs: Iterable[dict[str, Any]]) -> dict[str, tuple[float, int]]
     return out
 
 
+def _meets(decl: dict[str, Any], requires: dict[str, Any]) -> bool:
+    """Whether a worker's declaration meets a job's requires, as Sortie's
+    matcher reads them: every capability, and the CPUs, memory and disk in
+    all (free and used), since what is free now changes as jobs end."""
+    have = {decl.get("os"), decl.get("arch"), *(decl.get("backends") or [])}
+    if decl.get("kvm"):
+        have.add("kvm")
+    if decl.get("nested"):
+        have.add("nested")
+    if any(c not in have for c in requires.get("capabilities") or []):
+        return False
+    free, used = decl.get("free") or {}, decl.get("used") or {}
+    for k in ("cpu", "mem_gib", "disk_gib"):
+        need = requires.get(k) or 0
+        if need and k in free and (free.get(k) or 0) + (used.get(k) or 0) < need:
+            return False
+    return True
+
+
 class RunWorkers:
     """Which worker each run ran on, by Sortie and dispatch id, as the
     workbench saw it running; and which workers can take a repository's
-    jobs, as Sortie said when it named the one worker that can take one.
-    Kept in a file so a restart keeps it."""
+    jobs: those that meet its requires, or, from a Sortie that serves none,
+    the one Sortie named when only one could take a job. Kept in a file so a
+    restart keeps it; the requires are read again from each state."""
 
     LABEL = "sortie-repository:"
 
@@ -87,6 +110,10 @@ class RunWorkers:
         self.seen: dict[str, dict[str, Any]] = {}
         self.repos: dict[str, list[str]] = {}
         self.issues: dict[str, str] = {}
+        # Per Sortie and repository, the workers that meet its requires, and
+        # per Sortie its default repository, from the latest state.
+        self.requires: dict[str, list[str]] = {}
+        self.defaults: dict[str, str] = {}
         if path is not None and path.exists():
             try:
                 data = json.loads(path.read_text())
@@ -98,6 +125,22 @@ class RunWorkers:
 
     def _repo_of(self, sortie: str, ident: str | None) -> str | None:
         return self.issues.get(f"{sortie}/{ident}")
+
+    def _observe_requires(self, sortie: str, state: dict[str, Any]) -> None:
+        repos = [r for r in ((state.get("config") or {}).get("repositories") or [])
+                 if isinstance(r, dict) and isinstance(r.get("requires"), dict)]
+        listed = (state.get("workers") or {}).get("workers") if isinstance(state.get("workers"), dict) else None
+        for k in [k for k in self.requires if k.startswith(f"{sortie}/")]:
+            del self.requires[k]
+        self.defaults.pop(sortie, None)
+        if not repos or not isinstance(listed, list):
+            return
+        decls = [(w.get("id"), w.get("declaration") or {}) for w in listed if isinstance(w, dict) and w.get("id")]
+        for r in repos:
+            name = r.get("name") or ""
+            self.requires[f"{sortie}/{name}"] = [i for i, d in decls if _meets(d, r["requires"])]
+            if r.get("default"):
+                self.defaults[sortie] = name
 
     def observe(self, sortie: str, state: dict[str, Any] | None) -> None:
         if not state:
@@ -133,6 +176,7 @@ class RunWorkers:
                 self.repos[f"{sortie}/{repo}"] = [x["worker"]]
             else:
                 self.repos.pop(f"{sortie}/{repo}", None)
+        self._observe_requires(sortie, state)
         horizon = now - REMEMBER_SECONDS
         for k in [k for k, v in self.seen.items() if (v.get("at") or 0) < horizon]:
             del self.seen[k]
@@ -146,12 +190,19 @@ class RunWorkers:
                 log.warning("could not keep the runs' workers in %s", self.path)
 
     def eligible(self, sortie: str, ident: str | None) -> list[str] | None:
-        """The workers that can take the issue's jobs, when Sortie named the
-        one for its repository; None when any can."""
+        """The workers that can take the issue's jobs: those that meet its
+        repository's requires (the default repository for an issue that
+        names none), else the one Sortie named for its repository; None when
+        any can."""
         repo = self._repo_of(sortie, ident)
+        key = f"{sortie}/{repo if repo is not None else self.defaults.get(sortie)}"
+        if (repo is not None or sortie in self.defaults) and key in self.requires:
+            return list(self.requires[key])
         return self.repos.get(f"{sortie}/{repo}") if repo else None
 
     def worker_of(self, sortie: str, run: dict[str, Any]) -> str | None:
+        if run.get("worker"):
+            return run["worker"]
         if run.get("ssh_host"):
             return run["ssh_host"]
         # Only a run seen on a worker: a job Sortie counted as running that

@@ -276,3 +276,59 @@ def test_retries_keep_their_order_while_sortie_moves_their_due_times_by_seconds(
         return [lane_idents(worker(fleet, n), "next") for n in ("p1", "taichi")]
     # The first dispatched takes the first free slot, wherever in the minute Sortie puts their retries.
     assert order(-20) == order(5) == [[["ONS-83"], [], ["ONS-80"]], [[], ["ONS-81"]]]
+
+
+def test_a_run_sortie_names_the_worker_of_is_drawn_there_though_the_workbench_never_saw_it():
+    # Sortie's run history names the worker; the workbench's own record is a guess it overrides.
+    past = [{**run("ONS-90", NOW - 1700, NOW - 900), "worker": "taichi"}, {**run("ONS-91", NOW - 1500, NOW - 700), "worker": None}]
+    h = history_with(past, [("ONS-90", "p1"), ("ONS-91", "p1")])
+    fleet = build_fleet([("p1", state([]), None)], MORE, now=NOW, history=h)
+    assert lane_idents(worker(fleet, "taichi"), "past") == [["ONS-90"], []]
+    assert lane_idents(worker(fleet, "p1"), "past") == [["ONS-91"], [], []]
+    assert fleet["sorties"][0]["unattributed"] == 0
+
+
+def requiring(s: dict, repos: list[dict]) -> dict:
+    """``s`` with Sortie serving its repositories' requires, and p1 a worker
+    without nested virtualization beside taichi with it."""
+    s["config"]["repositories"] = repos
+    s["workers"]["workers"] = [
+        {"id": "p1", "last_check_in": iso(NOW - 2),
+         "declaration": {"run_slots": 3, "kvm": True, "backends": ["smolvm"], "free": {"cpu": 8, "mem_gib": 32, "disk_gib": 200}}},
+        {"id": "taichi", "last_check_in": iso(NOW - 2),
+         "declaration": {"run_slots": 2, "kvm": True, "nested": True, "backends": ["smolvm"],
+                         "free": {"cpu": 4, "mem_gib": 8, "disk_gib": 50}, "used": {"cpu": 12, "mem_gib": 56, "disk_gib": 150}}}]
+    return s
+
+
+def test_a_repository_s_requires_place_its_jobs_before_sortie_names_a_worker():
+    h = history_with([run(f"ONS-9{i}", NOW - 90000 - 1000, NOW - 90000) for i in range(3)], [])
+    # The workbench once saw Sortie name p1 for homelab: Sortie's requires now say only taichi can.
+    h.workers.observe("p1", {"retrying": [{"issue_identifier": "ONS-82", "issue_labels": HOMELAB}],
+                             "waits": [slot_wait("ONS-82", NOW - 20, worker="p1")]})
+    repos = [{"name": "sortie", "dispatch": True, "default": True, "requires": {"capabilities": ["smolvm"], "cpu": 2, "mem_gib": 4, "disk_gib": 0}},
+             {"name": "homelab", "dispatch": True, "default": False,
+              "requires": {"capabilities": ["kvm", "nested", "smolvm"], "cpu": 8, "mem_gib": 32, "disk_gib": 100}}]
+    s = requiring(state(RUNS), repos)
+    s["retrying"] = [{"issue_identifier": "ONS-82", "issue_labels": HOMELAB, "attempt": 2, "due_at": iso(NOW - 5)},
+                     {"issue_identifier": "ONS-80", "attempt": 1, "due_at": iso(NOW - 5)}]
+    h.workers.observe("p1", s)
+    # taichi has 16 CPUs and 64 GiB in all, 4 and 8 free now: it can take homelab's jobs.
+    assert h.workers.eligible("p1", "ONS-82") == ["taichi"]
+    # ONS-80 names no repository: it runs in the default, which either worker can take.
+    assert h.workers.eligible("p1", "ONS-80") == ["p1", "taichi"]
+    fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=h)
+    by = {x["identifier"]: w["name"] for w in fleet["workers"] for lane in w["lanes"] for x in lane["next"]}
+    assert by["ONS-82"] == "taichi"
+
+
+def test_a_repository_no_worker_meets_waits_with_its_reason():
+    repos = [{"name": "homelab", "dispatch": True, "default": False, "requires": {"capabilities": ["gpu"], "cpu": 0, "mem_gib": 0, "disk_gib": 0}}]
+    s = requiring(state(RUNS), repos)
+    s["retrying"] = [{"issue_identifier": "ONS-82", "issue_labels": HOMELAB, "attempt": 2, "due_at": iso(NOW - 5)}]
+    h = history_with([], [])
+    h.workers.observe("p1", s)
+    assert h.workers.eligible("p1", "ONS-82") == []
+    fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=h)
+    assert all(not lane["next"] for w in fleet["workers"] for lane in w["lanes"])
+    assert [x["identifier"] for x in fleet["waiting"]] == ["ONS-82"]
