@@ -244,6 +244,24 @@ def test_a_released_question_is_not_unread_again(store, tmp_path):
         assert shown(app) == []
 
 
+def test_a_question_the_supervisor_holds_is_not_unread_again(store, tmp_path):
+    clock = Clock(PARKED + 10)
+    app, p1, taichi = setup(store, tmp_path, clock)
+    with TestClient(app) as client:
+        sign_in(client)
+        taichi.park("T-1", STATEMENT, PARKED_AT)
+        taichi.hold("T-1", "proves the live criterion by hand", "the run on taichi")
+        settle(client)
+        nid = post(client, sortie_body("session.stopped")).json()["id"]
+        [n] = shown(app)
+        # Under the supervisor's lease the question waits on no person.
+        assert n["unread"] and n["question"] is None
+        client.post(f"{P}/notifications/seen", json={"ids": [nid]})
+        clock.t += 3 * REPEAT_SECONDS
+        settle(client)
+        assert shown(app) == []
+
+
 # The token ---------------------------------------------------------------------------
 
 
