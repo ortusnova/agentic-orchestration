@@ -488,7 +488,8 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                 able = [w.name for w in mine if all(c in w.capabilities for c in caps)] if caps else None
                 enqueue(ident, "slot" if able is None or able else "capability", able or None,
                         f"retry {r.get('attempt') or ''}".strip() + " comes due" if able is None or able
-                        else f"no worker has {', '.join(caps or [])}", None, due or now, r.get("issue_title"))
+                        else f"no worker has {', '.join(caps or [])}", None,
+                        ts(r.get("dispatched_at")) or due or now, r.get("issue_title"))
                 queue[ident]["not_before"] = due
         if isinstance(state.get("dispatch_paused"), dict):
             # Paused for a deploy: it applies once the runs end, and the queue then resumes.
@@ -568,10 +569,12 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
         # A job on a lane already runs, whatever else lists it.
         placed = {j["identifier"] for w in docs if w["sortie"] == s["name"] for j in w["jobs"]}
         placed |= {x["identifier"] for w in docs if w["sortie"] == s["name"] for x in w["stuck"]}
-        # In the order Sortie takes them: the first to wait first, a retry once it comes due.
+        # In the order Sortie takes them: a retry once it comes due, to the
+        # minute, so that one whose due time Sortie moves by seconds keeps its
+        # place; then the first to wait first.
         queue = sorted((q for q in f["queue"].values() if q["identifier"] not in placed),
-                       key=lambda q: (max(x for x in (q["since"], q["not_before"], -1.0) if x is not None)
-                                      if q["since"] is not None else float("inf"), q["identifier"] or ""))
+                       key=lambda q: (max(now, q["not_before"] or now) // 60,
+                                      q["since"] if q["since"] is not None else float("inf"), q["identifier"] or ""))
         estimate = _estimator(f["state"], (history.medians.get(s["name"]) if history is not None else None) or {})
         for q in queue:
             q["rule"] = estimate.rule_of(q["identifier"])

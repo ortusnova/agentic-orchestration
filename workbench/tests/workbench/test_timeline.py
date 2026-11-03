@@ -264,3 +264,14 @@ def test_a_retry_that_needs_a_capability_goes_only_where_a_worker_declares_it():
     fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=history_with([], []))
     assert lane_idents(worker(fleet, "taichi"), "next") == [[], ["ONS-84"]]
     assert [(x["identifier"], x["kind"], x["reason"]) for x in fleet["waiting"]] == [("ONS-80", "capability", "no worker has gpu")]
+
+
+def test_retries_keep_their_order_while_sortie_moves_their_due_times_by_seconds():
+    def order(shift: float) -> list[str]:
+        s = state(RUNS)
+        s["retrying"] = [{"issue_identifier": i, "attempt": 1, "dispatched_at": iso(NOW - d), "due_at": iso(NOW + shift + k)}
+                         for k, (i, d) in enumerate((("ONS-81", 600), ("ONS-80", 900), ("ONS-83", 300)))]
+        fleet = build_fleet([("p1", s, None)], MORE, now=NOW, history=history_with([], []))
+        return [lane_idents(worker(fleet, n), "next") for n in ("p1", "taichi")]
+    # The first dispatched takes the first free slot, wherever in the minute Sortie puts their retries.
+    assert order(-20) == order(5) == [[["ONS-83"], [], ["ONS-80"]], [[], ["ONS-81"]]]
