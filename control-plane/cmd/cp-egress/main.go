@@ -32,7 +32,13 @@ func run() error {
 	flag.StringVar(&cfg.IdentityHeader, "identity-header", egress.DefaultIdentityHeader, "the header Pomerium names the worker in")
 	flag.StringVar(&cfg.Nono, "nono", "nono:7690", "nono's proxy, host:port")
 	flag.StringVar(&cfg.NonoPassFile, "nono-pass-file", "/run/secrets/nono-pass", "the credential nono's proxy takes")
+	var lp egress.LiveProof
+	flag.StringVar(&lp.Nono, "live-proof-nono", "", "the live-proof nono's proxy, host:port; empty: no live-proof egress")
+	flag.StringVar(&lp.JobsFile, "live-proof-jobs-file", "", "the file of the live-proof jobs that run, one per line")
 	flag.Parse()
+	if lp.Nono != "" || lp.JobsFile != "" {
+		cfg.LiveProof = &lp
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	g, err := egress.New(cfg, log)
 	if err != nil {

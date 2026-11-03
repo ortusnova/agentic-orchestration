@@ -9,6 +9,10 @@ A story is, in order of precedence:
 - ``needs_rereview``: a person must look again (a cancelled blocker, or an
   unverified no-change claim);
 - ``frozen``: an agent started it, so its content can no longer change;
+- ``building``, ``in_review``, ``click_proofs`` and ``merging``: a started
+  ``review: ui`` story, while agents build it, while its review runs, once
+  its review passed and Sortie waits for the click-proofs on its preview,
+  and once they are recorded and Sortie merges it (see :func:`ui_status`);
 - ``needs_spec``: no approval matches, it covers no requirement, and it is
   not delivered: it cannot be approved until it has a spec;
 - ``draft``: no approval matches its current content;
@@ -19,6 +23,12 @@ A story is, in order of precedence:
 
 A story that names its pull requests is never the agents' work: no sync
 creates or releases it.
+
+A ``review: ui`` story that covers a requirement needs no approval here: the
+operator approved its design prototype before it was written, and Sortie
+merges its pull request once its review, CI and click-proofs pass. It reads
+as approved stories do (``ready``, ``held``, ``released``) until it starts.
+No one approves it, so it never reads ``draft``.
 """
 
 from __future__ import annotations
@@ -78,6 +88,34 @@ def frozen_set(stories: dict[str, dict], approvals: dict[str, dict], tracker: di
     return out
 
 
+def built_unapproved(node: dict[str, Any], review: str | None) -> bool:
+    """Whether a story is built before it is approved: a ``review: ui``
+    story that covers a requirement. A sync releases it with no approver."""
+    return node.get("kind") == "story" and review == "ui" and bool(node.get("covers"))
+
+
+def ui_status(t: dict[str, Any] | None, phase: str | None, preview: dict[str, Any] | None, merge_waits: bool) -> str:
+    """Where a started ui story is on its way to Sortie's merge. ``phase`` is
+    that of its run, when one runs or waits to run again; ``merge_waits``
+    whether Sortie's merge watch holds its pull request, which it does once
+    the review passed. Nothing in it waits on a person:
+
+    - ``building``: its build runs;
+    - ``in_review``: its review runs, a fix run of the review rule runs, or
+      the build is over and the review is next;
+    - ``click_proofs``: the review passed, and Sortie's merge waits for the
+      click-proofs on its preview, recorded for its head;
+    - ``merging``: the record names its head, and Sortie merges it.
+    """
+    if (t or {}).get("runtime"):
+        return "in_review" if phase in ("review", "fix") else "building"
+    if preview and preview.get("click_proofs"):
+        return "merging"
+    if merge_waits or preview:
+        return "click_proofs"
+    return "in_review"
+
+
 def delivery(refs: list[str] | None, pulls: dict[str, dict[str, Any]] | None) -> dict[str, Any] | None:
     """Whether the pull requests a story names delivered it, and each one's state."""
     if not refs:
@@ -89,9 +127,15 @@ def delivery(refs: list[str] | None, pulls: dict[str, dict[str, Any]] | None) ->
 
 def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: dict[str, dict],
             rereviews: dict[str, dict], tracker: dict[str, Any] | None,
-            pulls: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+            pulls: dict[str, dict[str, Any]] | None = None,
+            previews: dict[str, dict[str, Any]] | None = None, phases: dict[str, str] | None = None,
+            merge_waits: set[str] | None = None) -> dict[str, dict[str, Any]]:
     """The plan fields of each story node, by plan key. ``pulls`` holds what
-    GitHub reported of each pull request a story names."""
+    GitHub reported of each pull request a story names, ``previews`` the
+    preview of each ``review: ui`` story's pull request, ``phases`` the
+    phase of each story's run in Sortie's state, and ``merge_waits`` the
+    stories whose pull request Sortie's merge watch holds, all by tracker
+    identifier."""
     if not graph:
         return {}
     by_key = tracker_by_key(tracker)
@@ -100,11 +144,13 @@ def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: d
     story_keys = {n["plan_key"] for n in graph["nodes"] if n["kind"] == "story"}
     nodes = {n["plan_key"]: n for n in graph["nodes"]}
     approved = {n["plan_key"] for n in graph["nodes"] if n["kind"] == "story" and n["approval"] == "approved"}
+    ui = {key for key in story_keys if built_unapproved(nodes[key], (stories.get(key) or {}).get("review"))}
     deliveries = {key: delivery((stories.get(key) or {}).get("delivered_by"), pulls) for key in story_keys}
     delivered = {key for key, d in deliveries.items() if d and d["state"] == "delivered"}
-    # What lets a dependent go: approved, or delivered. A story whose pull
-    # requests do not confirm its delivery is not done, approved or not.
-    passes = (approved | delivered) - {key for key, d in deliveries.items() if d and key not in delivered}
+    # What lets a dependent go: approved, built before its approval, or
+    # delivered. A story whose pull requests do not confirm its delivery is
+    # not done, approved or not.
+    passes = (approved | ui | delivered) - {key for key, d in deliveries.items() if d and key not in delivered}
     blockers: dict[str, list[str]] = {}
     for b in graph["blocks"]:
         if b["blocker"] in story_keys and b["blocked"] in story_keys:
@@ -122,7 +168,12 @@ def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: d
             "supersedes": (stories.get(key) or {}).get("supersedes"),
             "stale_release": False,
             "delivery": deliveries[key],
+            "preview": None,
         }
+        ident = (t or {}).get("identifier")
+        if key in ui and ident and (previews or {}).get(ident) and not is_delivered(t, plan_states) \
+                and not (t or {}).get("terminal"):
+            fields["preview"] = previews[ident]
         if key in delivered:
             fields["plan_status"] = "delivered"
         elif deliveries[key]:
@@ -133,9 +184,12 @@ def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: d
         elif t and t.get("satisfaction") == "unverified_no_change":
             fields["plan_status"] = "needs_rereview"
             fields["rereview"] = {"reason": "unverified_no_change", "ref": t.get("unverified_reason") or ""}
+        elif fields["frozen"] and key in ui and not (t or {}).get("terminal"):
+            fields["plan_status"] = ui_status(t, (phases or {}).get(ident or ""), fields["preview"],
+                                              bool(ident) and ident in (merge_waits or set()))
         elif fields["frozen"]:
             fields["plan_status"] = "frozen"
-        elif key not in approved:
+        elif key not in approved and key not in ui:
             fields["plan_status"] = "draft"
             # Released before, edited since: it must come back before an agent takes it.
             fields["stale_release"] = bool(t and release and (t.get("state") or "").lower() == release and key in approvals)
@@ -156,7 +210,8 @@ def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: d
 
 def sync_graph(graph: dict[str, Any], fields: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """The graph a sync sends: version 2, with each story's release, review
-    gate, and approver.
+    gate, and approver. A ui story that covers a requirement goes as the
+    plan reads it, a draft, and Sortie syncs and releases it all the same.
 
     A story that names its pull requests goes as a draft, so the sync
     neither creates nor releases it, and a delivered one blocks nothing:
@@ -175,7 +230,8 @@ def sync_graph(graph: dict[str, Any], fields: dict[str, dict[str, Any]]) -> dict
         elif n["kind"] == "story" and f is not None:
             n["release"] = f["plan_status"] in ("ready", "released")
             n["review"] = f["review"]
-            if n["approval"] == "approved" and f["approved_by"]:
+            # A ui story carries no approver: its approval is its design prototype's.
+            if n["approval"] == "approved" and f["approved_by"] and f["review"] != "ui":
                 n["approved_by"] = f["approved_by"]
                 n["approved_at"] = _rfc3339(f["approved_at"])
         nodes.append(n)

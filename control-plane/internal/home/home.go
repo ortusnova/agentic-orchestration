@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -82,6 +83,52 @@ type Settings struct {
 	PublicURL string `json:"public_url"`
 	// ServerNames are the names Pomerium's certificate holds.
 	ServerNames []string `json:"server_names"`
+	Upstreams
+}
+
+// Upstreams are where Pomerium listens and where its routes go, when not
+// where the compose project has them (pomerium.Defaults). The stage-0
+// kit on p1 runs Pomerium on the host's network, in front of its own
+// Sortie and egress gate on loopback (dev/stage0/README.md).
+type Upstreams struct {
+	// Address is where Pomerium listens, such as :8443.
+	Address string `json:"address,omitempty"`
+	// Sortie is the base URL of Sortie, which only Pomerium reaches.
+	Sortie string `json:"sortie,omitempty"`
+	// Egress is the base URL of the egress gate.
+	Egress string `json:"egress,omitempty"`
+}
+
+// validate checks each upstream that is set.
+func (u Upstreams) validate() error {
+	for _, f := range []struct{ name, v string }{{"sortie", u.Sortie}, {"egress", u.Egress}} {
+		if f.v == "" {
+			continue
+		}
+		p, err := url.Parse(f.v)
+		if err != nil || p.Scheme != "http" || p.Host == "" || (p.Path != "" && p.Path != "/") {
+			return fmt.Errorf("%s URL %q: want http://host:port", f.name, f.v)
+		}
+	}
+	if u.Address != "" {
+		if _, port, err := net.SplitHostPort(u.Address); err != nil || port == "" {
+			return fmt.Errorf("address %q: want [host]:port", u.Address)
+		}
+	}
+	return nil
+}
+
+// apply sets the upstreams that are set on s.
+func (u Upstreams) apply(s *pomerium.Settings) {
+	if u.Address != "" {
+		s.Address = u.Address
+	}
+	if u.Sortie != "" {
+		s.Sortie = u.Sortie
+	}
+	if u.Egress != "" {
+		s.Egress = u.Egress
+	}
 }
 
 // LoadSettings reads settings.json.
@@ -123,11 +170,15 @@ func exists(p string) bool {
 // CA, Pomerium's server certificate for the public URL's host and
 // extra names, the egress CA, and every generated secret. It never
 // replaces a file that exists, except Pomerium's certificate when the
-// names change. It returns what it made.
-func (h Home) Init(publicURL string, extraNames []string) ([]string, error) {
+// names change. It records the public URL and up, which a zero value
+// leaves at the compose project's. It returns what it made.
+func (h Home) Init(publicURL string, extraNames []string, up Upstreams) ([]string, error) {
 	u, err := url.Parse(publicURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
 		return nil, fmt.Errorf("public URL %q: want https://host[:port]", publicURL)
+	}
+	if err := up.validate(); err != nil {
+		return nil, err
 	}
 	names := append([]string{u.Hostname()}, extraNames...)
 	var made []string
@@ -149,7 +200,7 @@ func (h Home) Init(publicURL string, extraNames []string) ([]string, error) {
 		made = append(made, h.CACert())
 	}
 	old, _ := h.LoadSettings()
-	s := Settings{PublicURL: publicURL, ServerNames: names}
+	s := Settings{PublicURL: publicURL, ServerNames: names, Upstreams: up}
 	sameNames := strings.Join(old.ServerNames, ",") == strings.Join(names, ",")
 	if !sameNames || !exists(h.Secret("cp-pomerium-key")) {
 		srv, err := ca.IssueServer(names)
@@ -224,6 +275,7 @@ func (h Home) Render() error {
 	}
 	ps := pomerium.Defaults
 	ps.PublicURL = s.PublicURL
+	s.apply(&ps)
 	b, err := pomerium.Render(ps, l)
 	if err != nil {
 		return err

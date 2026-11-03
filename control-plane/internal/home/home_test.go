@@ -15,7 +15,7 @@ import (
 func initHome(t *testing.T) Home {
 	t.Helper()
 	h := Home{Dir: t.TempDir()}
-	if _, err := h.Init("https://cp.example.org:8443", []string{"cp.lan"}); err != nil {
+	if _, err := h.Init("https://cp.example.org:8443", []string{"cp.lan"}, Upstreams{}); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -68,7 +68,7 @@ func TestInitKeepsWhatExists(t *testing.T) {
 	for _, f := range []string{h.CAKey(), h.Secret("cp-sortie-control-token"), h.Secret("cp-pomerium-key"), h.Secret("cp-egress-ca-key")} {
 		before[f], _ = os.ReadFile(f)
 	}
-	made, err := h.Init("https://cp.example.org:8443", []string{"cp.lan"})
+	made, err := h.Init("https://cp.example.org:8443", []string{"cp.lan"}, Upstreams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestInitKeepsWhatExists(t *testing.T) {
 			t.Errorf("a second init replaced %s", f)
 		}
 	}
-	made, err = h.Init("https://cp2.example.org:8443", nil)
+	made, err = h.Init("https://cp2.example.org:8443", nil, Upstreams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,6 +157,47 @@ func TestIssueRefusesABadName(t *testing.T) {
 		l, _ := workers.Load(h.WorkerList())
 		if len(l.Workers) != 0 {
 			t.Errorf("refused issues listed %v", l.Workers)
+		}
+	}
+}
+
+// The stage-0 kit on p1 runs Pomerium on the host's network, in front of
+// its own Sortie and egress gate on loopback: init records where, and
+// every render, after an issue or a revocation too, routes there.
+func TestInitRecordsTheUpstreams(t *testing.T) {
+	h := Home{Dir: t.TempDir()}
+	up := Upstreams{Address: ":8443", Sortie: "http://127.0.0.1:7680", Egress: "http://127.0.0.1:7692"}
+	if _, err := h.Init("https://p1.example.org:8443", nil, up); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.IssueWorker("taichi", nil); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := os.ReadFile(h.PomeriumConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"to": "http://127.0.0.1:7680"`, `"to": "http://127.0.0.1:7692"`, `"address": ":8443"`} {
+		if !strings.Contains(string(cfg), want) {
+			t.Errorf("the configuration lacks %s:\n%s", want, cfg)
+		}
+	}
+	if strings.Contains(string(cfg), "10.89.71.10") || strings.Contains(string(cfg), "egress-gate:") {
+		t.Errorf("the configuration still routes to the compose project's services:\n%s", cfg)
+	}
+	s, err := h.LoadSettings()
+	if err != nil || s.Upstreams != up {
+		t.Errorf("settings: %+v, %v; want the upstreams recorded", s, err)
+	}
+
+	for name, bad := range map[string]Upstreams{
+		"https Sortie": {Sortie: "https://127.0.0.1:7680"},
+		"a path":       {Egress: "http://127.0.0.1:7692/x"},
+		"no port":      {Address: "0.0.0.0"},
+		"not a URL":    {Sortie: "127.0.0.1:7680"},
+	} {
+		if _, err := (Home{Dir: t.TempDir()}).Init("https://p1.example.org:8443", nil, bad); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

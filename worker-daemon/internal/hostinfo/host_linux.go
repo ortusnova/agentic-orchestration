@@ -10,29 +10,37 @@ import (
 	"strings"
 )
 
-// memAvailable returns MemAvailable from /proc/meminfo, in bytes: the
-// kernel's estimate of what a new workload can use without swapping.
-func memAvailable() (uint64, error) {
+// memInfo returns MemAvailable and MemTotal from /proc/meminfo, in
+// bytes: the kernel's estimate of what a new workload can use without
+// swapping, and the host's memory.
+func memInfo() (available, total uint64, err error) {
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return 0, fmt.Errorf("hostinfo: %w", err)
+		return 0, 0, fmt.Errorf("hostinfo: %w", err)
 	}
 	return parseMeminfo(b)
 }
 
-func parseMeminfo(b []byte) (uint64, error) {
+func parseMeminfo(b []byte) (available, total uint64, err error) {
+	got := map[string]uint64{}
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
-		if len(fields) >= 2 && fields[0] == "MemAvailable:" {
-			kb, err := strconv.ParseUint(fields[1], 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("hostinfo: MemAvailable %q: %w", fields[1], err)
-			}
-			return kb * 1024, nil
+		if len(fields) < 2 || (fields[0] != "MemAvailable:" && fields[0] != "MemTotal:") {
+			continue
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("hostinfo: %s %q: %w", strings.TrimSuffix(fields[0], ":"), fields[1], err)
+		}
+		got[fields[0]] = kb * 1024
+	}
+	for _, k := range []string{"MemAvailable:", "MemTotal:"} {
+		if _, ok := got[k]; !ok {
+			return 0, 0, errors.New("hostinfo: /proc/meminfo has no " + strings.TrimSuffix(k, ":"))
 		}
 	}
-	return 0, errors.New("hostinfo: /proc/meminfo has no MemAvailable")
+	return got["MemAvailable:"], got["MemTotal:"], nil
 }
 
 // hasKVM reports whether this process can open /dev/kvm.

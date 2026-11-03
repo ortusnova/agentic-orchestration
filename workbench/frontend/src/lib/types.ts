@@ -1,4 +1,5 @@
 /** The merged graph the backend serves on /api/graph and /api/events. */
+import type { Fleet, RunState } from "./fleet";
 import type { HomeDoc } from "./home";
 
 export type NodeStatus = "draft" | "synced" | "orphaned";
@@ -24,6 +25,8 @@ export interface Question {
   /** When the story stopped, in Unix seconds, if Sortie says. */
   parked_at: number | null;
   reason: string | null;
+  /** The Sortie that holds the question, by name; absent from an older backend. */
+  sortie?: string;
 }
 
 export interface TrackerView {
@@ -34,6 +37,8 @@ export interface TrackerView {
   terminal: boolean;
   url: string | null;
   parent_id: string | null;
+  /** The story's pull request, as owner/repo#number, when Sortie holds it. */
+  pr?: string | null;
 }
 
 export interface GraphNode {
@@ -53,6 +58,8 @@ export interface GraphNode {
   runtime: Runtime | null;
   /** Stories only: the open question of a parked story. */
   question?: Question | null;
+  /** Stories only: where it runs or why it waits, its pull request, and what unblocks it. */
+  run_state?: RunState | null;
   // Stories only: the plan status the workbench derives from approvals and Sortie.
   plan_status?: PlanStatus | null;
   held_by?: string[];
@@ -60,13 +67,25 @@ export interface GraphNode {
   frozen?: boolean;
   approved_by?: { name: string; id: string } | null;
   approved_at?: number | null;
-  review?: "human" | "criteria";
+  review?: "human" | "criteria" | "ui";
   supersedes?: string | null;
   /** The pull requests the story names in delivered_by, as GitHub reports them; null when it names none. */
   delivery?: Delivery | null;
+  /** A ui story only: the preview of its pull request, once the kit deployed it; null before. */
+  preview?: Preview | null;
 }
 
-export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "building" | "in_review" | "click_proofs" | "merging" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+
+/** The preview of a ui story's pull request: its branch's read-only workbench. */
+export interface Preview {
+  url: string;
+  pull: string;
+  pull_url: string;
+  sha: string;
+  /** The head commit the pull request records the click-proofs for; null while it records none. */
+  click_proofs?: string | null;
+}
 
 /** One pull request a story names, as GitHub last reported it. */
 export interface DeliveryPull {
@@ -116,6 +135,8 @@ export interface MergedGraph {
   sync?: SyncStatus | null;
   /** The project home, computed with the graph. Absent from an older backend. */
   home?: HomeDoc | null;
+  /** What each worker does and what waits on it. Absent from an older backend. */
+  fleet?: Fleet | null;
   sortie: {
     reachable: boolean; error: string | null; capabilities: string[]; generated_at: string | null;
     /** The tracker project, and whether Sortie runs agents for it (it does for its configured project only). */
@@ -187,4 +208,6 @@ export interface ViewState {
   showCross: boolean;
   /** A milestone whose changes the project level marks. */
   mark?: string | null;
+  /** The story whose worker the chat pane shows, by tracker identifier. */
+  watch?: string | null;
 }

@@ -26,15 +26,16 @@ unitdir=$fake/units
 mkdir -p "$unitdir"
 
 # A host that ran the edge: its units, and the tunnels of two worker hosts.
+# nono and its token timer serve the egress gate now, and stay.
 for u in ortus-stage0-edge.service ortus-stage0-nono.service ortus-stage0-token.timer ortus-stage0-token.service \
   ortus-stage0-worker-tunnel@.service ortus-stage0-sortie.service; do : > "$unitdir/$u"; done
 printf 'ortus-stage0-worker-tunnel@taichi.service loaded active running tunnel\nortus-stage0-worker-tunnel@mac-mini.service loaded active running tunnel\n' > "$fake/tunnels"
 : > "$fake/log"
 retired=$(PATH=$fake:$PATH retire_edge "$unitdir" | sort | tr '\n' ' ')
 expect "every unit of the edge and each tunnel is retired" "$retired" \
-  "ortus-stage0-edge.service ortus-stage0-nono.service ortus-stage0-token.service ortus-stage0-token.timer ortus-stage0-worker-tunnel@mac-mini.service ortus-stage0-worker-tunnel@taichi.service "
-expect "each is stopped and disabled" "$(grep -c 'disable -q --now' "$fake/log")" 6
-expect "only Sortie's unit file is left" "$(ls "$unitdir")" ortus-stage0-sortie.service
+  "ortus-stage0-edge.service ortus-stage0-worker-tunnel@mac-mini.service ortus-stage0-worker-tunnel@taichi.service "
+expect "each is stopped and disabled" "$(grep -c 'disable -q --now' "$fake/log")" 3
+expect "Sortie's, nono's and the token timer's unit files are left" "$(cd "$unitdir" && printf "%s " *)" "ortus-stage0-nono.service ortus-stage0-sortie.service ortus-stage0-token.service ortus-stage0-token.timer "
 
 # A host that never ran it, or already retired it.
 : > "$fake/tunnels"

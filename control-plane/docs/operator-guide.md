@@ -234,16 +234,24 @@ check-latest` fails when Pomerium or nono has a newer release.
 
 ## Worker hosts: move from the edge
 
-The stage-1 edge (the edge, nono and the SSH tunnels on p1) is gone; on
-p1, the next `dev/stage0/stage0.sh` stops and removes its units
-(`ortus-stage0-edge`, `ortus-stage0-nono`, `ortus-stage0-token.timer` and
-each `ortus-stage0-worker-tunnel@<worker>`). Its state in the stage-0 home
-(`edge.json`, `workers/`, `nono-pass`, `egress-ca/`) is no longer read;
-delete it once the control plane runs. For each worker host: issue its
-certificate as above, point its daemon's `control_plane.url` at Pomerium
-with the three TLS files, replace its egress CA certificate with the
-control plane's, and restart the daemon. Nothing else on the worker host
-changes, and a remote-kind workflow names the flows by Pomerium's URL
+The stage-1 edge (the edge and the SSH tunnels on p1) is gone. On p1 the
+stage-0 kit runs this front in front of its own Sortie, as user units rather
+than the whole compose project (`dev/stage0/README.md`, "Worker hosts"):
+Pomerium, the image `compose.yaml` pins, on the host's network; the egress
+gate, `cp-egress`; and nono, with `nono/egress-profile.json`. Its CA, worker
+list and Pomerium's configuration are `cpctl`'s, in
+`$STAGE0_HOME/control-plane` (`cpctl init -address -sortie -egress` routes
+Pomerium to Sortie and the gate on loopback). The next
+`dev/stage0/stage0.sh` there stops and removes the edge's units
+(`ortus-stage0-edge` and each `ortus-stage0-worker-tunnel@<worker>`) and
+issues p1's own worker its certificate; `dev/stage0/worker-host.sh add HOST`
+issues a worker host's and copies it there, and `remove NAME` revokes it.
+
+For a worker host of a control plane run from this compose project: issue
+its certificate as above, point its daemon's `control_plane.url` at
+Pomerium with the three TLS files, replace its egress CA certificate with
+the control plane's, and restart the daemon. Nothing else on the worker
+host changes, and a remote-kind workflow names the flows by Pomerium's URL
 instead of the tunnel's loopback end.
 
 ## Check it

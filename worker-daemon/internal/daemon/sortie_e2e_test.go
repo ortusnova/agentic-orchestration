@@ -118,7 +118,10 @@ func sortieBins(t *testing.T) (sortie, gate string) {
 // .sortie/pr.json, and ends the turn. It exits when its input closes.
 // It reports no usage and streams no output on the protocol, so the
 // worker's usage reports alone decide how Sortie accounts for the run.
+// With the argument hold, it answers no prompt: the turn lasts until
+// the agent's input closes.
 func fakeACPAgent() int {
+	hold := len(os.Args) > 2 && os.Args[2] == "hold"
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	out := json.NewEncoder(os.Stdout)
@@ -140,6 +143,8 @@ func fakeACPAgent() int {
 				"agentInfo": map[string]any{"name": "fake-acp-agent", "version": "1"}})
 		case msg.Method == "session/new":
 			answer(msg.ID, map[string]any{"sessionId": "fake-session-1"})
+		case msg.Method == "session/prompt" && hold:
+			fmt.Fprintln(os.Stderr, "fake-acp-agent: holding the turn")
 		case msg.Method == "session/prompt":
 			if err := acpWork(); err != nil {
 				fmt.Fprintln(os.Stderr, "fake-acp-agent:", err)
@@ -374,11 +379,14 @@ type sortieRun struct {
 	nono     *fakeNono
 	upstream string
 	api      string
+	dir      string
 }
 
 type sortieSetup struct {
 	// usage is the daemon's usage command; nil configures none.
 	usage []string
+	// hold makes the agent hold its turn until its input closes.
+	hold bool
 }
 
 const e2eWorkflow = `---
@@ -402,7 +410,7 @@ workspace:
 db_path: {{dir}}/sortie.db
 agent:
   kind: agent-client-protocol
-  command: {{agent}} fake-acp-agent
+  command: {{agent}} fake-acp-agent{{agent_args}}
   max_turns: 1
   read_timeout_ms: 30000
 environment:
@@ -435,7 +443,7 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	r := &sortieRun{t: t, forge: newFakeGitea(t), nono: newFakeNono(t), upstream: filepath.Join(dir, "upstream.git")}
+	r := &sortieRun{t: t, forge: newFakeGitea(t), nono: newFakeNono(t), upstream: filepath.Join(dir, "upstream.git"), dir: dir}
 
 	// The local forge's repository: main with one commit.
 	runGit(t, dir, "init", "-q", "--bare", "upstream.git")
@@ -456,8 +464,12 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 	pki := newFrontPKI(t, "taichi")
 	r.front = startFront(t, pki, r.api, gateAddr)
 	frontPort := strings.TrimPrefix(r.front.URL, "https://127.0.0.1:")
+	agentArgs := ""
+	if s.hold {
+		agentArgs = " hold"
+	}
 	wf := strings.NewReplacer("{{dir}}", dir, "{{forge}}", r.forge.URL, "{{sortie_port}}", strconv.Itoa(sortiePort),
-		"{{front_port}}", frontPort, "{{agent}}", self).Replace(e2eWorkflow)
+		"{{front_port}}", frontPort, "{{agent}}", self, "{{agent_args}}", agentArgs).Replace(e2eWorkflow)
 	nonoAddr := strings.TrimPrefix(r.nono.URL, "http://")
 	for name, content := range map[string]string{
 		"issues.json": issues, "WORKFLOW.md": wf, "sortie-token": e2eControlToken + "\n", "nono-pass": e2eNonoPass + "\n",
@@ -696,5 +708,41 @@ func TestUnknownAmountOverTheWire(t *testing.T) {
 	}
 	if got.Unaccounted < 1 || got.TokensMeasured {
 		t.Errorf("run = measured %v, unaccounted turns %d; want spend occurred, amount unknown", got.TokensMeasured, got.Unaccounted)
+	}
+}
+
+// Scenario: Sortie cancels a job over the wire. ONS-7 moves to a
+// terminal state while its agent holds the turn on the worker, and
+// Sortie cancels the run. The worker releases the job: its machine is
+// deleted and no report of the attempt is accepted. A Sortie that
+// answers 410 for a job it no longer wants makes the daemon log the
+// release.
+func TestACancelledJobIsReleasedOverTheWire(t *testing.T) {
+	r := newSortieRun(t, sortieSetup{hold: true})
+	r.waitFor("the agent to hold its turn", 60*time.Second, func() bool {
+		return strings.Contains(r.daemon.String(), `msg="agent starting" job=ONS-7 attempt=1`) &&
+			strings.Contains(r.sortie.out.String(), "turn started")
+	})
+	machines := r.backend.Machines()
+	if len(machines) != 1 {
+		t.Fatalf("machines %d, want ONS-7's one", len(machines))
+	}
+	issues := `[{"id": "id-ONS-7", "identifier": "ONS-7", "title": "Speak the wire", "description": "One attempt over the wire.",
+  "priority": 1, "state": "Done", "labels": [], "url": "http://tracker.invalid/ONS-7"}]`
+	if err := os.WriteFile(filepath.Join(r.dir, "issues.json"), []byte(issues), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.waitFor("the machine to be deleted", 60*time.Second, machines[0].Deleted)
+	r.waitFor("the job to end", 30*time.Second, func() bool {
+		return strings.Contains(r.daemon.String(), "not reporting") || strings.Contains(r.daemon.String(), "report refused")
+	})
+	logs := r.daemon.String()
+	if strings.Contains(logs, `msg=reported job=ONS-7`) {
+		t.Errorf("Sortie accepted a report of the cancelled attempt:\n%s", logs)
+	}
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, "no longer wants the job") {
+			t.Log(line)
+		}
 	}
 }

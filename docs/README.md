@@ -25,4 +25,4 @@ workbench, which reaches each broker over HTTP.
 | [Sortie](../sortie/docs/README.md) | The orchestrator: our fork's documentation. |
 | [Specs](../specs/openspec/specs) | The requirements of every component, as OpenSpec specs. |
 | [Development setup](../dev/.env.example) | `dev/dev.sh` and its settings. |
-| [Stage 0 kit](../dev/stage0/README.md) | A persistent Sortie, workbench, broker and Huly on one host, with GitHub and smolvm. |
+| [Stage 0 kit](../dev/stage0/README.md) | The one Sortie, the workbench, the broker and Huly on p1, with GitHub, under the remote kind; the control plane's Pomerium in front of it, which every worker reaches it through with a client certificate; and a worker daemon on p1 and on each worker host. |

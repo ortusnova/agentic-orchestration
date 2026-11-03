@@ -19,9 +19,11 @@ import (
 
 const usage = `usage: cpctl [-home DIR] COMMAND
 
-  init -public-url https://HOST[:PORT] [-name NAME]...
+  init -public-url https://HOST[:PORT] [-name NAME]... [-address ADDR -sortie URL -egress URL]
                          make the CA, Pomerium's certificate, the egress CA and
-                         the generated secrets that are missing; render Pomerium
+                         the generated secrets that are missing; render Pomerium.
+                         -address, -sortie and -egress put Pomerium elsewhere than
+                         in the compose project, such as the stage-0 kit on p1
   worker issue NAME [-flows control,stdio,...]
                          issue NAME a client certificate and list it
   worker revoke NAME     take NAME off the worker list
@@ -105,13 +107,17 @@ func initCmd(h home.Home, args []string, out io.Writer) error {
 	public := fs.String("public-url", "", "the https URL worker hosts dial, Pomerium's")
 	var extra names
 	fs.Var(&extra, "name", "another name for Pomerium's certificate (repeatable)")
+	var up home.Upstreams
+	fs.StringVar(&up.Address, "address", "", "where Pomerium listens, [host]:port; empty: the compose project's")
+	fs.StringVar(&up.Sortie, "sortie", "", "Sortie's base URL, http://host:port; empty: the compose project's")
+	fs.StringVar(&up.Egress, "egress", "", "the egress gate's base URL, http://host:port; empty: the compose project's")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *public == "" {
 		return errors.New("init: -public-url is required")
 	}
-	made, err := h.Init(*public, extra)
+	made, err := h.Init(*public, extra, up)
 	if err != nil {
 		return err
 	}

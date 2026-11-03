@@ -5,6 +5,7 @@
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
   import QuestionBox from "./QuestionBox.svelte";
+  import RunState from "./RunState.svelte";
   import { workersOf, workerStatus } from "../lib/worker";
   import { renderInline, renderMarkdown } from "../lib/markdown";
   import { groupCovers, type ChangeRequirements, type CoveredRequirement, type SpecReader } from "../lib/spec";
@@ -51,6 +52,14 @@
   }
 
   const approver = $derived(!!actions && can("approver"));
+  const REVIEW_LABEL: Record<string, string> = { criteria: "acceptance criteria", human: "a person", ui: "acceptance criteria and click-proofs on a preview" };
+  // A started ui story on its way to Sortie's merge: nothing in it waits on a person.
+  const UI_TEXT: Record<string, string> = {
+    building: "Agents are building it. It needs no approval: its design prototype was approved before it was written. A review checks its criteria, then clicks the actions they name on its preview, and Sortie merges it.",
+    in_review: "Its review runs: an agent session checks its acceptance criteria, or clicks the actions they name on its preview. Sortie merges it once its review, CI and click-proofs pass.",
+    click_proofs: "Its review passed. Sortie merges it once the click-proofs on its preview are recorded on its pull request for its head commit.",
+    merging: "Its click-proofs passed on its preview, recorded for its head commit: Sortie merges it.",
+  };
   const epicStories = $derived(view.epic ? model.storiesOf(view.epic) : []);
   const drafts = $derived(epicStories.filter((n) => n.plan_status === "draft"));
   const epicNeverApproved = (epic: GraphNode) => model.storiesOf(epic.plan_key).every((n) => n.approval !== "approved");
@@ -132,13 +141,13 @@
           <span class="chip {model.statusClass(node)}"><i></i>{model.statusLabel(node)}</span>
           {#if node.status === "orphaned"}<span class="chip">orphaned: no longer in the plan</span>{/if}
           {#if node.plan_status}<span class="chip plan {node.plan_status}" data-plan-status={node.plan_status}>{planStatusLabel(node.plan_status)}</span>{/if}
-          {#if node.kind === "story" && node.review}<span class="chip">review: {node.review === "criteria" ? "acceptance criteria" : "a person"}</span>{/if}
+          {#if node.kind === "story" && node.review}<span class="chip">review: {REVIEW_LABEL[node.review] ?? node.review}</span>{/if}
           {#if approver && actions}
             {#if node.kind === "epic" && node.approval === "draft" && epicNeverApproved(node) && epicHasDrafts(node)}
               <button type="button" class="chip go" data-act="approve-epic" disabled={!!busy}
                 onclick={() => act("approve", () => actions.approve({ epic: node.change }))}>{busy === "approve" ? "Approving…" : "Approve the epic"}</button>
             {/if}
-            {#if node.kind === "story" && (node.plan_status === "draft" || node.plan_status === "needs_rereview") && !node.frozen}
+            {#if node.kind === "story" && node.review !== "ui" && (node.plan_status === "draft" || node.plan_status === "needs_rereview") && !node.frozen}
               <button type="button" class="chip go" data-act="approve" disabled={!!busy}
                 onclick={() => act("approve", () => actions.approve({ keys: [node.plan_key] }))}>{busy === "approve" ? "Approving…" : "Approve"}</button>
             {/if}
@@ -182,10 +191,20 @@
           <p class="why warn" data-why="delivery">{deliveryText(node.delivery)}</p>
         {:else if node.plan_status === "needs_spec"}
           <p class="why" data-why="needs-spec">It covers no requirement, so it cannot be approved. Plan its spec first.</p>
+        {:else if node.plan_status && UI_TEXT[node.plan_status]}
+          <p class="why" data-why={node.plan_status}>{UI_TEXT[node.plan_status]}{#if node.plan_status === "click_proofs" && !node.preview} Its preview is deployed once CI passes on its head.{/if}</p>
+          {#if node.preview}
+            <p class="why" data-why="preview">Preview: <a href={node.preview.url} target="_blank" rel="noopener">{node.preview.url}</a>, of <a href={node.preview.pull_url || undefined} target="_blank" rel="noopener">{node.preview.pull}</a>{#if node.preview.sha} at <code>{node.preview.sha.slice(0, 12)}</code>{/if}.</p>
+          {/if}
         {:else if node.plan_status === "frozen"}
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
         {#if node.approved_by}<p class="approver">Approved by {node.approved_by.name}{#if node.approved_at} · {new Date(node.approved_at * 1000).toLocaleString()}{/if}</p>{/if}
+
+        {#if node.kind === "story" && node.run_state}
+          <RunState run={node.run_state} story={node.plan_key} canAct={approver} onopen={onwatch ? () => onwatch(node) : undefined}
+            onsessions={actions?.sessions ? (n) => actions.sessions!(node.plan_key, n) : undefined} />
+        {/if}
 
         {#if node.kind === "story" && node.question}
           <div class="asks" data-asks={node.plan_key}>

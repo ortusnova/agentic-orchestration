@@ -57,6 +57,13 @@ type Daemon struct {
 	mu   sync.Mutex
 	jobs map[string]*job
 	wg   sync.WaitGroup
+
+	// The machines no Sortie started, as last listed, and when each
+	// was first seen.
+	umu       sync.Mutex
+	unmanaged []protocol.Unmanaged
+	firstSeen map[string]time.Time
+	listedAt  time.Time
 }
 
 // DefaultHeartbeat is used until the first check-in answers.
@@ -193,6 +200,9 @@ func (d *Daemon) Free(s hostinfo.Snapshot) protocol.Free {
 	}
 }
 
+// runSlots is how many jobs run at once on the host of snapshot s.
+func (d *Daemon) runSlots(s hostinfo.Snapshot) int { return d.cfg.Slots(s.CPUs, s.MemTotalGiB) }
+
 // Declaration is the check-in body for snapshot s.
 func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	running, _ := d.reserved()
@@ -200,8 +210,11 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	if d.backendOK.Load() {
 		backends = append(backends, d.backend.Name())
 	}
-	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested, Backends: backends,
-		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s)}
+	_, r := d.reserved()
+	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
+		RunSlots: d.runSlots(s), Running: running, Free: d.Free(s),
+		Used:      protocol.Free{CPU: r.CPU, MemGiB: r.MemGiB, DiskGiB: r.DiskGiB},
+		Unmanaged: d.unmanagedSeen()}
 }
 
 func (d *Daemon) checkIn(ctx context.Context) error {
@@ -209,6 +222,7 @@ func (d *Daemon) checkIn(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.listUnmanaged(ctx)
 	t, err := d.cp.CheckIn(ctx, d.Declaration(s))
 	if err != nil {
 		return err
@@ -231,12 +245,12 @@ func (d *Daemon) pollWhileFree(ctx context.Context) {
 		if !d.backendOK.Load() {
 			return
 		}
-		if n, _ := d.reserved(); n >= d.cfg.RunSlots {
-			return
-		}
 		s, err := d.probe.Snapshot(d.cfg.DiskPath)
 		if err != nil {
 			d.log.Warn("cannot read the host", slog.String("error", err.Error()))
+			return
+		}
+		if n, _ := d.reserved(); n >= d.runSlots(s) {
 			return
 		}
 		free, sj := d.Free(s), d.cfg.SmallestJob
@@ -274,12 +288,12 @@ func (d *Daemon) refusal(o *protocol.Offer) string {
 	if _, err := d.cfg.Smolvm.Pack(o.Run.Image); err != nil {
 		return err.Error()
 	}
-	if n, _ := d.reserved(); n >= d.cfg.RunSlots {
-		return fmt.Sprintf("all %d run slots are in use", d.cfg.RunSlots)
-	}
 	s, err := d.probe.Snapshot(d.cfg.DiskPath)
 	if err != nil {
 		return "cannot read the host: " + err.Error()
+	}
+	if n, _ := d.reserved(); n >= d.runSlots(s) {
+		return fmt.Sprintf("all %d run slots are in use", d.runSlots(s))
 	}
 	f, r := d.Free(s), o.Job.Requires
 	switch {
@@ -350,7 +364,10 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 		case errors.Is(err, cp.ErrLeaseLost):
 			log.Warn("report refused: the lease is gone", slog.String("outcome", r.Outcome))
 			return
-		case errors.As(err, &se):
+		case errors.Is(err, cp.ErrJobGone):
+			log.Warn("report refused: the control plane no longer wants the job", slog.String("outcome", r.Outcome), slog.String("error", err.Error()))
+			return
+		case errors.As(err, &se) && se.Status < 500:
 			log.Error("report refused", slog.String("error", err.Error()))
 			return
 		}
@@ -365,6 +382,8 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 
 var (
 	errLeaseLost = errors.New("the control plane ended the attempt: lease lost")
+	errJobGone   = errors.New("the control plane no longer wants the job")
+	errSilent    = errors.New("no heartbeat accepted for longer than the lease")
 	errShutdown  = errors.New("worker daemon shut down")
 )
 

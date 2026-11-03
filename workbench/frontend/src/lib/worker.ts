@@ -11,9 +11,19 @@ export interface RunInfo {
   follow: boolean;
 }
 
+/** The events Sortie kept of a story's last run, after it ended. */
+export interface LastTranscript {
+  identifier: string;
+  dispatch_id: string | null;
+  sortie: string;
+  events: { seq: number | null; at: string | null; event: string | null; text: string; tool_line?: string | null }[];
+}
+
 export interface WorkerHandlers {
   onEvent: (e: BrokerEvent) => void;
   onRun: (r: RunInfo) => void;
+  /** Nothing runs now: the events Sortie kept of the story's last run. */
+  onTranscript?: (t: LastTranscript) => void;
   onEnded: () => void;
   onDown: () => void;
 }
@@ -34,6 +44,7 @@ export function httpWorker(slug: string, identifier: string): WorkerClient {
       const es = new EventSource(api.workerEvents(identifier), { withCredentials: true });
       es.onmessage = (e) => h.onEvent(JSON.parse(e.data));
       es.addEventListener("run", (e) => h.onRun(JSON.parse((e as MessageEvent).data)));
+      es.addEventListener("transcript", (e) => h.onTranscript?.(JSON.parse((e as MessageEvent).data)));
       es.addEventListener("ended", () => {
         es.close();
         h.onEnded();

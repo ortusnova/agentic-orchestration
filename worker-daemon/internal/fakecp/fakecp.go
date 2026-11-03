@@ -1,6 +1,6 @@
 // Package fakecp is a fake control plane for tests. It serves worker
 // API protocol 1 as Sortie does under environment.kind remote (the same
-// routes, bodies, header checks and 400, 401 and 409 answers), and the
+// routes, bodies, header checks and 400, 401, 409 and 410 answers), and the
 // five data-plane flows of each job it offers, each behind that job's
 // flow token. It records every request in order.
 package fakecp
@@ -58,6 +58,9 @@ type lease struct {
 	expires time.Time
 	ended   bool
 	lost    bool
+	// gone is an attempt Sortie cancelled: its heartbeat, report and
+	// flows answer 410 job_gone.
+	gone bool
 }
 
 // Fake is a fake control plane.
@@ -77,6 +80,12 @@ type Fake struct {
 	workers  map[string]protocol.Declaration
 	answer   map[string]int // job key → status the heartbeat answers
 	attempts map[string]*attemptData
+	// down answers every request 502, as a proxy in front of a Sortie
+	// that is restarting does.
+	down bool
+	// unserved holds the attempts whose stdio stream is answered 404,
+	// as an attempt Sortie has not opened, while their lease is kept.
+	unserved map[string]bool
 }
 
 // attemptData is what the worker sent on an attempt's flows.
@@ -85,8 +94,12 @@ type attemptData struct {
 	exit           *int
 	streamOpened   bool
 	streamEnded    bool
-	result         *Result
-	usage          []protocol.Usage
+	// stream is the open stdio stream; breaks counts the streams the
+	// fake broke, as a Sortie that restarts breaks them.
+	stream *stdio.Conn
+	breaks int
+	result *Result
+	usage  []protocol.Usage
 }
 
 // Result is what the worker returned on the bundles flow.
@@ -95,6 +108,10 @@ type Result struct {
 	Bundle []byte
 	// PR is the pr part; nil when the worker left it out.
 	PR []byte
+	// Status is the status part; nil when the worker left it out.
+	Status []byte
+	// Criteria is the criteria part; nil when the worker left it out.
+	Criteria []byte
 	// ContentType is the request's media type.
 	ContentType string
 }
@@ -104,7 +121,8 @@ func key(job string, attempt int) string { return job + "#" + strconv.Itoa(attem
 // New starts a fake on loopback.
 func New() *Fake {
 	f := &Fake{LeaseMS: 3000, jobs: map[string]Job{}, tokens: map[string]map[string]string{}, leases: map[string]*lease{},
-		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{}}
+		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{},
+		unserved: map[string]bool{}}
 	f.Server = httptest.NewServer(f)
 	return f
 }
@@ -149,11 +167,94 @@ func (f *Fake) Declaration(worker string) (protocol.Declaration, bool) {
 	return d, ok
 }
 
+// Beats returns the bodies of the attempt's accepted heartbeats, in order.
+func (f *Fake) Beats(job string, attempt int) []protocol.Beat {
+	var out []protocol.Beat
+	for _, e := range f.Events() {
+		if e.Kind != "heartbeat" || e.Job != job || e.Attempt != attempt || e.Status != http.StatusOK {
+			continue
+		}
+		var b protocol.Beat
+		_ = json.Unmarshal(e.Body, &b)
+		out = append(out, b)
+	}
+	return out
+}
+
 // Offer queues a job.
 func (f *Fake) Offer(j Job) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pending = append(f.pending, j)
+}
+
+// Restart breaks the attempt's open stdio stream as a Sortie that stops
+// breaks it, without the C frame, and answers every request 502 until
+// [Fake.Up]; the next stream is then accepted, and its input closed
+// after StdioInput whatever KeepInputOpen says. The lease and the tokens
+// stay, as a restarted Sortie restores them.
+func (f *Fake) Restart(job string, attempt int) {
+	f.mu.Lock()
+	a := f.data(key(job, attempt))
+	c := a.stream
+	a.stream, a.streamOpened = nil, false
+	a.breaks++
+	f.down = true
+	f.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// Up ends a [Fake.Restart]: requests are served again, and each lease
+// lasts LeaseMS from now, as a restarted Sortie restores it.
+func (f *Fake) Up() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = false
+	for _, l := range f.leases {
+		if !l.ended && !l.lost {
+			l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
+		}
+	}
+}
+
+// Cancel ends the attempt as a Sortie that no longer wants the job
+// does: its heartbeat, report and flows answer 410 job_gone from now on,
+// and its open stdio stream, if any, is closed without the C frame.
+func (f *Fake) Cancel(job string, attempt int) {
+	f.mu.Lock()
+	k := key(job, attempt)
+	if l := f.leases[k]; l != nil {
+		l.gone = true
+	}
+	a := f.data(k)
+	c := a.stream
+	a.stream = nil
+	f.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// Unserve answers the attempt's stdio stream 404, as an attempt Sortie
+// has not opened, while its heartbeats keep the lease: the worker never
+// gets its stream back.
+func (f *Fake) Unserve(job string, attempt int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unserved[key(job, attempt)] = true
+}
+
+// Streams counts the stdio streams the attempt opened.
+func (f *Fake) Streams(job string, attempt int) int {
+	n := 0
+	for _, e := range f.Events() {
+		if e.Kind == "stdio" && e.Job == job && e.Attempt == attempt && e.Status == http.StatusSwitchingProtocols {
+			n++
+		}
+	}
+	return n
 }
 
 // AnswerHeartbeat makes every later heartbeat for the attempt answer
@@ -253,6 +354,14 @@ func problem(w http.ResponseWriter, code int, kind, msg string) {
 
 // ServeHTTP routes the worker API, the flows, and the egress proxy.
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	down := f.down
+	f.mu.Unlock()
+	if down {
+		http.Error(w, "the control plane is restarting", http.StatusBadGateway)
+		f.record(Event{Kind: "down", Status: http.StatusBadGateway})
+		return
+	}
 	if r.Method == http.MethodConnect || r.URL.IsAbs() {
 		f.egress(w, r)
 		return
@@ -313,7 +422,7 @@ func (f *Fake) workerAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[4] {
 	case "heartbeat":
-		f.heartbeat(w, id, job, attempt)
+		f.heartbeat(w, id, job, attempt, body)
 	case "report":
 		f.report(w, id, job, attempt, body)
 	default:
@@ -363,6 +472,13 @@ func (f *Fake) checkIn(w http.ResponseWriter, id string, body []byte) {
 		if n.v < 0 {
 			invalid = append(invalid, n.p)
 		}
+	}
+	// Used and unmanaged are optional, as Sortie ignores what it does not know.
+	if v, ok := raw["used"]; ok {
+		_ = json.Unmarshal(v, &d.Used)
+	}
+	if v, ok := raw["unmanaged"]; ok {
+		_ = json.Unmarshal(v, &d.Unmanaged)
 	}
 	if len(missing) > 0 || len(invalid) > 0 {
 		reply(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_checkin", "message": "bad declaration"},
@@ -447,7 +563,7 @@ func (f *Fake) live(id, job string, attempt int) *lease {
 	return l
 }
 
-func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int) {
+func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, body []byte) {
 	k := key(job, attempt)
 	f.mu.Lock()
 	if code, ok := f.answer[k]; ok {
@@ -458,6 +574,12 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int) {
 		f.mu.Unlock()
 		problem(w, code, "lease_lost", "the control plane ended the attempt")
 		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: code})
+		return
+	}
+	if l := f.leases[k]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone: Sortie withdrew attempt "+strconv.Itoa(attempt)+" of job "+job)
+		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: http.StatusGone})
 		return
 	}
 	l := f.live(id, job, attempt)
@@ -471,7 +593,7 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int) {
 	exp := l.expires
 	f.mu.Unlock()
 	reply(w, http.StatusOK, protocol.Lease{Expires: exp.UTC()})
-	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200})
+	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200, Body: body})
 }
 
 func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body []byte) {
@@ -487,6 +609,12 @@ func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body [
 		return
 	}
 	f.mu.Lock()
+	if l := f.leases[key(job, attempt)]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone")
+		f.record(Event{Kind: "report", Job: job, Attempt: attempt, Status: http.StatusGone, Body: body})
+		return
+	}
 	l := f.live(id, job, attempt)
 	if l == nil {
 		f.mu.Unlock()
@@ -552,6 +680,21 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(protocol.ProtocolHeader) != "1" {
 		problem(w, http.StatusBadRequest, "unsupported_protocol", "send "+protocol.ProtocolHeader+": 1")
 		f.record(Event{Kind: "bad-protocol", Job: job, Attempt: attempt, Status: 400})
+		return
+	}
+	f.mu.Lock()
+	l := f.leases[key(job, attempt)]
+	gone := l != nil && l.gone
+	unserved := f.unserved[key(job, attempt)] && flow == protocol.FlowStdio
+	f.mu.Unlock()
+	if gone && f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
+		problem(w, http.StatusGone, "job_gone", "the job's attempt has ended; release its machine")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
+	if unserved {
+		problem(w, http.StatusNotFound, "not_found", "the attempt is not open")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusNotFound})
 		return
 	}
 	if !f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
@@ -626,8 +769,20 @@ func (f *Fake) result(w http.ResponseWriter, r *http.Request, job string, attemp
 				return
 			}
 			res.PR = b
+		case protocol.ResultStatusPart:
+			if len(b) > protocol.MaxStatusFile {
+				refuse(http.StatusRequestEntityTooLarge, "the status part exceeds 4 KiB")
+				return
+			}
+			res.Status = b
+		case protocol.ResultCriteriaPart:
+			if len(b) > protocol.MaxCriteriaFile {
+				refuse(http.StatusRequestEntityTooLarge, "the criteria part exceeds 64 KiB")
+				return
+			}
+			res.Criteria = b
 		default:
-			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr", part.FormName()))
+			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr, status, criteria", part.FormName()))
 			return
 		}
 	}
@@ -710,6 +865,8 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 	f.mu.Lock()
 	j := f.jobs[k]
 	a.streamOpened = true
+	a.stream = c
+	keepOpen := j.KeepInputOpen && a.breaks == 0
 	f.mu.Unlock()
 	f.record(Event{Kind: "stdio", Job: job, Attempt: attempt, Status: 101})
 	go func() {
@@ -718,7 +875,7 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 				return
 			}
 		}
-		if !j.KeepInputOpen {
+		if !keepOpen {
 			_ = c.WriteFrame(stdio.StdinClosed, nil)
 		}
 	}()

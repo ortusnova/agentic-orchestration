@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -73,7 +74,32 @@ func fakeAgent() int {
 		time.Sleep(time.Hour)
 		return 0
 	}
-	if d, err := time.ParseDuration(os.Getenv("AGENT_DELAY")); err == nil {
+	// hold-first: the first start in a workspace holds its turn until
+	// its input ends, as an agent mid-turn when the control plane
+	// restarts; a later start works.
+	if os.Getenv("AGENT_MODE") == "hold-first" {
+		if _, err := os.Stat("held.txt"); errors.Is(err, os.ErrNotExist) {
+			_ = os.WriteFile("held.txt", []byte("held\n"), 0o600)
+			fmt.Println("holding")
+			_, _ = io.Copy(io.Discard, in)
+			return 9
+		}
+	}
+	// AGENT_STEPS: steps the agent reports, one per AGENT_DELAY, as a
+	// vm chain writes its steps to its step file.
+	if steps := os.Getenv("AGENT_STEPS"); steps != "" {
+		d, _ := time.ParseDuration(os.Getenv("AGENT_DELAY"))
+		for s := range strings.SplitSeq(steps, ",") {
+			f, err := os.OpenFile(os.Getenv("SORTIE_STEP_FILE"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "step file:", err)
+				return 8
+			}
+			_, _ = fmt.Fprintln(f, s)
+			_ = f.Close()
+			time.Sleep(d)
+		}
+	} else if d, err := time.ParseDuration(os.Getenv("AGENT_DELAY")); err == nil {
 		time.Sleep(d)
 	}
 	if err := modelRequest(); err != nil {
@@ -93,6 +119,13 @@ func fakeAgent() int {
 	}
 	if err := os.WriteFile(".sortie/pr.json", []byte(testPR), 0o600); err != nil {
 		return 6
+	}
+	for env, file := range map[string]string{"AGENT_STATUS": ".sortie/status", "AGENT_CRITERIA": ".sortie/criteria.json"} {
+		if v := os.Getenv(env); v != "" {
+			if err := os.WriteFile(file, []byte(v), 0o600); err != nil {
+				return 6
+			}
+		}
 	}
 	gitSteps := [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=agent@example.invalid", "commit", "-q", "-m", "agent work"}}
 	switch os.Getenv("AGENT_GIT") {
@@ -241,6 +274,12 @@ type setup struct {
 	// backend and pack replace the fake machines with a real backend.
 	backend machine.Backend
 	pack    string
+	// images is the configuration's smolvm.images.
+	images map[string]any
+	// nested, when set, is the configuration's smolvm.nested.
+	nested any
+	// autoSlots leaves run_slots out, so the slots follow the host.
+	autoSlots bool
 }
 
 func defaults() setup {
@@ -281,8 +320,11 @@ func newHarness(t *testing.T, s setup) *harness {
 		"floor":         map[string]any{"disk_gib": s.floorDisk},
 		"smallest_job":  s.smallest,
 		"state_dir":     state,
-		"smolvm":        map[string]any{"packs": map[string]string{testImage: pack}},
+		"smolvm":        map[string]any{"packs": map[string]string{testImage: pack}, "images": s.images, "nested": s.nested},
 		"log_level":     "debug",
+	}
+	if s.autoSlots {
+		delete(doc, "run_slots")
 	}
 	if !s.noUsage {
 		doc["usage_commands"] = map[string][]string{"*": usage}
@@ -392,6 +434,11 @@ func seedBundle(t *testing.T, branch string) []byte {
 
 //nolint:unparam // every scenario names ONS-7, as the spec does
 func (h *harness) offer(id string, attempt int, env map[string]string) {
+	h.offerJob(id, attempt, env, nil)
+}
+
+// offerJob offers a job as offer does, adjusted by adjust.
+func (h *harness) offerJob(id string, attempt int, env map[string]string, adjust func(*fakecp.Job)) {
 	self, _ := os.Executable()
 	if env == nil {
 		env = map[string]string{}
@@ -399,14 +446,18 @@ func (h *harness) offer(id string, attempt int, env map[string]string) {
 	env["SORTIE_ISSUE_IDENTIFIER"] = id
 	env["SORTIE_ISSUE_BRANCH"] = "sortie/" + id
 	env["GIT_CONFIG_GLOBAL"] = "/dev/null"
-	h.fake.Offer(fakecp.Job{
+	j := fakecp.Job{
 		ID: id, Attempt: attempt,
 		Requires: protocol.Requires{Capabilities: []string{"smolvm"}, CPU: 2, MemGiB: 4, DiskGiB: 10},
 		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: self, Args: []string{"fake-agent"}, Env: env,
 			Credentials: []protocol.RunCredential{{Name: "anthropic", Env: "ANTHROPIC_API_KEY", Placeholder: "sortie-credential-anthropic", Hosts: []string{"api.anthropic.com"}}}},
 		Seed:       seedBundle(h.t, "sortie/"+id),
 		StdioInput: []string{"hello agent\n"},
-	})
+	}
+	if adjust != nil {
+		adjust(&j)
+	}
+	h.fake.Offer(j)
 }
 
 //nolint:unparam // every scenario names ONS-7, as the spec does

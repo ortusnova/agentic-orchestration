@@ -4,7 +4,10 @@
 // CONNECT only when Sortie's token introspection says its job token is
 // live and granted for the egress flow, logs it with the worker, job and
 // attempt, and tunnels it through nono's proxy, which holds the
-// credentials and decides the host.
+// credentials and decides the host. A live-proof job that runs gets a
+// second nono's, of the live-proof profile, instead. While Sortie cannot
+// answer, as while it restarts, the gate answers 503, which a worker
+// retries, never 407.
 package egress
 
 import (
@@ -48,6 +51,21 @@ type Config struct {
 	Nono string
 	// NonoPassFile holds the credential nono's proxy takes.
 	NonoPassFile string
+	// LiveProof, when set, is the egress of live-proof jobs: the jobs
+	// its file names go through a second nono, of the live-proof profile.
+	LiveProof *LiveProof
+}
+
+// LiveProof is the egress of live-proof jobs (agent-platform/run-supervision,
+// "A live criterion a story's machine cannot run becomes a live-proof job").
+type LiveProof struct {
+	// Nono is the host:port of the nono proxy that runs the live-proof
+	// profile. It takes the same credential as Config.Nono.
+	Nono string
+	// JobsFile lists the job of each live proof that runs, one issue
+	// identifier per line, as stage0-live-proofs writes it. A missing file
+	// lists none.
+	JobsFile string
 }
 
 // Grant is what Sortie's introspection says a live token grants.
@@ -76,6 +94,14 @@ func New(cfg Config, log *slog.Logger) (*Gate, error) {
 	}
 	if cfg.Nono == "" {
 		return nil, errors.New("nono: the proxy address is missing")
+	}
+	if lp := cfg.LiveProof; lp != nil {
+		if lp.Nono == "" || lp.Nono == cfg.Nono {
+			return nil, errors.New("live proof: want the live-proof nono's address, apart from nono's")
+		}
+		if lp.JobsFile == "" {
+			return nil, errors.New("live proof: the jobs file is missing")
+		}
 	}
 	control, err := ReadSecret(cfg.ControlTokenFile)
 	if err != nil {
@@ -122,7 +148,11 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host := r.Host
-	grant, ok := g.admit(r.Context(), proxyToken(r))
+	grant, ok, err := g.admit(r.Context(), proxyToken(r))
+	if err != nil {
+		unavailable(w)
+		return
+	}
 	if !ok {
 		g.log.Info("egress refused", slog.String("worker", worker), slog.String("host", host), slog.String("reason", "no live egress token"))
 		w.Header().Set("Proxy-Authenticate", `Bearer realm="sortie-job"`)
@@ -130,7 +160,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attrs := []any{slog.String("worker", worker), slog.String("job", grant.Job), slog.Uint64("attempt", grant.Attempt), slog.String("host", host)}
-	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", g.cfg.Nono)
+	nono := g.cfg.Nono
+	if g.liveProof(grant.Job) {
+		nono = g.cfg.LiveProof.Nono
+		attrs = append(attrs, slog.String("profile", "live-proof"))
+	}
+	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", nono)
 	if err != nil {
 		g.log.Warn("egress unreachable", append(attrs, slog.String("error", err.Error()))...)
 		http.Error(w, "egress is unreachable", http.StatusBadGateway)
@@ -178,19 +213,51 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // admit asks Sortie what token grants, and admits only an egress grant.
-func (g *Gate) admit(ctx context.Context, token string) (Grant, bool) {
+// An error means Sortie could not answer, as while it restarts: nothing
+// is admitted, but the token is not refused either.
+func (g *Gate) admit(ctx context.Context, token string) (Grant, bool, error) {
 	if token == "" {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
 	grant, err := g.introspect(ctx, token)
 	if err != nil {
 		g.log.Warn("introspection failed", slog.String("error", err.Error()))
-		return Grant{}, false
+		return Grant{}, false, err
 	}
 	if grant == nil || grant.Flow != Flow {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
-	return *grant, true
+	return *grant, true, nil
+}
+
+// unavailable answers a CONNECT whose token Sortie could not check. It is
+// 503, which a worker retries while keeping its machine; a 407 would tell
+// it the control plane no longer knows the job.
+func unavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "Sortie cannot check the job token now; try again", http.StatusServiceUnavailable)
+}
+
+// liveProof reports whether job is a live proof that runs: the live-proof
+// jobs file names it. The file is read on each CONNECT, so a live proof
+// gets its egress from its first request and loses it once it ends.
+func (g *Gate) liveProof(job string) bool {
+	if g.cfg.LiveProof == nil || job == "" {
+		return false
+	}
+	b, err := os.ReadFile(g.cfg.LiveProof.JobsFile) // #nosec G304 -- the configuration names the file
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			g.log.Warn("live-proof jobs unreadable", slog.String("error", err.Error()))
+		}
+		return false
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if strings.TrimSpace(line) == job {
+			return true
+		}
+	}
+	return false
 }
 
 // introspect returns the grant of a live token, nil for any other.

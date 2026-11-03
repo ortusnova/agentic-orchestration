@@ -11,13 +11,31 @@ from tests.workbench.conftest import SORTIE_TOKEN
 from workbench.sortie import SortieClient
 
 
+def built_unapproved(n: dict[str, Any]) -> bool:
+    """A ui story that covers a requirement: Sortie syncs and releases it
+    without an approval, and refuses one that names an approver."""
+    return n.get("kind") == "story" and n.get("review") == "ui" and bool(n.get("covers"))
+
+
+def synced(n: dict[str, Any]) -> bool:
+    return n["approval"] == "approved" or built_unapproved(n)
+
+
+def releases(n: dict[str, Any]) -> bool:
+    if n.get("review") == "ui":
+        return built_unapproved(n)
+    return bool(n.get("release")) and n["approval"] == "approved"
+
+
 class FakeSortie:
     """Serves tracker workspace projects; ``nodes`` and ``edges`` are the
     configured project's (``T``), the one Sortie dispatches."""
 
     DEFAULT = "T"
 
-    def __init__(self):
+    def __init__(self, token: str = SORTIE_TOKEN):
+        # The control token it takes.
+        self.token = token
         # Tracker projects of the workspace: key -> {"name", "problems"}.
         self.projects: dict[str, dict[str, Any]] = {self.DEFAULT: {"name": "Tracker", "problems": []}}
         self.ensure_error: tuple[int, str] | None = None
@@ -56,6 +74,17 @@ class FakeSortie:
         self.refresh_down = False
         self.refreshes = 0
         self.released: set[str] = set()
+        # What the workbench shows of the workers (agent-platform/run-supervision):
+        # members merged into /api/v1/state as Sortie serves them (host, workers,
+        # pulls, waits, held, dispatch_paused), the sessions people granted, and
+        # the run history of issues that no longer run: identifier ->
+        # {"dispatch_id", "events"}.
+        self.extra_state: dict[str, Any] = {}
+        self.grants: list[dict[str, Any]] = []
+        self.grants_supported = True
+        self.history: dict[str, dict[str, Any]] = {}
+        # Finished runs, as GET /api/v1/runs serves them, newest first.
+        self.runs: list[dict[str, Any]] = []
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -89,6 +118,17 @@ class FakeSortie:
         self.parked = [p for p in self.parked if p["issue_identifier"] != identifier]
         self.park_details.pop(identifier, None)
 
+    def hold(self, identifier: str, reason: str, evidence: str, *, by: str = "supervisor",
+             renewed_at: str = "2026-11-03T13:00:00Z", until: str = "2026-11-03T14:00:00Z",
+             expired: bool = False) -> None:
+        """Place the supervisor's lease on the issue, as ``holds`` in the
+        state lists it; ``expired`` as Sortie serves it once it ran out."""
+        holds = [h for h in self.extra_state.get("holds") or [] if h["issue_identifier"] != identifier]
+        holds.append({"issue_id": f"id-{identifier}", "issue_identifier": identifier, "by": by, "reason": reason,
+                      "evidence": evidence, "held_since": renewed_at, "renewed_at": renewed_at, "until": until,
+                      "expired": expired, "expired_at": until if expired else None})
+        self.extra_state["holds"] = holds
+
     def issue(self, plan_key, kind="story", state="Todo", parent=None, runtime=None, terminal=False, **extra):
         node = {
             "id": f"id-{len(self.nodes) + 1}", "identifier": f"T-{len(self.nodes) + 1}", "plan_key": plan_key,
@@ -99,14 +139,14 @@ class FakeSortie:
         return node
 
     def client(self) -> SortieClient:
-        return SortieClient("http://sortie.test", SORTIE_TOKEN, transport=httpx.MockTransport(self.handle))
+        return SortieClient("http://sortie.test", self.token, transport=httpx.MockTransport(self.handle))
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else None
         if self.unreachable:
             raise httpx.ConnectError("connection refused", request=request)
         self.requests.append((request.method, request.url.path, body))
-        if request.headers.get("authorization") != f"Bearer {SORTIE_TOKEN}":
+        if request.headers.get("authorization") != f"Bearer {self.token}":
             return httpx.Response(401, json={"error": {"code": "unauthorized", "message": "token"}})
         if self.down:
             return httpx.Response(502, json={"error": {"code": "tracker_transport_error", "message": "tracker down"}})
@@ -141,9 +181,12 @@ class FakeSortie:
             return httpx.Response(200, json={"capabilities": self.capabilities, "plan_key_storage": "custom_field"})
         if path == "/api/v1/plan/sync":
             graph = body["graph"]
+            if any(n.get("review") == "ui" and ("approved_by" in n or "approved_at" in n) for n in graph["nodes"]):
+                return httpx.Response(400, json={"error": {"code": "invalid_graph",
+                                                           "message": "a ui story carries no approved_by or approved_at"}})
             if not body.get("apply"):
                 pid = f"p{len(self.previews) + 1}"
-                approved = [n for n in graph["nodes"] if n["approval"] == "approved"]
+                approved = [n for n in graph["nodes"] if synced(n)]
                 missing = [] if "link_dependency" in self.capabilities else ["link_dependency"]
                 preview = {"counts": {"creates": len(approved), "updates": 0, "parents": 0,
                                       "relations_added": len(graph["blocks"]), "relations_removed": 0, "orphans": 0},
@@ -155,7 +198,7 @@ class FakeSortie:
                 return httpx.Response(409, json={"error": {"code": "stale_preview", "message": "unknown preview"}})
             self.applied.append({**body, "project": project})
             released = [{"plan_key": n["plan_key"], "issue_id": "", "identifier": ""} for n in graph["nodes"]
-                        if n.get("release") and n["approval"] == "approved" and n["plan_key"] not in self.released]
+                        if releases(n) and n["plan_key"] not in self.released]
             self.released.update(r["plan_key"] for r in released)
             return httpx.Response(200, json={"result": {"created": [], "released": released, "orphans": [], "failed": None}})
         if path == "/api/v1/refresh":
@@ -169,7 +212,7 @@ class FakeSortie:
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
-                                             "config": {"agent": agent}})
+                                             "config": {"agent": agent}, **self.extra_state})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:
@@ -180,6 +223,41 @@ class FakeSortie:
             if self.answer_releases:
                 self.unpark(ident)
             return httpx.Response(200, json={"issue_identifier": ident, "released": True})
+        if path.startswith("/api/v1/") and path.endswith("/sessions") and request.method == "POST":
+            ident = path.removeprefix("/api/v1/").removesuffix("/sessions")
+            if not self.grants_supported:
+                return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
+            add = body.get("add") if isinstance(body, dict) else None
+            if not isinstance(add, int) or isinstance(add, bool) or not 1 <= add <= 64:
+                return httpx.Response(400, json={"error": {"code": "invalid_request", "message": "add from 1 to 64"}})
+            held = any(b["issue_identifier"] == ident for b in self.budget_exhausted)
+            if not held and ident not in self.running and ident not in self.retrying and ident not in self.park_details:
+                return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": f"issue {ident} is not known"}})
+            self.grants.append({"identifier": ident, "add": add, "by": body.get("by") or "operator",
+                                "reason": body.get("reason") or ""})
+            # Sortie raises the issue's budget and dispatches it again.
+            entry = next((b for b in self.budget_exhausted if b["issue_identifier"] == ident), {})
+            self.budget_exhausted = [b for b in self.budget_exhausted if b["issue_identifier"] != ident]
+            granted = sum(g["add"] for g in self.grants if g["identifier"] == ident)
+            budget = entry.get("budget_sessions")
+            return httpx.Response(200, json={"issue_identifier": ident, "issue_id": f"id-{ident}",
+                                             "used_sessions": entry.get("used_sessions", 0),
+                                             "budget_sessions": budget + add if isinstance(budget, int) else None,
+                                             "granted_sessions": granted})
+        if path == "/api/v1/runs":
+            q = request.url.params
+            runs = sorted(self.runs, key=lambda r: r["started_at"], reverse=True)
+            if q.get("since"):
+                runs = [r for r in runs if r["started_at"] >= q["since"]]
+            if q.get("status"):
+                runs = [r for r in runs if r["status"] == q["status"]]
+            return httpx.Response(200, json={"runs": runs[: int(q.get("limit") or 50)], "next_cursor": None})
+        if path.startswith("/api/v1/runs/") and path.endswith("/events"):
+            dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
+            run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)
+            if run is None:
+                return httpx.Response(404, json={"error": {"code": "run_events_not_retained", "message": dispatch}})
+            return httpx.Response(200, json={"dispatch_id": dispatch, "first_seq": 1, "events": run["events"]})
         if path.startswith("/api/v1/") and path.endswith("/broker"):
             ident = path.removeprefix("/api/v1/").removesuffix("/broker")
             if ident not in self.brokers:
@@ -187,10 +265,13 @@ class FakeSortie:
             return httpx.Response(200, json=self.brokers[ident])
         if path.startswith("/api/v1/") and path.count("/") == 3:
             ident = path.removeprefix("/api/v1/")
-            if ident not in self.running and ident not in self.retrying and ident not in self.park_details:
+            if ident not in self.running and ident not in self.retrying and ident not in self.park_details and ident not in self.history:
                 return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": ident}})
+            past = self.history.get(ident)
             return httpx.Response(200, json={"issue_identifier": ident, "running": self.running.get(ident),
-                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident)})
+                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident),
+                                             "history": {"runs": [{"dispatch_id": past["dispatch_id"]}]} if past else None,
+                                             "recent_events": (past["events"][-50:] if past else [])})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
 
     def handle_project(self, method: str, key: str, body: Any) -> httpx.Response:

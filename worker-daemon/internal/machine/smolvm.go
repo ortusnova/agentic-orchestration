@@ -3,10 +3,12 @@ package machine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"net"
+	"os"
 	"os/exec"
 	"slices"
 	"strconv"
@@ -68,12 +70,18 @@ func CreateArgs(spec Spec) ([]string, error) {
 	if spec.User != "" {
 		args = append(args, "--user", spec.User, "--init", "chown "+spec.User+" "+GuestWorkspace)
 	}
+	if spec.Nested {
+		args = append(args, "--nested")
+	}
 	var paths []string
 	if spec.Share != "" {
 		paths = append(paths, spec.Share)
 	}
 	for _, f := range spec.Forwards {
 		paths = append(paths, f.HostSocket)
+	}
+	for _, m := range spec.Mounts {
+		paths = append(paths, m.Host, m.Guest)
 	}
 	for _, p := range paths {
 		if p == "" || strings.Contains(p, ":") {
@@ -82,6 +90,13 @@ func CreateArgs(spec Spec) ([]string, error) {
 	}
 	if spec.Share != "" {
 		args = append(args, "-v", spec.Share+":"+GuestShare)
+	}
+	for _, m := range spec.Mounts {
+		v := m.Host + ":" + m.Guest
+		if m.ReadOnly {
+			v += ":ro"
+		}
+		args = append(args, "-v", v)
 	}
 	for _, f := range spec.Forwards {
 		args = append(args, "--mount-socket", f.HostSocket+":"+guestSocket(f.Name))
@@ -111,14 +126,77 @@ func ForwardArgv(f Forward) []string {
 	return []string{"socat", "TCP-LISTEN:" + strconv.Itoa(f.GuestPort) + ",bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:" + guestSocket(f.Name)}
 }
 
-func (s *Smolvm) run(ctx context.Context, args []string) error {
+func (s *Smolvm) run(ctx context.Context, env, args []string) error {
 	cmd := exec.CommandContext(ctx, s.Binary, args...) // #nosec G204 -- argv, no shell
+	cmd.Env = withEnv(env)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("smolvm %s %s: %w: %s", args[0], args[1], err, tail(stderr.String()))
 	}
 	return nil
+}
+
+// withEnv is the daemon's environment with env added, or nil, the
+// daemon's own, when env is empty.
+func withEnv(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	return append(os.Environ(), env...)
+}
+
+// List implements [Lister] with smolvm machine ls --json. It reads the
+// name, the labels, the state and the creation time of each machine,
+// under the names smolvm has used for them, and leaves the time zero
+// when smolvm gives none.
+func (s *Smolvm) List(ctx context.Context) ([]Listed, error) {
+	cmd := exec.CommandContext(ctx, s.Binary, "machine", "ls", "--json") // #nosec G204 -- argv, no shell
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("smolvm machine ls: %w: %s", err, tail(stderr.String()))
+	}
+	return ParseList(out)
+}
+
+// ParseList reads the output of smolvm machine ls --json.
+func ParseList(out []byte) ([]Listed, error) {
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("smolvm machine ls --json: %w", err)
+	}
+	str := func(m map[string]json.RawMessage, keys ...string) string {
+		for _, k := range keys {
+			var v string
+			if json.Unmarshal(m[k], &v) == nil && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	listed := make([]Listed, 0, len(raw))
+	for _, m := range raw {
+		l := Listed{Name: str(m, "name"), State: str(m, "state", "status")}
+		if l.Name == "" {
+			continue
+		}
+		_ = json.Unmarshal(m["labels"], &l.Labels)
+		if l.Labels == nil {
+			l.Labels = map[string]string{}
+		}
+		if t, err := time.Parse(time.RFC3339Nano, str(m, "created_at", "created", "createdAt")); err == nil {
+			l.Created = t
+		} else {
+			var unix int64
+			if json.Unmarshal(m["created_at"], &unix) == nil && unix > 0 {
+				l.Created = time.Unix(unix, 0)
+			}
+		}
+		listed = append(listed, l)
+	}
+	return listed, nil
 }
 
 func tail(s string) string {
@@ -136,24 +214,24 @@ func (s *Smolvm) Create(ctx context.Context, spec Spec) (Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.run(ctx, args); err != nil {
+	if err := s.run(ctx, spec.HostEnv, args); err != nil {
 		return nil, err
 	}
-	m := &smolvmMachine{s: s, name: spec.Name, addrs: map[string]string{}}
+	m := &smolvmMachine{s: s, name: spec.Name, env: spec.HostEnv, addrs: map[string]string{}}
 	fail := func(err error) (Machine, error) {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		_ = m.Delete(dctx)
 		return nil, err
 	}
-	if err := s.run(ctx, machineArgs("start", "--name", spec.Name)); err != nil {
+	if err := s.run(ctx, m.env, machineArgs("start", "--name", spec.Name)); err != nil {
 		return fail(err)
 	}
 	if err := s.waitReady(ctx, m); err != nil {
 		return fail(err)
 	}
 	for _, f := range spec.Forwards {
-		if err := s.run(ctx, append(append(machineArgs("exec", "--name", spec.Name, "-d"), "--"), ForwardArgv(f)...)); err != nil {
+		if err := s.run(ctx, m.env, append(append(machineArgs("exec", "--name", spec.Name, "-d"), "--"), ForwardArgv(f)...)); err != nil {
 			return fail(err)
 		}
 		m.addrs[f.Name] = net.JoinHostPort("127.0.0.1", strconv.Itoa(f.GuestPort))
@@ -191,6 +269,7 @@ func (s *Smolvm) waitReady(ctx context.Context, m *smolvmMachine) error {
 type smolvmMachine struct {
 	s     *Smolvm
 	name  string
+	env   []string
 	addrs map[string]string
 }
 
@@ -200,6 +279,7 @@ func (m *smolvmMachine) GuestAddr(forward string) string { return m.addrs[forwar
 
 func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
 	cmd := exec.CommandContext(ctx, m.s.Binary, ExecArgs(m.name, e)...) // #nosec G204 -- argv, no shell
+	cmd.Env = withEnv(m.env)
 	cmd.Stdout, cmd.Stderr = e.Stdout, e.Stderr
 	cmd.WaitDelay = 5 * time.Second
 	if err := StartStdin(cmd, e.Stdin); err != nil {
@@ -217,9 +297,9 @@ func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
 }
 
 func (m *smolvmMachine) Stop(ctx context.Context) error {
-	return m.s.run(ctx, machineArgs("stop", "--name", m.name))
+	return m.s.run(ctx, m.env, machineArgs("stop", "--name", m.name))
 }
 
 func (m *smolvmMachine) Delete(ctx context.Context) error {
-	return m.s.run(ctx, machineArgs("delete", "-f", "--name", m.name))
+	return m.s.run(ctx, m.env, machineArgs("delete", "-f", "--name", m.name))
 }

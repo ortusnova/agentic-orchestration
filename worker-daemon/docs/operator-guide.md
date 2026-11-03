@@ -79,7 +79,7 @@ the start instead of being ignored.
 | `control_plane.tls.cert_file`, `key_file` | no | | The worker's client certificate and key (PEM), once the control plane issues one. Both or neither; they need an `https` URL. The key is the one secret the worker keeps. |
 | `control_plane.tls.ca_file` | no | system roots | The CA that signs the control plane's (and the flows') server certificates. |
 | `control_plane.tls.server_name` | no | the URL's host | The name to verify the server certificate against. |
-| `run_slots` | no | `1` | How many jobs run at once. |
+| `run_slots` | no | from the host | How many jobs run at once. Unset or `0`: as many `smallest_job`s as the host's CPUs and memory hold above `reserve`, at least one. See [Run slots](#run-slots). |
 | `reserve.mem_gib` | yes | | Memory, in GiB, the host keeps for itself. `free.mem_gib` is what the host has available less this, less what running jobs were promised. |
 | `reserve.cpu` | no | `0` | CPUs the host keeps for itself. |
 | `floor.disk_gib` | yes | | Disk, in GiB, kept free on `disk_path`'s file system. `free.disk_gib` is what is available there less this, less running jobs' disks. |
@@ -90,6 +90,8 @@ the start instead of being ignored.
 | `smolvm.packs` | no | | Maps an image reference (`run.image`) to an absolute pack path. |
 | `smolvm.pack_dir` | no | | Also resolves an image reference ending in `.smolmachine` to the file of that base name here. |
 | `smolvm.user` | no | the pack's | The user commands run as in the machine; it is given `/workspace`. |
+| `smolvm.nested` | no | what the host offers | `false` keeps the worker from declaring nested virtualization, so it gets no job that requires `nested`: for a host without the inputs of the images that need it. |
+| `smolvm.images` | no | | Maps an image reference to what this host gives each of its jobs beyond the pack. See [Host inputs of an image](#host-inputs-of-an-image). |
 | `usage_commands` | no | | Maps an agent kind, the base name of `run.command`, to the command run in the machine after each run to read its token usage; `*` covers every other kind. See [Token usage](#token-usage). |
 | `log_level` | no | `info` | `debug`, `info`, `warn` or `error`. Logs go to standard error and never carry a token. |
 
@@ -108,6 +110,55 @@ holds `smallest_job`. When an offered job's `requires` exceeds what is free
 (the control plane counted with an older check-in), the daemon does not
 start it: it reports the attempt `failed`, machine `deleted`, with the
 reason, and Sortie retries it.
+
+### Run slots
+
+Without `run_slots`, each check-in declares
+`floor(min((CPUs - reserve.cpu) / smallest_job.cpu, (MemTotal - reserve.mem_gib) / smallest_job.mem_gib))`
+slots, at least one, from the host as it is then: a host that gains or
+loses CPUs or memory declares its new slots at its next check-in, with no
+change to this file. A dimension whose `smallest_job` figure is `0` does
+not bound it; with neither, the worker runs one job. A slot only lets a
+job be offered: each job still needs its own `requires` free, and free
+memory is the host's `MemAvailable` (macOS: `vm_stat`) now, so memory
+that anything else on the host takes, such as a model server or a
+sandbox, is not offered to a job.
+
+### Host inputs of an image
+
+Some jobs need what only their host has: a homelab job needs homelab's
+caches, a folder for its flight recorder, the vm age key and homelab's
+guest kernel. The control plane names none of it; it names the image, and
+`smolvm.images` says what a job of that image gets on this host:
+
+```json
+"images": {
+  "homelab.smolmachine": {
+    "user": "builder",
+    "lib_dir": "/home/brian/.cache/homelab/libkrunfw",
+    "mounts": [
+      { "host": "/home/brian/.cache/homelab-sources", "guest": "/home/builder/.cache/homelab-sources", "read_only": true },
+      { "host": "/home/brian/.local/state/homelab/sortie-recorder", "guest": "/var/log/homelab-recorder", "per_job": true }
+    ],
+    "env": { "NODE_EXTRA_CA_CERTS": "/usr/local/share/ca-certificates/ortus-egress.crt" },
+    "env_files": { "HOMELAB_VM_AGE_KEY": "/home/brian/.local/share/ortus-nova/stage0/inputs/vm-age/keys.txt" },
+    "setup": ["sudo /opt/homelab-sandbox/guest-start.sh \"$(id -u)\""]
+  }
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `user` | The user commands run as for this image, instead of `smolvm.user`. |
+| `lib_dir` | `SMOLVM_LIB_DIR` for every smolvm call on the job's machine: the guest kernel it boots. |
+| `mounts` | Host folders shared with the machine, at `guest`, read-only with `read_only`. With `per_job`, the job gets `host/<job>`, created when it starts and kept after it ends. A guest path may not overlap `/workspace` or `/run/worker`. |
+| `env` | Plain values, no secret, in the same environment, such as `NODE_EXTRA_CA_CERTS`. |
+| `env_files` | Each variable's value is the content of its file, less the final newline, read when the job starts. It is in the environment of every command the daemon runs in the machine (setup, the agent, the usage command) and never logged. |
+| `setup` | Shell scripts run in order in `/workspace`, with the agent's environment, after the workspace is seeded and before the agent starts. One that fails fails the attempt, with its standard error in the reason. |
+
+A job whose `requires.capabilities` holds `nested` gets nested
+virtualization (`smolvm machine create --nested`); the control plane
+offers it only to a worker that declares `nested`.
 
 ### The control-plane connection
 
@@ -147,7 +198,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    is `/jobs/{job}/attempts/{attempt}/seed`.
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
-   `/run/worker`, and the two sockets mounted with `--mount-socket`. It
+   `/run/worker`, the two sockets mounted with `--mount-socket`, and the
+   image's host inputs, if this host configures any. It
    gives no network flag, allowlist or credential binding, so smolvm gives
    the machine no network: `socat` in the guest serves the sockets on guest
    loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp), and
@@ -156,7 +208,7 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    the branch at the bundle's `HEAD`, or, when several are there, the one
    named after the job (`sortie/ONS-7` for `ONS-7`). It adds `/.sortie` to
    the repository's `.git/info/exclude`, so the agent's control directory
-   is never committed.
+   is never committed. Then it runs the image's `setup` scripts.
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
    forwarder, `NO_PROXY=127.0.0.1,localhost`, and `WORKER_MCP_URL` at the
@@ -167,11 +219,38 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 6. When the agent exits, it sends the exit status, the stream's last
    frame. Then it runs the usage command and reports on `usage`, returns
    the result on `bundles` (the issue branch's bundle and the agent's
-   `.sortie/pr.json`), deletes the machine, and reports the outcome:
+   `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
+   when the agent wrote it), deletes the machine, and reports the outcome:
    `succeeded` when the agent exited 0 and the result was returned. The
    result always goes before the report. Usage goes before the result,
    because once Sortie has the result it finishes the attempt and closes
    its flows.
+
+A restart of Sortie ends no job. When the `stdio` stream breaks before
+the control plane closed the agent's input, as it does when Sortie
+stops, the daemon keeps the machine, stops the agent, and dials the
+stream again until Sortie serves it; it then starts the agent again in
+the same `/workspace`, and the restarted Sortie resumes the agent's
+session there (Sortie's `docs/workflow-reference.md`, "A restart keeps
+the remote runs"). A failed heartbeat that is not a `409` or `410`,
+such as a `503` while the restarted Sortie still adopts its runs, is
+retried at the next beat. The stream is dialled again, and usage and
+the result sent again, while Sortie answers `404`, `502`, `503` or `504`,
+or cannot be reached, for at most one lease (`lease_ms`) each, and the
+report while Sortie answers a `5xx` or cannot be reached, until the lease
+would have run out. A stream refused `401`, or not served again within
+the lease, ends the attempt as failed, with no usage or result. A job is
+never held forever: when no heartbeat has been accepted for longer than
+the lease, Sortie can no longer hold the job, and the daemon stops the
+machine, deletes it and reports nothing.
+
+A job the control plane no longer wants is released at once. When a
+heartbeat, a report or any flow request, the `stdio` dial included,
+answers `410` (`job_gone`: Sortie cancelled or finished the attempt, or
+no longer knows it after its restart), the daemon logs `the control
+plane no longer wants the job` with Sortie's reason, stops the agent and
+the machine, deletes the machine, frees what the job reserved at its
+next check-in, and sends no result, usage or report for that attempt.
 
 When a heartbeat answers `409`, the daemon stops the machine at once,
 within the heartbeat interval, and sends no result, usage or report for
@@ -188,7 +267,7 @@ proxy. Paths are under the flow's URL:
 
 | Flow | Request |
 |---|---|
-| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional part `pr` (`.sortie/pr.json`, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
+| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional parts `pr` (`.sortie/pr.json`, at most 64 KiB), `status` (`.sortie/status`, at most 4 KiB) and `criteria` (`.sortie/criteria.json`, a criteria review's verdict per criterion, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
 | `stdio` | `GET /jobs/{job}/attempts/{attempt}` with `Connection: Upgrade` and `Upgrade: sortie-stdio/1` opens a framed stream (answer `101`). A `ws` or `wss` flow URL is dialled as `http` or `https`. |
 | `usage` | `POST /jobs/{job}/attempts/{attempt}` with `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "model", "measured"}`, the attempt's totals so far; `"measured": false` says that spend occurred and its amount is unknown. |
 | `egress` | An HTTP proxy; the daemon carries the guest's `CONNECT` tunnels and absolute-form requests to it. |
@@ -227,6 +306,32 @@ occurred, amount unknown, never a zero spend (design D14.1). Sortie
 records it as an unmeasured turn. A run that made no model request posts
 zero, `"measured": true`.
 
+### What the workbench sees of the worker
+
+The workbench shows each worker host, what runs on it and what waits on
+it (`agent-platform/run-supervision`). The daemon tells the control plane
+three things for it, in members a control plane that does not know them
+ignores, as Sortie ignores every unknown member:
+
+| Where | Member | What |
+|---|---|---|
+| check-in | `used` | `{"cpu", "mem_gib", "disk_gib"}`: what the running jobs were promised. `free` plus `used` is what the worker can give jobs. |
+| check-in | `unmanaged` | `[{"name", "since", "state"}]`: each machine on the host that no Sortie started, that is with neither the daemon's `worker-daemon.job` label nor the `sortie.managed` label of a Sortie's smolvm environment, such as a sandbox made by hand. `since` is when smolvm says it was created, else when the daemon first saw it; `state` is smolvm's (`running`, `stopped`), or absent. The daemon lists the host's machines (`smolvm machine ls --json`) at most every 30 seconds, at a check-in, and keeps the last list when one fails. |
+| heartbeat | `step`, `phase`, `step_at` | The step the job reports, the phase it names if any, and when the job wrote it. The body is `{}` until the job reports a step. |
+
+A job reports its step by writing it to the file `SORTIE_STEP_FILE`
+names, `/run/worker/step` in the machine: a line of text, the step, such
+as `seed-vm-recreate`, or a JSON object `{"step": "seed-vm-recreate",
+"phase": "live_proof"}`. The last non-empty line counts; it is kept to
+200 printable characters. A vm chain appends each step as it starts it:
+
+```sh
+[ -n "${SORTIE_STEP_FILE:-}" ] && echo "seed-vm-recreate" >> "$SORTIE_STEP_FILE"
+```
+
+The daemon reads the file on the host, in the job's `share` directory, at
+each heartbeat, and never runs anything in the machine for it.
+
 ## Run as a service
 
 systemd, as a user that may use `/dev/kvm` and smolvm:
@@ -264,13 +369,15 @@ elsewhere it is skipped and says which of the three is missing:
 WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
 ```
 
-Two end-to-end tests run the daemon against the real Sortie data plane:
-`TestOneAttemptOverTheWire` and `TestUnknownAmountOverTheWire`. They
-build Sortie from the `sortie/` submodule (plan-bench) and the stage-1
-edge from `dev/stage0/edge`, and run Sortie under `environment.kind:
+Three end-to-end tests run the daemon against the real Sortie data plane:
+`TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and
+`TestACancelledJobIsReleasedOverTheWire`. They build Sortie from the
+`sortie/` submodule (plan-bench) and the control plane's egress gate from
+`control-plane/cmd/cp-egress`, and run Sortie under `environment.kind:
 remote` with a file tracker and a local forge (a bare repository and a
-fake Gitea API). The daemon dials the edge, and the edge's egress goes to
-a fake nono. One attempt of `ONS-7` runs on fake machines, with an agent
+fake Gitea API). The daemon dials a stand-in for Pomerium with a client
+certificate, and its egress route goes through the egress gate to a fake
+nono. One attempt of `ONS-7` runs on fake machines, with an agent
 that speaks the Agent Client Protocol. It ends in a pull request on the
 local forge, and Sortie records the usage the daemon posted, measured or
 `"measured": false`. Without the submodule they are skipped; set

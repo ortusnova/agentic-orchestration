@@ -133,6 +133,8 @@ type fakeNono struct {
 	ca       *testCA
 	mu       sync.Mutex
 	connects []string
+	// allowed are the hosts it tunnels besides api.anthropic.com:443.
+	allowed map[string]bool
 }
 
 func startFakeNono(t *testing.T, ca *testCA) *fakeNono {
@@ -141,7 +143,7 @@ func startFakeNono(t *testing.T, ca *testCA) *fakeNono {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
-	n := &fakeNono{addr: l.Addr().String(), pass: "nono-pass-" + rand.Text(), ca: ca}
+	n := &fakeNono{addr: l.Addr().String(), pass: "nono-pass-" + rand.Text(), ca: ca, allowed: map[string]bool{}}
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -162,13 +164,14 @@ func (n *fakeNono) serve(c net.Conn) {
 	}
 	n.mu.Lock()
 	n.connects = append(n.connects, req.Host)
+	allowed := n.allowed[req.Host]
 	n.mu.Unlock()
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("nono:"+n.pass))
 	switch {
 	case req.Method != http.MethodConnect || req.Header.Get("Proxy-Authorization") != want:
 		_, _ = io.WriteString(c, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
 		return
-	case req.Host != "api.anthropic.com:443":
+	case req.Host != "api.anthropic.com:443" && !allowed:
 		_, _ = io.WriteString(c, "HTTP/1.1 403 Forbidden\r\nContent-Length: 16\r\n\r\nhost not allowed")
 		return
 	}
@@ -180,6 +183,13 @@ func (n *fakeNono) serve(c net.Conn) {
 	}
 	got := strings.ReplaceAll(inner.Header.Get("Authorization"), placeholder, credential)
 	_, _ = fmt.Fprintf(tc, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(got), got)
+}
+
+// allow lets the fake tunnel host too.
+func (n *fakeNono) allow(host string) {
+	n.mu.Lock()
+	n.allowed[host] = true
+	n.mu.Unlock()
 }
 
 func (n *fakeNono) seen() []string {
@@ -224,14 +234,25 @@ func writeSecret(t *testing.T, name, value string) string {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith is newHarness with the gate's configuration changed by
+// configure, when it is not nil, before the gate starts.
+func newHarnessWith(t *testing.T, configure func(*harness, *Config)) *harness {
+	t.Helper()
 	h := &harness{t: t, sortie: newFakeSortie(t), ca: newTestCA(t), log: &syncBuffer{}}
 	h.nono = startFakeNono(t, h.ca)
-	g, err := New(Config{
+	cfg := Config{
 		Sortie:           h.sortie.URL,
 		ControlTokenFile: writeSecret(t, "control-token", controlToken),
 		Nono:             h.nono.addr,
 		NonoPassFile:     writeSecret(t, "nono-pass", h.nono.pass),
-	}, slog.New(slog.NewTextHandler(h.log, nil)))
+	}
+	if configure != nil {
+		configure(h, &cfg)
+	}
+	g, err := New(cfg, slog.New(slog.NewTextHandler(h.log, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,5 +360,99 @@ func TestOnlyConnect(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", resp.StatusCode)
+	}
+}
+
+// While Sortie cannot answer, as while it restarts, nothing is admitted,
+// and the answer is 503, not 407: the worker dials again and keeps its
+// machine, where a refusal would tell it the job is gone.
+func TestSortieDownIsUnavailableNotRefused(t *testing.T) {
+	h := newHarness(t)
+	tok := h.sortie.mint("ONS-7", Flow)
+	h.sortie.Close()
+	u, _ := url.Parse(h.gate.URL)
+	c, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+	_, _ = fmt.Fprintf(c, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\nProxy-Authorization: Bearer %s\r\n\r\n", tok)
+	resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") == "" {
+		t.Errorf("with Sortie down: %d, Retry-After %q; want 503 with Retry-After", resp.StatusCode, resp.Header.Get("Retry-After"))
+	}
+	if resp.Header.Get("Proxy-Authenticate") != "" {
+		t.Error("with Sortie down the gate asked for another token, as for a refused one")
+	}
+	if seen := h.nono.seen(); len(seen) != 0 {
+		t.Errorf("nono was reached with Sortie down: %v", seen)
+	}
+	// A request without a token is still refused: there is nothing to check.
+	if status := h.connect("api.anthropic.com:443", ""); status != http.StatusProxyAuthRequired {
+		t.Errorf("no token with Sortie down: %d, want 407", status)
+	}
+}
+
+// agent-platform/run-supervision#A live criterion a story's machine cannot
+// run becomes a live-proof job, scenario A vm chain the story's machine
+// cannot run: the story's own job is refused Let's Encrypt staging by the
+// kit's nono, and once stage0-live-proofs names its live proof as running,
+// the same job's CONNECT goes to the live-proof nono, which allows it.
+func TestALiveProofJobGetsTheLiveProofEgress(t *testing.T) {
+	const staging = "acme-staging-v02.api.letsencrypt.org:443"
+	jobs := filepath.Join(t.TempDir(), "active")
+	var live *fakeNono
+	h := newHarnessWith(t, func(h *harness, cfg *Config) {
+		live = startFakeNono(t, h.ca)
+		live.pass = h.nono.pass
+		live.allow(staging)
+		cfg.LiveProof = &LiveProof{Nono: live.addr, JobsFile: jobs}
+	})
+
+	if status := h.connect(staging, "Bearer "+h.sortie.mint("ONS-7", Flow)); status != http.StatusForbidden {
+		t.Fatalf("the story's job reached Let's Encrypt staging: %d, want the kit's 403", status)
+	}
+	if err := os.WriteFile(jobs, []byte("ONS-12\nONS-7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := h.connect(staging, "Bearer "+h.sortie.mint("ONS-7", Flow)); status != http.StatusOK {
+		t.Fatalf("the live-proof job's CONNECT answered %d, want 200 through the live-proof nono", status)
+	}
+	if len(h.nono.seen()) != 1 || len(live.seen()) != 1 {
+		t.Errorf("connects: kit %v, live-proof %v; want 1 each", h.nono.seen(), live.seen())
+	}
+	if want := `msg="egress tunnel" worker=p1 job=ONS-7 attempt=1 host=` + staging + ` profile=live-proof`; !strings.Contains(h.log.String(), want) {
+		t.Errorf("the live-proof tunnel is not logged with its profile; want %s in:\n%s", want, h.log)
+	}
+
+	// The live proof ends: its job is back on the kit's nono.
+	if err := os.WriteFile(jobs, []byte("ONS-12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := h.connect(staging, "Bearer "+h.sortie.mint("ONS-7", Flow)); status != http.StatusForbidden {
+		t.Fatalf("after its live proof the job's CONNECT answered %d, want the kit's 403", status)
+	}
+}
+
+func TestLiveProofConfig(t *testing.T) {
+	control := writeSecret(t, "control-token", controlToken)
+	pass := writeSecret(t, "nono-pass", "pass")
+	for name, lp := range map[string]*LiveProof{
+		"no nono":      {JobsFile: "/x/active"},
+		"the kit's":    {Nono: "127.0.0.1:7690", JobsFile: "/x/active"},
+		"no jobs file": {Nono: "127.0.0.1:7691"},
+	} {
+		_, err := New(Config{Sortie: "http://127.0.0.1:7680", ControlTokenFile: control, Nono: "127.0.0.1:7690", NonoPassFile: pass, LiveProof: lp}, slog.New(slog.DiscardHandler))
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	lp := &LiveProof{Nono: "127.0.0.1:7691", JobsFile: "/x/active"}
+	if _, err := New(Config{Sortie: "http://127.0.0.1:7680", ControlTokenFile: control, Nono: "127.0.0.1:7690", NonoPassFile: pass, LiveProof: lp}, slog.New(slog.DiscardHandler)); err != nil {
+		t.Errorf("a live-proof nono: %v", err)
 	}
 }

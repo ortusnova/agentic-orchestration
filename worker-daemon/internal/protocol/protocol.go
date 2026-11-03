@@ -46,7 +46,10 @@ type Free struct {
 	DiskGiB float64 `json:"disk_gib"`
 }
 
-// Declaration is the check-in body. Every field is required.
+// Declaration is the check-in body. Every field up to Free is
+// required. Used and Unmanaged say what the workbench shows of the
+// worker (agent-platform/run-supervision); a control plane that does not
+// know them ignores them, as Sortie ignores every unknown member.
 type Declaration struct {
 	OS       string   `json:"os"`
 	Arch     string   `json:"arch"`
@@ -56,6 +59,31 @@ type Declaration struct {
 	RunSlots int      `json:"run_slots"`
 	Running  int      `json:"running"`
 	Free     Free     `json:"free"`
+	// Used is what the running jobs were promised. Free plus Used is
+	// what the worker can give jobs.
+	Used Free `json:"used"`
+	// Unmanaged lists the machines on this host that no Sortie started.
+	Unmanaged []Unmanaged `json:"unmanaged"`
+}
+
+// Unmanaged is a machine on the worker that no Sortie started: neither
+// this daemon for a job nor a Sortie on the host.
+type Unmanaged struct {
+	Name string `json:"name"`
+	// Since is when the machine was created, as smolvm says, or else
+	// when the daemon first saw it.
+	Since time.Time `json:"since"`
+	// State is smolvm's word for it, such as "running"; "" when unknown.
+	State string `json:"state,omitempty"`
+}
+
+// Beat is the heartbeat body: the step the job reports, as the job last
+// wrote it to its step file. Every member is omitted until the job
+// reports a step.
+type Beat struct {
+	Step   string     `json:"step,omitempty"`
+	Phase  string     `json:"phase,omitempty"`
+	StepAt *time.Time `json:"step_at,omitempty"`
 }
 
 // Timings is the check-in answer.
@@ -195,6 +223,15 @@ const (
 	ResultPRPart = "pr"
 	// MaxPRFile bounds the pr part.
 	MaxPRFile = 64 << 10
+	// ResultStatusPart holds the agent's .sortie/status.
+	ResultStatusPart = "status"
+	// MaxStatusFile bounds the status part.
+	MaxStatusFile = 4 << 10
+	// ResultCriteriaPart holds a criteria review's .sortie/criteria.json,
+	// its verdict on each acceptance criterion.
+	ResultCriteriaPart = "criteria"
+	// MaxCriteriaFile bounds the criteria part.
+	MaxCriteriaFile = 64 << 10
 )
 
 // Usage is the body the daemon posts on the usage flow: the attempt's

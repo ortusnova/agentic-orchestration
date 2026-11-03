@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,7 +27,8 @@ type Config struct {
 
 	ControlPlane ControlPlane `json:"control_plane"`
 
-	// RunSlots is how many jobs run at once.
+	// RunSlots is how many jobs run at once. Zero, the default, follows
+	// the host's capacity: see [Config.Slots].
 	RunSlots int `json:"run_slots"`
 
 	// Reserve is what the daemon never declares free: memory, and CPUs.
@@ -114,11 +116,58 @@ type Smolvm struct {
 	// User is the user commands in the machine run as; "" keeps the
 	// pack's.
 	User string `json:"user"`
+
+	// Nested, when false, keeps this worker from declaring nested
+	// virtualization although the host offers it, so the control plane
+	// gives it no job that requires nested. Default: what the host offers.
+	Nested *bool `json:"nested"`
+
+	// Images holds what a job of an image reference gets on this host
+	// beyond its pack: its user, guest kernel, host folders, environment
+	// values read from files, and setup commands.
+	Images map[string]Image `json:"images"`
+}
+
+// Image is what this host gives every job of one image.
+type Image struct {
+	// User overrides Smolvm.User for this image.
+	User string `json:"user"`
+
+	// LibDir is the guest kernel's directory, SMOLVM_LIB_DIR for every
+	// smolvm call on the job's machine.
+	LibDir string `json:"lib_dir"`
+
+	// Mounts are host folders shared with the machine.
+	Mounts []Mount `json:"mounts"`
+
+	// Env holds plain values, no secret, for every command the daemon
+	// runs in the machine.
+	Env map[string]string `json:"env"`
+
+	// EnvFiles maps a variable to a file on this host whose content,
+	// less its final newline, is the variable's value in every command
+	// the daemon runs in the machine. Read at each job's start; never
+	// logged.
+	EnvFiles map[string]string `json:"env_files"`
+
+	// Setup holds shell scripts run in order in the machine, in
+	// /workspace with the agent's environment, after the workspace is
+	// seeded and before the agent starts. One that fails fails the job.
+	Setup []string `json:"setup"`
+}
+
+// Mount is a host folder shared with a job's machine.
+type Mount struct {
+	Host     string `json:"host"`
+	Guest    string `json:"guest"`
+	ReadOnly bool   `json:"read_only"`
+	// PerJob shares Host/<job>, created when the job starts and kept
+	// after it ends, instead of Host itself.
+	PerJob bool `json:"per_job"`
 }
 
 // Defaults.
 const (
-	DefaultRunSlots = 1
 	DefaultLogLevel = "info"
 )
 
@@ -170,9 +219,6 @@ func (c *Config) normalize() error {
 	if (t.CertFile != "" || t.CAFile != "") && u.Scheme != "https" {
 		return fieldError("control_plane.tls", "a certificate needs an https control_plane.url")
 	}
-	if c.RunSlots == 0 {
-		c.RunSlots = DefaultRunSlots
-	}
 	if c.RunSlots < 0 {
 		return fieldError("run_slots", "must be positive")
 	}
@@ -212,6 +258,11 @@ func (c *Config) normalize() error {
 	if c.Smolvm.PackDir != "" && !filepath.IsAbs(c.Smolvm.PackDir) {
 		return fieldError("smolvm.pack_dir", "must be absolute")
 	}
+	for ref, img := range c.Smolvm.Images {
+		if err := img.validate("smolvm.images." + ref); err != nil {
+			return err
+		}
+	}
 	for kind, argv := range c.UsageCommands {
 		if len(argv) == 0 || argv[0] == "" {
 			return fieldError("usage_commands."+kind, "must be a non-empty argument list")
@@ -225,6 +276,77 @@ func (c *Config) normalize() error {
 		return fieldError("log_level", "must be debug, info, warn or error")
 	}
 	return nil
+}
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// guestReserved are the guest paths the daemon itself gives a machine.
+var guestReserved = []string{"/workspace", "/run/worker"}
+
+func (img Image) validate(field string) error {
+	if img.LibDir != "" && !filepath.IsAbs(img.LibDir) {
+		return fieldError(field+".lib_dir", "must be absolute")
+	}
+	for i, m := range img.Mounts {
+		f := fmt.Sprintf("%s.mounts[%d]", field, i)
+		for _, p := range []string{m.Host, m.Guest} {
+			if !filepath.IsAbs(p) || strings.Contains(p, ":") {
+				return fieldError(f, fmt.Sprintf("host and guest must be absolute paths without ':', got %q", p))
+			}
+		}
+		g := filepath.Clean(m.Guest)
+		for _, r := range guestReserved {
+			if g == r || strings.HasPrefix(g, r+"/") || strings.HasPrefix(r, g+"/") {
+				return fieldError(f+".guest", fmt.Sprintf("%s overlaps %s, which the daemon gives every machine", m.Guest, r))
+			}
+		}
+	}
+	for name := range img.Env {
+		if !envNamePattern.MatchString(name) {
+			return fieldError(field+".env", fmt.Sprintf("%q is not a variable name", name))
+		}
+		if _, dup := img.EnvFiles[name]; dup {
+			return fieldError(field+".env."+name, "is in env_files too")
+		}
+	}
+	for name, path := range img.EnvFiles {
+		if !envNamePattern.MatchString(name) {
+			return fieldError(field+".env_files", fmt.Sprintf("%q is not a variable name", name))
+		}
+		if !filepath.IsAbs(path) {
+			return fieldError(field+".env_files."+name, "must be an absolute path")
+		}
+	}
+	for i, s := range img.Setup {
+		if strings.TrimSpace(s) == "" {
+			return fieldError(fmt.Sprintf("%s.setup[%d]", field, i), "must not be empty")
+		}
+	}
+	return nil
+}
+
+// Slots is how many jobs run at once on a host of cpus CPUs and
+// memTotalGiB memory: run_slots when it is set, else as many smallest
+// jobs as fit in the host's CPUs and memory above the reserve, and at
+// least one. The host's own figures, not a number written down once,
+// so a host that gains or loses CPUs or memory gets its slots at the
+// next check-in; what is free now still bounds each job.
+func (c Config) Slots(cpus, memTotalGiB float64) int {
+	if c.RunSlots > 0 {
+		return c.RunSlots
+	}
+	n, sized := math.MaxInt, false
+	for _, d := range [][2]float64{{cpus - c.Reserve.CPU, c.SmallestJob.CPU}, {memTotalGiB - c.ReserveMemGiB(), c.SmallestJob.MemGiB}} {
+		if d[1] <= 0 {
+			continue
+		}
+		sized = true
+		n = min(n, int(math.Floor(d[0]/d[1]+1e-9)))
+	}
+	if !sized || n < 1 {
+		return 1
+	}
+	return n
 }
 
 // ReserveMemGiB is the memory reserve.

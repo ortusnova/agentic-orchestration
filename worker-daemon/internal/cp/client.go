@@ -21,7 +21,7 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
-// Errors the worker API answers with 409.
+// Errors the worker API answers with 409, and with 410.
 var (
 	// ErrNotCheckedIn is a poll before the control plane knows the
 	// worker.
@@ -29,6 +29,10 @@ var (
 	// ErrLeaseLost is a heartbeat or report for an attempt the worker
 	// no longer holds.
 	ErrLeaseLost = errors.New("cp: lease lost")
+	// ErrJobGone is a heartbeat or report for an attempt the control
+	// plane no longer wants: it cancelled or finished it, or no longer
+	// knows it. Its message says why.
+	ErrJobGone = errors.New("cp: job gone")
 )
 
 // StatusError is any other refusal.
@@ -175,15 +179,18 @@ func (c *Client) Poll(ctx context.Context) (*protocol.Offer, error) {
 	return nil, refusal("poll", status, b)
 }
 
-// Heartbeat renews the lease on an attempt.
-func (c *Client) Heartbeat(ctx context.Context, job string, attempt int) (protocol.Lease, error) {
-	status, b, err := c.do(ctx, "heartbeat", protocol.AttemptPath(job, attempt, "heartbeat"), nil)
+// Heartbeat renews the lease on an attempt and carries the step the job
+// reports.
+func (c *Client) Heartbeat(ctx context.Context, job string, attempt int, beat protocol.Beat) (protocol.Lease, error) {
+	status, b, err := c.do(ctx, "heartbeat", protocol.AttemptPath(job, attempt, "heartbeat"), beat)
 	if err != nil {
 		return protocol.Lease{}, err
 	}
 	switch status {
 	case http.StatusConflict:
 		return protocol.Lease{}, ErrLeaseLost
+	case http.StatusGone:
+		return protocol.Lease{}, fmt.Errorf("%w: %w", ErrJobGone, refusal("heartbeat", status, b))
 	case http.StatusOK:
 		var l protocol.Lease
 		_ = json.Unmarshal(b, &l)
@@ -203,6 +210,8 @@ func (c *Client) Report(ctx context.Context, job string, attempt int, r protocol
 		return nil
 	case http.StatusConflict:
 		return ErrLeaseLost
+	case http.StatusGone:
+		return fmt.Errorf("%w: %w", ErrJobGone, refusal("report", status, b))
 	}
 	return refusal("report", status, b)
 }

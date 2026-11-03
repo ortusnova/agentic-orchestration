@@ -1,11 +1,13 @@
 package registry
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -65,9 +67,31 @@ func KeyFor(identifier, workdir string) string {
 	return SanitizeKey(filepath.Base(workdir))
 }
 
-// SocketPath returns the socket path of the broker with pid for key.
+// maxSocketPath is the longest path a Unix socket address can hold:
+// sun_path is 108 bytes on Linux and 104 on macOS, each with its NUL.
+func maxSocketPath() int {
+	if runtime.GOOS == "darwin" {
+		return 103
+	}
+	return 107
+}
+
+// SocketPath returns the socket path of the broker with pid for key:
+// KEY.PID.sock in dir. When that is longer than a socket address holds,
+// it is a short, stable name for it in $XDG_RUNTIME_DIR (else the
+// temporary directory) instead. A client reads the path from the
+// broker's record, so it finds either one.
 func SocketPath(dir, key string, pid int) string {
-	return filepath.Join(dir, fmt.Sprintf("%s.%d.sock", key, pid))
+	p := filepath.Join(dir, fmt.Sprintf("%s.%d.sock", key, pid))
+	if len(p) <= maxSocketPath() {
+		return p
+	}
+	base := os.Getenv("XDG_RUNTIME_DIR")
+	if base == "" {
+		base = os.TempDir()
+	}
+	sum := sha256.Sum256([]byte(p))
+	return filepath.Join(base, fmt.Sprintf("acp-broker-%x.sock", sum[:8]))
 }
 
 func recordPath(dir, key string, pid int) string {

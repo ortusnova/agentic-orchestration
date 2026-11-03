@@ -2,9 +2,10 @@
 # Sourced by stage0.sh, and by test-retire-edge.sh.
 
 # The units of the stage-1 edge, which the control plane's Pomerium replaced
-# (control-plane/, design D18): the edge, nono, the token timer that
-# restarted nono, and one SSH tunnel per worker host.
-RETIRED_UNITS=(ortus-stage0-edge.service ortus-stage0-nono.service ortus-stage0-token.timer ortus-stage0-token.service)
+# (control-plane/, design D18): the edge, and one SSH tunnel per worker
+# host. nono and its token timer stay: nono is the egress behind Pomerium's
+# egress route, as it was behind the edge's.
+RETIRED_UNITS=(ortus-stage0-edge.service)
 
 # retire_edge DIR: stop and disable each retired unit a host still has, and
 # every worker tunnel, and delete their unit files from DIR. Prints each

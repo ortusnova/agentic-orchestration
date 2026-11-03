@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Check the kit's review gate (agent-platform/run-supervision) against Sortie
 # itself: compile each sortie-test/*_test.go into Sortie's orchestrator
-# package with `go test -overlay`, so it loads WORKFLOW.md and
-# WORKFLOW-homelab.md with Sortie's own loader and dispatch validation, and
-# runs Sortie's exit, auto-merge, merge-completion, CI and merge-conflict
-# code against its fake tracker and forge. Sortie is the sortie/ submodule,
-# unless SORTIE_SRC names another checkout; without either the test skips,
-# and with SORTIE_SRC set a missing checkout fails.
+# package with `go test -overlay`, so it loads WORKFLOW.md with Sortie's own
+# loader and dispatch validation, and runs Sortie's exit, auto-merge,
+# merge-completion, CI and merge-conflict code against its fake tracker and
+# forge. Sortie is the sortie/ submodule, unless SORTIE_SRC names another
+# checkout; without either the test skips. With SORTIE_SRC set, or with
+# STAGE0_TEST_NO_SKIP=1 as in CI, a missing checkout fails.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -16,6 +16,10 @@ if [[ ! -f $src/internal/orchestrator/plan_control.go ]]; then
     echo "test-review-gate: no Sortie checkout at $SORTIE_SRC" >&2
     exit 1
   fi
+  if [[ ${STAGE0_TEST_NO_SKIP:-} == 1 ]]; then
+    echo "test-review-gate: no Sortie checkout at $src, and STAGE0_TEST_NO_SKIP=1 forbids a skip: run git submodule update --init" >&2
+    exit 1
+  fi
   echo "test-review-gate: skipped, no Sortie checkout: run git submodule update --init, or set SORTIE_SRC"
   exit 0
 fi
@@ -23,6 +27,7 @@ src=$(cd "$src" && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# Every test file of sortie-test/, as if it were in the orchestrator package.
 replace=
 for f in "$KIT"/sortie-test/*_test.go; do
   replace+=${replace:+,}$(printf '"%s":"%s"' "$src/internal/orchestrator/${f##*/}" "$f")

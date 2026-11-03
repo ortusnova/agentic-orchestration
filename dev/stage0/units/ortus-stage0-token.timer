@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova stage 0: check the Claude token every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

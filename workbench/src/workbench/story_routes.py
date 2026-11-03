@@ -31,6 +31,14 @@ class AnswerBody(BaseModel):
     text: str
 
 
+class SessionsBody(BaseModel):
+    key: str
+    sessions: int = 4
+
+# The most sessions one grant gives a story.
+MAX_GRANT = 32
+
+
 def story_router(projects: ProjectManager, require_role) -> APIRouter:
     router = APIRouter(prefix="/api/projects/{slug}")
     approver = require_role(APPROVER)
@@ -71,8 +79,10 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         approvals, _ = rt.records()
         if body.epic:
             # Batch 0: every story of an epic none of whose stories is approved yet.
-            # A story its pull requests deliver is no one's to approve.
-            keys = [k for k in stories if k.split("/", 1)[0] == body.epic and not stories[k].get("delivered_by")]
+            # A story its pull requests deliver is no one's to approve, and
+            # a ui story was approved as its design prototype, before it was written.
+            keys = [k for k in stories if k.split("/", 1)[0] == body.epic and not stories[k].get("delivered_by")
+                    and stories[k].get("review") != "ui"]
             if not keys:
                 raise HTTPException(status_code=404, detail={"code": "no_stories", "message": f"epic {body.epic} has no stories"})
             if any(k in approvals and approvals[k]["digest"] == stories[k]["digest"] for k in keys):
@@ -87,6 +97,11 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             if delivered:
                 raise HTTPException(status_code=409, detail={"code": "delivered_by", "message":
                                     f"{', '.join(delivered)} names the pull requests that deliver it, so no agent takes it: nothing to approve"})
+            ui = [k for k in keys if stories[k].get("review") == "ui"]
+            if ui:
+                raise HTTPException(status_code=409, detail={"code": "ui_story", "keys": ui, "message":
+                                    f"{', '.join(ui)} has review: ui: it was approved as its design prototype, and Sortie "
+                                    "merges it once its review, CI and click-proofs pass: nothing to approve"})
         # A story with no spec is never approved; the epic's batch leaves it out.
         unspecified = without_spec(rt, snap["graph"], approvals, keys)
         if unspecified and (not body.epic or len(unspecified) == len(keys)):
@@ -172,7 +187,8 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
         writable(rt)
         try:
-            await rt.hub.sortie.answer(ident, text, who.name or who.email or who.key)
+            # The Sortie that holds the park takes the answer: p1's or another's.
+            await rt.hub.sortie_for(ident).answer(ident, text, who.name or who.email or who.key)
         except SortieError as exc:
             if exc.status == 409:
                 await rt.hub.poll_once()
@@ -185,5 +201,43 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         # The park is released: the question leaves the list now, not at the next poll.
         await rt.hub.poll_once()
         return {"answered": body.key, "identifier": ident, "by": who.public(), "node": node(rt, body.key)}
+
+    @router.post("/stories/sessions")
+    async def sessions(slug: str, body: SessionsBody, who: Identity = Depends(approver)) -> dict:
+        """Give a story whose session budget is used more sessions, through
+        the Sortie that holds it, which runs the story again with no change
+        to its workflow."""
+        rt = projects.get(slug)
+        if not 1 <= body.sessions <= MAX_GRANT:
+            raise HTTPException(status_code=400, detail={"code": "invalid_sessions", "message": f"grant between 1 and {MAX_GRANT} sessions"})
+        n = node(rt, body.key)
+        ident = ((n or {}).get("tracker") or {}).get("identifier")
+        if not n or n.get("kind") != "story" or not ident:
+            raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
+        writable(rt)
+        not_held = HTTPException(status_code=409, detail={"code": "not_budget_held",
+                                                          "message": f"{body.key} is not held by its session budget"})
+        # Sortie grants sessions to any issue it holds; the workbench offers
+        # them only to a story its session budget holds.
+        if not any(s["identifier"] == ident and s["kind"] == "budget" and (s.get("budget") or {}).get("session_budget")
+                   for w in rt.hub.fleet.get("workers") or [] for s in w.get("stuck") or []):
+            raise not_held
+        sortie = rt.hub.sortie_for(ident)
+        try:
+            result = await sortie.grant_sessions(ident, body.sessions, who.name or who.email or who.key)
+        except SortieError as exc:
+            if exc.status == 409 or (exc.status == 404 and exc.code == "issue_not_found"):
+                await rt.hub.poll_once()
+                raise not_held from exc
+            if exc.status in (404, 405):
+                raise HTTPException(status_code=501, detail={"code": "grant_unsupported",
+                                                             "message": f"{sortie.name}'s Sortie cannot grant sessions per issue yet"}) from exc
+            raise sortie_failure(exc) from exc
+        if rt.registry is not None:
+            await asyncio.to_thread(rt.registry.record_command, rt.project.id, ident, None, "sessions", str(body.sessions), who.key, who.name)
+        log.info("project %s: %s granted %s %d more sessions on %s", slug, who.key, body.key, body.sessions, sortie.name)
+        await rt.hub.poll_once()
+        return {"granted": body.sessions, "key": body.key, "identifier": ident, "sortie": sortie.name, "result": result,
+                "node": node(rt, body.key)}
 
     return router

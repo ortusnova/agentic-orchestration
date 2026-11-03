@@ -100,16 +100,37 @@ class SortieClient:
         return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/answer",
                                    json={"text": text, "author": author})
 
-    def bind(self, project: str) -> "ProjectSortie":
-        return ProjectSortie(self, project)
+    async def grant_sessions(self, identifier: str, sessions: int, author: str,
+                             reason: str = "granted from the plan workbench") -> dict[str, Any]:
+        """Give the issue more sessions than the workflow's budget: Sortie
+        raises that issue's session budget by ``sessions`` and dispatches it
+        again, with no change to the workflow. Sortie answers 404
+        ``issue_not_found`` for an issue it does not hold."""
+        return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/sessions",
+                                   json={"add": sessions, "by": author, "reason": reason})
+
+    async def run_events(self, dispatch_id: str) -> dict[str, Any]:
+        """The agent events Sortie kept of one run, oldest first."""
+        return await self._request("GET", f"/api/v1/runs/{quote(dispatch_id, safe='')}/events")
+
+    async def runs(self, *, since: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Finished runs, newest first: those that started at ``since`` or
+        later, of ``status`` only when given."""
+        params = {"limit": str(limit), **({"since": since} if since else {}), **({"status": status} if status else {})}
+        return await self._request("GET", "/api/v1/runs", params=params)
+
+    def bind(self, project: str, name: str = "sortie") -> "ProjectSortie":
+        return ProjectSortie(self, project, name)
 
 
 class ProjectSortie:
     """The plan API of one tracker project, through a shared client."""
 
-    def __init__(self, client: SortieClient, project: str):
+    def __init__(self, client: SortieClient, project: str, name: str = "sortie"):
         self.client = client
         self.project = project
+        # The Sortie's name, as the workbench shows its host.
+        self.name = name
 
     async def plan_graph(self, include_unkeyed: bool = False) -> dict[str, Any]:
         return await self.client.plan_graph(include_unkeyed, project=self.project)
@@ -144,3 +165,12 @@ class ProjectSortie:
 
     async def answer(self, identifier: str, text: str, author: str) -> dict[str, Any]:
         return await self.client.answer(identifier, text, author)
+
+    async def grant_sessions(self, identifier: str, sessions: int, author: str) -> dict[str, Any]:
+        return await self.client.grant_sessions(identifier, sessions, author)
+
+    async def run_events(self, dispatch_id: str) -> dict[str, Any]:
+        return await self.client.run_events(dispatch_id)
+
+    async def runs(self, *, since: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
+        return await self.client.runs(since=since, status=status, limit=limit)

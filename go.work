@@ -3,6 +3,8 @@ go 1.27.3
 use (
 	./acp-broker
 	./control-plane
+	./dev/stage0/live-proofs
+	./dev/stage0/workflow
 	./smol-builder
 	./worker-daemon
 )

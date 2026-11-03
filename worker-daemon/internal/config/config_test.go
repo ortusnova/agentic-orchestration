@@ -14,9 +14,48 @@ func TestParseDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.ControlPlane.URL != "http://127.0.0.1:7690" || c.ControlPlane.IdentityHeader != "X-Sortie-Worker-Identity" ||
-		c.RunSlots != 1 || c.DiskPath != c.StateDir || c.Smolvm.Binary != "smolvm" || c.LogLevel != "info" ||
+		c.RunSlots != 0 || c.DiskPath != c.StateDir || c.Smolvm.Binary != "smolvm" || c.LogLevel != "info" ||
 		c.ReserveMemGiB() != 16 || c.FloorDiskGiB() != 50 {
 		t.Errorf("defaults: %+v", c)
+	}
+}
+
+// Scenario: run_slots follows the host. Without run_slots, a worker
+// runs as many smallest jobs as its CPUs and memory above the reserve
+// hold, at least one; run_slots overrides it.
+func TestSlotsFollowTheHost(t *testing.T) {
+	c, err := Parse([]byte(`{"worker_id":"taichi","control_plane":{"url":"http://h"},
+		"reserve":{"mem_gib":8,"cpu":2},"floor":{"disk_gib":50},
+		"smallest_job":{"cpu":4,"mem_gib":8,"disk_gib":20},"state_dir":"/s"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		cpus, mem float64
+		want      int
+	}{
+		{"taichi, 32 CPUs and 91.8 GiB", 32, 91.8, 7},
+		{"p1, 22 CPUs and 62 GiB", 22, 62, 5},
+		{"memory bounds it", 32, 40, 4},
+		{"an exact fit", 18, 40, 4},
+		{"too small for one job still runs one", 2, 4, 1},
+		{"no memory figure", 32, 0, 1},
+	} {
+		if got := c.Slots(tc.cpus, tc.mem); got != tc.want {
+			t.Errorf("%s: %d slots, want %d", tc.name, got, tc.want)
+		}
+	}
+	c.RunSlots = 2
+	if got := c.Slots(32, 91.8); got != 2 {
+		t.Errorf("run_slots 2: %d slots", got)
+	}
+	unsized, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unsized.Slots(32, 91.8); got != 1 {
+		t.Errorf("no smallest_job: %d slots, want 1", got)
 	}
 }
 
@@ -62,5 +101,42 @@ func TestPackAndUsageCommand(t *testing.T) {
 	}
 	if got := c.UsageCommand("claude-agent-acp"); len(got) != 1 {
 		t.Errorf("default usage = %v", got)
+	}
+}
+
+func TestParseImages(t *testing.T) {
+	doc := strings.Replace(minimal, `"state_dir"`, `"smolvm":{"images":{"homelab.smolmachine":{"user":"builder","lib_dir":"/k",
+		"mounts":[{"host":"/c/sources","guest":"/home/builder/.cache/homelab-sources","read_only":true},
+		{"host":"/s/recorder","guest":"/var/log/homelab-recorder","per_job":true}],
+		"env_files":{"HOMELAB_VM_AGE_KEY":"/s/inputs/vm-age/keys.txt"},"setup":["true"]}}},"state_dir"`, 1)
+	c, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := c.Smolvm.Images["homelab.smolmachine"]
+	if img.User != "builder" || len(img.Mounts) != 2 || !img.Mounts[0].ReadOnly || !img.Mounts[1].PerJob ||
+		img.EnvFiles["HOMELAB_VM_AGE_KEY"] == "" || len(img.Setup) != 1 {
+		t.Errorf("image = %+v", img)
+	}
+	for name, tc := range map[string]struct{ image, field string }{
+		"relative host":   {`{"mounts":[{"host":"c","guest":"/g"}]}`, "mounts[0]"},
+		"colon":           {`{"mounts":[{"host":"/c:d","guest":"/g"}]}`, "mounts[0]"},
+		"over workspace":  {`{"mounts":[{"host":"/c","guest":"/workspace/x"}]}`, "mounts[0].guest"},
+		"over the share":  {`{"mounts":[{"host":"/c","guest":"/run"}]}`, "mounts[0].guest"},
+		"bad variable":    {`{"env_files":{"A-B":"/f"}}`, "env_files"},
+		"bad plain name":  {`{"env":{"1A":"x"}}`, "env"},
+		"env twice":       {`{"env":{"A":"x"},"env_files":{"A":"/f"}}`, "env.A"},
+		"relative file":   {`{"env_files":{"A":"f"}}`, "env_files.A"},
+		"relative kernel": {`{"lib_dir":"k"}`, "lib_dir"},
+		"empty setup":     {`{"setup":[" "]}`, "setup[0]"},
+		"unknown key":     {`{"net":"virtio"}`, "net"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc := strings.Replace(minimal, `"state_dir"`, `"smolvm":{"images":{"i":`+tc.image+`}},"state_dir"`, 1)
+			_, err := Parse([]byte(doc))
+			if err == nil || !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("err = %v, want one naming %s", err, tc.field)
+			}
+		})
 	}
 }

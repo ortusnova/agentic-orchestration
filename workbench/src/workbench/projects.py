@@ -10,15 +10,19 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from .alerts import Alerts
 from .autosync import SyncLoop, sync_project
 from .config import Config
 from .delivery import DeliveryWatch, GitHubClient, GitHubError
 from .hub import Hub
 from .plan_state import PlanState, watch
+from .preview import read_previews
 from .registry import Project, Registry, RegistryError, check_new, suggest_slug
-from .scaffold import UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, upgrade_schemas
+from .scaffold import (UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, shipped_changes,
+                       upgrade_schemas)
 from .sessions import SessionManager, runtime_base
 from .sortie import SortieClient, SortieError
+from .timeline import RunHistory, RunWorkers
 from .workers import WorkerRelay
 
 log = logging.getLogger(__name__)
@@ -33,7 +37,8 @@ class ProjectRuntime:
 
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
                  sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
-                 github: GitHubClient | None = None):
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
+                 alerts: Alerts | None = None):
         self.project = project
         self.store = store
         self.config = config
@@ -42,12 +47,18 @@ class ProjectRuntime:
         # The pull requests the stories name in delivered_by, looked up on GitHub.
         self.deliveries = DeliveryWatch(github or GitHubClient(config.github_api_url, config.github_token),
                                         self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
-        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls)
+        own = sortie.bind(project.huly_project, config.sortie_name)
+        self.hub = Hub(self.plan, own, records=self.records, pulls=self.deliveries.pulls,
+                       peers=[p.bind(project.huly_project, name) for name, p in (peers or {}).items()],
+                       previews=lambda: read_previews(config.previews_file),
+                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None,
+                       history=RunHistory(RunWorkers(config.home / "run-workers" / f"{project.slug}.json")))
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
         # The brokers of the workers Sortie runs for this project's stories.
-        self.workers = WorkerRelay(sortie.bind(project.huly_project), transport=broker_transport)
+        self.workers = WorkerRelay(own, transport=broker_transport, sortie_for=self.hub.sortie_for,
+                                   proxies=dict(config.peer_proxies))
         # The approved plan syncs to the tracker on its own.
         self.sync = SyncLoop(lambda: sync_project(self.hub), debounce=config.debounce_ms / 1000,
                              first_backoff=config.sync_backoff_first, max_backoff=config.sync_backoff_max)
@@ -104,7 +115,15 @@ class ProjectRuntime:
         """Bring the store's planning schemas up to the ones the workbench
         ships: in the store itself, or, when its branch tracks an upstream,
         on a pushed branch. Until that branch merges the plan is validated
-        against the shipped schemas."""
+        against the shipped schemas. A read-only workbench, such as a ui
+        story's preview against the live store, writes and pushes nothing:
+        it only validates against the shipped schemas."""
+        if not self.config.sync_enabled:
+            try:
+                self.plan.replaced_schemas = SchemaUpgrade(shipped_changes(self.store)).replaced()
+            except OSError as exc:
+                log.warning("project %s: could not read its planning schemas: %s", self.slug, exc)
+            return None
         try:
             up = upgrade_schemas(self.store)
         except (OSError, ScaffoldError) as exc:
@@ -193,9 +212,12 @@ class ProjectManager:
 
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
                  session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
-                 github: GitHubClient | None = None):
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
+                 alerts: Alerts | None = None):
         self.config = config
         self.github = github
+        self.peers = peers or {}
+        self.alerts = alerts
         self.broker_transport = broker_transport
         self.registry = registry
         self.sortie = sortie
@@ -242,7 +264,7 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport, github=self.github)
+                            broker_transport=self.broker_transport, github=self.github, peers=self.peers, alerts=self.alerts)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt
