@@ -119,7 +119,7 @@ func TestStage0_ALiveProofRequestStartsTheLiveProofJob(t *testing.T) {
 func TestStage0_AHomelabLiveProofRunsOnTaichi(t *testing.T) {
 	cfg := loadStage0(t, "WORKFLOW.md")
 	repos := cfg.Environment.Remote.Repositories
-	i := slices.IndexFunc(repos, func(r config.SmolvmRepository) bool { return r.Name == "homelab" })
+	i := slices.IndexFunc(repos, func(r config.Repository) bool { return r.Name == "homelab" })
 	if i < 0 {
 		t.Fatal("the workflow lists no homelab repository")
 	}
