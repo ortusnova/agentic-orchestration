@@ -13,7 +13,7 @@ podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
-dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm packs
+dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm packs (they are rebuilt by themselves when their inputs change)
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
 STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daemon only
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
@@ -99,11 +99,11 @@ by the same Sortie, like any other.
   request that still fails after `max_retries` fix runs (2 for CI, 1 for a
   conflict) is a stopped failure: Sortie escalates it, comments on the
   story, and runs no further fix until a new commit lands or a person
-  answers it. Neither watch has a window. Sortie's CI provider reads the
-  checks of one repository, `github.project`: on p1 that is
-  `agentic-orchestration`, so a `sortie` or `homelab` pull request gets no
-  CI fix run (its CI reads fail and back off, and its failing CI only holds
-  its merge) until Sortie reads each pull request's own repository.
+  answers it. Neither watch has a window. The CI reaction reads each pull
+  request's checks from the pull request's own repository, so a `sortie` or
+  `homelab` pull request on p1 gets CI fix runs as an `agentic-orchestration`
+  one does; `github.project` only names the CI provider's configured
+  repository.
   `test-review-gate.sh` checks the fix runs too.
 
 - **Operator comments.** On p1 `review_comments` is on: a comment on a ui
@@ -128,6 +128,11 @@ by the same Sortie, like any other.
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
+- **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
+  (`websearch.provider` in `pack/opencode.json`), so `egress-profile.json`
+  allows `mcp.firecrawl.dev` and no credential is bound. With no provider set,
+  opencode asks the user to pick one on the first search, and Sortie
+  refuses that prompt.
 - **What the agent reads.** The VM has no copy of the spec store and no
   network beyond the workflow's hosts, so the prompt carries everything:
   the story's Huly description holds its notes, its acceptance criteria,
@@ -362,6 +367,15 @@ dev/stage0/stage0.sh            # later runs read it from stage0.env
 | Live kit | as on p1, `$STAGE0_HOME/kit` follows `origin/main` (`ortus-stage0-deploy.timer`); a change to the kit runs `stage0.sh` once the daemon runs no job. A worker host builds no Sortie and follows no `plan-bench` merge |
 | Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
 | Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
+
+p1's workbench shows taichi's workers beside p1's, as workers of p1's
+Sortie, the only one (`agent-platform/run-supervision`); the brokers of
+their agents run on p1. The forwards to taichi's own Sortie and its brokers
+that `huly-tunnel.sh` opened while taichi ran one are retired with it:
+`stage0.sh` on p1 closes the tunnels and deletes the files they left for the
+workbench (`$STAGE0_HOME/tunnels/` and `sorties/`). p1's Sortie is named
+after p1's host name; set `STAGE0_SORTIE_NAME` in `stage0.env` to name it
+otherwise.
 
 ### homelab's inputs
 

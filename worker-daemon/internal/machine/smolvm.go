@@ -3,6 +3,7 @@ package machine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -143,6 +144,59 @@ func withEnv(env []string) []string {
 		return nil
 	}
 	return append(os.Environ(), env...)
+}
+
+// List implements [Lister] with smolvm machine ls --json. It reads the
+// name, the labels, the state and the creation time of each machine,
+// under the names smolvm has used for them, and leaves the time zero
+// when smolvm gives none.
+func (s *Smolvm) List(ctx context.Context) ([]Listed, error) {
+	cmd := exec.CommandContext(ctx, s.Binary, "machine", "ls", "--json") // #nosec G204 -- argv, no shell
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("smolvm machine ls: %w: %s", err, tail(stderr.String()))
+	}
+	return ParseList(out)
+}
+
+// ParseList reads the output of smolvm machine ls --json.
+func ParseList(out []byte) ([]Listed, error) {
+	var raw []map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, fmt.Errorf("smolvm machine ls --json: %w", err)
+	}
+	str := func(m map[string]json.RawMessage, keys ...string) string {
+		for _, k := range keys {
+			var v string
+			if json.Unmarshal(m[k], &v) == nil && v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	listed := make([]Listed, 0, len(raw))
+	for _, m := range raw {
+		l := Listed{Name: str(m, "name"), State: str(m, "state", "status")}
+		if l.Name == "" {
+			continue
+		}
+		_ = json.Unmarshal(m["labels"], &l.Labels)
+		if l.Labels == nil {
+			l.Labels = map[string]string{}
+		}
+		if t, err := time.Parse(time.RFC3339Nano, str(m, "created_at", "created", "createdAt")); err == nil {
+			l.Created = t
+		} else {
+			var unix int64
+			if json.Unmarshal(m["created_at"], &unix) == nil && unix > 0 {
+				l.Created = time.Unix(unix, 0)
+			}
+		}
+		listed = append(listed, l)
+	}
+	return listed, nil
 }
 
 func tail(s string) string {

@@ -212,7 +212,7 @@ def test_the_configured_model_is_selected_through_acp_before_the_first_turn(stor
         with live_server(app) as base, httpx.Client(base_url=base, timeout=20) as client:
             client.post("/api/login", json={"password": PASSWORD})
             client.post(f"{P}/session", json={"message": "plan billing"})
-            # The agent reports its default model first, then the selected one.
+            # The session shows the model once it is selected, never the agent's default before it.
             status = wait_status(client, lambda s: s.get("model") == "fake/planner")
             assert status["active"] is True and status["model"] == "fake/planner"
             with client.stream("GET", f"{P}/session/events") as r:

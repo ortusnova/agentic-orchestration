@@ -113,10 +113,16 @@ rm -f "$tmp/calls"; retire_sortie "$tmp/units"
 mkdir -p "$tmp/units/default.target.wants"
 echo unit > "$tmp/units/ortus-stage0-huly-tunnel@.service"
 ln -s ../ortus-stage0-huly-tunnel@.service "$tmp/units/default.target.wants/ortus-stage0-huly-tunnel@taichi.service"
+mkdir -p "$STAGE0_HOME/tunnels" "$STAGE0_HOME/sorties"
+echo SORTIE_LOCAL_PORT=7681 > "$STAGE0_HOME/tunnels/taichi.env"
+echo SORTIE_URL=http://127.0.0.1:7681 > "$STAGE0_HOME/sorties/taichi.env"
+echo token > "$STAGE0_HOME/sorties/taichi.token"
 rm -f "$tmp/calls"; retire_huly_tunnels "$tmp/units"
 [[ ! -e $tmp/units/ortus-stage0-huly-tunnel@.service && ! -L $tmp/units/default.target.wants/ortus-stage0-huly-tunnel@taichi.service ]] \
   && grep -q 'disable -q --now ortus-stage0-huly-tunnel@taichi.service' "$tmp/calls" \
   && ok "p1's Huly tunnel to taichi is closed and its unit gone" || fail "huly tunnel: $(calls)"
+[[ ! -e $STAGE0_HOME/tunnels/taichi.env && ! -e $STAGE0_HOME/sorties/taichi.env && ! -e $STAGE0_HOME/sorties/taichi.token ]] \
+  && ok "and the workbench no longer reads taichi's Sortie" || fail "taichi's Sortie files are still there"
 rm -f "$tmp/calls"; retire_huly_tunnels "$tmp/units"
 [[ -z $(calls) ]] && ok "closing them again changes nothing" || fail "calls again: $(calls)"
 

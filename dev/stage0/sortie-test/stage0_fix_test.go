@@ -22,7 +22,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/scm/github"
 )
 
-// fixRepoProject is the repository each workflow's CI provider reads.
+// fixRepoProject is each workflow's github.project, the repository its CI
+// provider is configured with.
 var fixRepoProject = map[string]string{
 	"WORKFLOW.md": "ortusnova/agentic-orchestration",
 }

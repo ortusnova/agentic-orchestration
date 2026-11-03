@@ -3,7 +3,7 @@
   import { api, ApiError, projectApi, subscribeGraph } from "../lib/api";
   import { changedStories } from "../lib/home";
   import { openQuestions, pageTitle } from "../lib/questions";
-  import { graphHref, homeHref, type ProjectPage } from "../lib/router";
+  import { graphHref, homeHref, workersHref, type ProjectPage } from "../lib/router";
   import { httpSpecs } from "../lib/spec";
   import { httpSession } from "../lib/session";
   import { httpSync } from "../lib/sync";
@@ -12,6 +12,7 @@
   import ChatPane from "./ChatPane.svelte";
   import GraphPane from "./GraphPane.svelte";
   import HomePage from "./HomePage.svelte";
+  import WorkersPage from "./WorkersPage.svelte";
   import QuestionCount from "./QuestionCount.svelte";
   import Shell from "./Shell.svelte";
   import SyncStatus from "./SyncStatus.svelte";
@@ -37,6 +38,7 @@
   const tabs = $derived([
     { label: "Home", href: homeHref(slug), current: page === "home" },
     { label: "Graph", href: graphHref(slug), current: page === "graph" },
+    { label: "Workers", href: workersHref(slug), current: page === "workers" },
   ]);
 
   // A story whose state changed is marked for a few seconds (D9).
@@ -76,6 +78,22 @@
     }
   }
 
+  async function sessions(key: string, n: number): Promise<string | null> {
+    try {
+      await projectApi(slug).grantSessions(key, n);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return "Granting sessions needs the approver role.";
+      if (err instanceof ApiError && err.status === 409 && err.code === "sync_disabled") return "This workbench is read-only: grant from the one that owns the project.";
+      return err instanceof Error ? err.message : "The sessions were not granted.";
+    }
+  }
+
+  // A link that names a worker (Open on a job) opens its session in the chat pane.
+  $effect(() => {
+    if (page === "graph" && view.watch) watching = view.watch;
+  });
+
   async function replace(replacement: string): Promise<string | null> {
     try {
       await sync.supersede(replacement);
@@ -112,12 +130,21 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
       {/snippet}
     </HomePage>
+  </div>
+{:else if page === "workers"}
+  <div class="home-page">
+    <WorkersPage fleet={doc.fleet} {slug} projectName={name} {tabs}>
+      {#snippet actions()}
+        <QuestionCount count={questions} href={homeHref(slug)} />
+        <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
+      {/snippet}
+    </WorkersPage>
   </div>
 {:else}
 <Shell>
@@ -149,7 +176,7 @@
   {/snippet}
   {#snippet chat()}
     <ChatPane {doc} {view} {session} onselect={(k) => selectAnywhere(k)} actions={sync} {worker} {specs}
-      onwatch={(n) => { watching = n.tracker?.identifier ?? null; selectAnywhere(n.plan_key); }} onunwatch={() => (watching = null)} />
+      onwatch={(n) => { watching = n.tracker?.identifier ?? null; selectAnywhere(n.plan_key); }} onunwatch={() => { watching = null; view.watch = null; }} />
   {/snippet}
 </Shell>
 {/if}

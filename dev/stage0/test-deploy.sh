@@ -72,7 +72,7 @@ want() { # want NAME STUB_STATE
 }
 
 setup() {
-  rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" \
+  rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
     "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused"
   sortie 0
   g init -q --bare "$tmp/remote"
@@ -109,6 +109,13 @@ setup; merge workbench/app; run
 check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
 setup; merge dev/stage0/units; sortie 1; run; check "a kit change waits while an agent runs" main~1 ""
 setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh when idle" main "stage0.sh;"
+# A workbench change never waits for a drain: restarting it stops no agent.
+setup; rm -f "$STAGE0_HOME/deploy-workbench.at"; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
+g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
+check "busy: a kit and workbench merge rebuilds the workbench at once" main~1 "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
+if cmp -s "$STAGE0_LIVE_KIT/workbench/app" "$tmp/up/workbench/app"; then echo "ok: busy: the workbench files are the merged ones"; else echo "FAIL: busy: workbench/ not moved"; failed=1; fi
+rm -f "$tmp/calls"; run; check "busy: and only once per commit" main~1 ""
+finish 1; run; check "busy: the kit change applies once the run finishes" main "stage0.sh;"
 # stage0.sh runs with the PATH the last stage0.sh recorded, not the unit's.
 setup; mkdir -p "$tmp/tools"; echo "$tmp/tools:$PATH" > "$STAGE0_HOME/path"
 # shellcheck disable=SC2016 # the stub expands $PATH, not this script

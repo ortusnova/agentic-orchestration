@@ -136,9 +136,13 @@ retire_sortie() {
 }
 
 # retire_huly_tunnels UNITS: no worker host polls Huly, so p1 keeps no
-# tunnel that gives one Huly. Does nothing once they are gone.
+# tunnel that gives one Huly, nor the forwards in it to a worker host's
+# Sortie and its brokers: the workbench reads p1's Sortie, the only one, so
+# the files the tunnels left for the workbench go too. Does nothing once
+# they are gone.
 retire_huly_tunnels() {
   local units=$1 template=ortus-stage0-huly-tunnel@.service link
+  rm -f "$STAGE0_HOME"/tunnels/*.env "$STAGE0_HOME"/sorties/*.env "$STAGE0_HOME"/sorties/*.token
   [[ -e $units/$template ]] || return 0
   for link in "$units"/default.target.wants/ortus-stage0-huly-tunnel@*.service; do
     [[ -e $link || -L $link ]] || continue

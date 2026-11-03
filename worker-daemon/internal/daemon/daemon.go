@@ -57,6 +57,13 @@ type Daemon struct {
 	mu   sync.Mutex
 	jobs map[string]*job
 	wg   sync.WaitGroup
+
+	// The machines no Sortie started, as last listed, and when each
+	// was first seen.
+	umu       sync.Mutex
+	unmanaged []protocol.Unmanaged
+	firstSeen map[string]time.Time
+	listedAt  time.Time
 }
 
 // DefaultHeartbeat is used until the first check-in answers.
@@ -200,8 +207,11 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	if d.backendOK.Load() {
 		backends = append(backends, d.backend.Name())
 	}
+	_, r := d.reserved()
 	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
-		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s)}
+		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s),
+		Used:      protocol.Free{CPU: r.CPU, MemGiB: r.MemGiB, DiskGiB: r.DiskGiB},
+		Unmanaged: d.unmanagedSeen()}
 }
 
 func (d *Daemon) checkIn(ctx context.Context) error {
@@ -209,6 +219,7 @@ func (d *Daemon) checkIn(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.listUnmanaged(ctx)
 	t, err := d.cp.CheckIn(ctx, d.Declaration(s))
 	if err != nil {
 		return err

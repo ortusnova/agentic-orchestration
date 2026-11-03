@@ -153,15 +153,15 @@ wasted?
 
 | Verdict | When |
 | --- | --- |
-| **Stuck** | Sortie is unreachable, the last sync failed, or a run is held (waiting on a permission, a budget, or a person) |
+| **Stuck** | Sortie is unreachable, the last sync failed, a run is held (waiting on a permission, a budget, or a person), or a slot is free while nothing is ready and released stories wait on reviews, merges, deploys, questions or held budgets |
 | **Done** | Nothing planned is left to run |
 | **Idle now** | An agent slot is free and no released story is waiting for one |
 | **Will idle** | Every slot is busy, but fewer released stories wait than there are slots |
 | **Healthy** | Every slot is busy and at least as many released stories wait as there are slots |
 
 The first verdict that applies wins, in this order. Its reasons name the
-held runs, the failed sync, or how many slots are free against how much is
-ready. **Runway** is the number of released, unstarted stories, shown against
+held runs, the failed sync, what the stories wait on and who acts on each,
+or how many slots are free against how much is ready. **Runway** is the number of released, unstarted stories, shown against
 the slot count. It is measured in stories until estimates turn it into hours
 (D8). Agent slots and held runs come from Sortie's state.
 

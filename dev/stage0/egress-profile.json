@@ -21,6 +21,7 @@
       "ghcr.io",
       "github.com",
       "kubernetes.github.io",
+      "mcp.firecrawl.dev",
       "models.opencode.ai",
       "production.cloudflare.docker.com",
       "production.cloudfront.docker.com",

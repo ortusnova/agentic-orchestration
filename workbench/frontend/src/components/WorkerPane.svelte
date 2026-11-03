@@ -4,7 +4,7 @@
   import { can } from "../lib/identity.svelte";
   import type { StoryActions } from "../lib/sync";
   import type { GraphNode } from "../lib/types";
-  import { workerStatus, type WorkerClient } from "../lib/worker";
+  import { workerStatus, type LastTranscript, type WorkerClient } from "../lib/worker";
   import Transcript from "./Transcript.svelte";
 
   /** The session of the worker Sortie runs for one story, in the chat pane.
@@ -17,6 +17,7 @@
   let run = $state<{ session_id: string; stage: string | null } | null>(null);
   let floor = $state("");
   let ended = $state(false);
+  let last: LastTranscript | null = $state(null);
   let down = $state(false);
   let draft = $state("");
   let busy = $state("");
@@ -63,9 +64,19 @@
       run = { session_id: r.session_id, stage: r.stage };
       ended = false;
     },
+    onTranscript: (t) => {
+      // Nothing runs now: the agent's last session, as the Sortie that ran it kept it.
+      last = t;
+      const lines = t.events.map((e) => {
+        const at = e.at ? Date.parse(e.at) : NaN;
+        return { time: Number.isNaN(at) ? Date.now() : at, text: e.tool_line ? `${e.text} · ${e.tool_line}` : e.text };
+      });
+      const first = Math.min(Date.now(), ...lines.map((l) => l.time));
+      notices = [...notices, { time: first - 1, text: `Nothing runs for this story now. Its last session, as ${t.sortie}'s Sortie kept it:` }, ...lines];
+    },
     onEnded: () => {
       ended = true;
-      note("The worker ended. Sortie runs nothing more for this story now.");
+      note(last ? "That was the last session. Sortie runs nothing more for this story now." : "The worker ended. Sortie runs nothing more for this story now.");
     },
     onDown: () => (down = true),
   });

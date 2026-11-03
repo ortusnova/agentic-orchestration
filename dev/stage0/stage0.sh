@@ -22,7 +22,8 @@
 #                      Sortie and removes its unit.
 #
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
-#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm packs
+#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm packs, which are
+#                                         rebuilt by themselves when their inputs change
 #   dev/stage0/stage0.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
 #                                         (deploy.sh does this once plan-bench moves)
 #
@@ -201,6 +202,25 @@ smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later;
 . "$KIT/worker-config.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 
+# The pack is built again when its inputs change (the kit's pack/,
+# smol-builder's source, which embeds its layers, and smolvm), so a merged
+# change to the agent's config reaches the next machine through deploy.sh.
+# Not the smol-builder binary: Go stamps it with the kit's commit.
+build_pack() {
+  local pack_inputs
+  pack_inputs=$({
+    (cd "$ROOT" && find dev/stage0/pack smol-builder -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+    smolvm --version
+  } | sha256sum | cut -c1-16)
+  if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK || $(cat "$STAGE0_PACK.inputs" 2>/dev/null) != "$pack_inputs" ]]; then
+    say "Building the pack $STAGE0_PACK ($pack_inputs)"
+    smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK.tmp" > "$STAGE0_HOME/pack-report.json" \
+      || { rm -f "$STAGE0_PACK.tmp"; die "the pack did not build: $STAGE0_HOME/pack-report.json"; }
+    mv "$STAGE0_PACK.tmp" "$STAGE0_PACK"
+    echo "$pack_inputs" > "$STAGE0_PACK.inputs"
+  fi
+}
+
 if [[ $STAGE0_PROFILE == worker ]]; then
   # A worker host holds no credential (spec store agent-platform/stage-1-edge):
   # its jobs' model and forge requests get theirs from nono on p1.
@@ -213,10 +233,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   (cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
   (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
   export PATH=$STAGE0_HOME/bin:$PATH
-  if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
-    say "Building the pack $STAGE0_PACK"
-    smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
-  fi
+  build_pack
   if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
     command -v python3 > /dev/null || die "python3 is not on PATH; homelab's inputs need it"
     # shellcheck source=homelab-inputs.sh
@@ -332,10 +349,7 @@ register_local_worker "$STAGE0_WORKER_NAME"
 render_edge_config "$STAGE0_HOME/edge.json"
 "$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
 
-if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
-  say "Building the pack $STAGE0_PACK"
-  smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
-fi
+build_pack
 STAGE0_EGRESS_CA=$STAGE0_HOME/egress-ca/ca.crt
 # p1 takes homelab jobs only with homelab's dev host here (STAGE0_HOMELAB_SRC).
 if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then

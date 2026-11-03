@@ -79,6 +79,25 @@ func TestLiveNono(t *testing.T) {
 		}
 	})
 
+	// opencode's websearch (pack/opencode.json) calls Firecrawl's keyless
+	// MCP; nono tunnels it without a credential.
+	t.Run("Web search", func(t *testing.T) {
+		agent := agentClient(h.ports["taichi"].URL, h.sortie.mint("egress"), nil)
+		call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"firecrawl_search","arguments":{"query":"smolvm","limit":2}}}`
+		req, _ := http.NewRequest(http.MethodPost, "https://mcp.firecrawl.dev/v2/mcp", strings.NewReader(call))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		resp, err := agent.Do(req)
+		if err != nil {
+			t.Fatalf("%v\nnono:\n%s", err, out.String())
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `\"web\":[{\"url\"`) {
+			t.Fatalf("mcp.firecrawl.dev answered %d: %.500s\nnono:\n%s", resp.StatusCode, body, out.String())
+		}
+	})
+
 	t.Run("A host not allowed", func(t *testing.T) {
 		status := h.connect("taichi", "pastebin.com:443", h.sortie.mint("egress"))
 		if status == http.StatusOK {

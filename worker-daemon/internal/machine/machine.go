@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // Guest paths every backend provides.
@@ -92,6 +93,37 @@ type Machine interface {
 	Stop(ctx context.Context) error
 	// Delete deletes the machine and its disk.
 	Delete(ctx context.Context) error
+}
+
+// Labels that say who started a machine.
+const (
+	// LabelJob is on every machine the daemon creates for a job.
+	LabelJob = "worker-daemon.job"
+	// LabelSortieManaged is on every machine a Sortie's smolvm
+	// environment creates on its own host.
+	LabelSortieManaged = "sortie.managed"
+)
+
+// Listed is one machine a backend has on this host, whoever made it.
+type Listed struct {
+	Name   string
+	Labels map[string]string
+	// Created is when it was created; zero when the backend does not say.
+	Created time.Time
+	State   string
+}
+
+// Unmanaged reports whether no Sortie started the machine: it carries
+// neither the daemon's job label nor a Sortie's.
+func (l Listed) Unmanaged() bool {
+	_, job := l.Labels[LabelJob]
+	_, sortie := l.Labels[LabelSortieManaged]
+	return !job && !sortie
+}
+
+// Lister is a backend that lists every machine on its host.
+type Lister interface {
+	List(ctx context.Context) ([]Listed, error)
 }
 
 // StartStdin gives cmd a standard input fed from r by a goroutine that
