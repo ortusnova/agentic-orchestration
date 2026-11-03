@@ -1,15 +1,19 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import { graphHref } from "../lib/router";
-  import { plainTask, REASON_TEXT, slackText, slackWidth, type Column, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import { eventText, plainTask, REASON_TEXT, slackText, slackWidth, type Column, type HomeNotification, type HomeQuestion, type NotReadyItem } from "../lib/home";
   import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, questions = [], slug, marks, onapprove, onanswer, onreplace,
+    items, questions = [], notifications = [], slug, marks, onapprove, onanswer, onreplace, onseen,
   }: {
     items: NotReadyItem[];
     /** The open questions of parked stories, ranked first. */
     questions?: HomeQuestion[];
+    /** What the Sorties' notifications sent: unread ones first. */
+    notifications?: HomeNotification[];
+    /** A person saw these notifications; resolves to an error message, or null. */
+    onseen?: (ids: number[]) => Promise<string | null>;
     slug: string;
     marks: Set<string>;
     /** Approve stories; resolves to an error message, or null. */
@@ -57,6 +61,19 @@
       : i.action.kind === "review" ? (i.stories ? `Review ${i.stories.length}` : "Review")
       : i.action.kind === "task" ? "Open task" : "Plan in graph";
 
+  const unread = $derived(notifications.filter((n) => n.unread));
+  let seeing = $state(false);
+  let seenError = $state("");
+  async function see(ids: number[]) {
+    if (!onseen || !ids.length) return;
+    seeing = true;
+    seenError = (await onseen(ids)) ?? "";
+    seeing = false;
+  }
+  const when = (t: number) => new Date(t * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  /** What the notification says: the agent's words first, such as its question. */
+  const said = (n: HomeNotification) => (n.agent_text || n.body || n.title).trim();
+
   async function approve(i: NotReadyItem) {
     busy = i.key;
     errors = { ...errors, [i.key]: "" };
@@ -76,6 +93,39 @@
       <span class="key"><i class="u-later"></i>room to spare</span>
     </p>
   </div>
+  {#if notifications.length}
+    <div class="inbox" data-notifications role="region" aria-labelledby="inbox-h">
+      <div class="ch">
+        <h3 id="inbox-h">From Sortie</h3>
+        <span>{unread.length} unread · {notifications.length} shown</span>
+        {#if onseen && unread.length > 1}
+          <button type="button" class="more" disabled={seeing} onclick={() => see(unread.map((n) => n.id))}>Mark all seen</button>
+        {/if}
+      </div>
+      {#if seenError}<p class="err" role="alert">{seenError}</p>{/if}
+      <ol>
+        {#each notifications as n (n.id)}
+          <li class="note-item" class:unread={n.unread} data-notification={n.id} data-event={n.event_type} data-unread={n.unread}>
+            <span class="dot" aria-label={n.unread ? "Unread" : "Seen"}></span>
+            <div class="body">
+              <span class="line">
+                <a class="name" href={graphHref(slug, { epic: n.story.change, selected: n.story.key })} title="{n.story.key}: {n.story.title}">{n.story.label}</a>
+                <span class="what">{n.identifier} {eventText(n)}{n.host ? ` on ${n.host}'s Sortie` : ""}</span>
+                {#if n.again}<span class="upd">still open after 4 hours</span>{:else if n.unread}<span class="upd">unread</span>{/if}
+              </span>
+              <span class="said">{said(n)}</span>
+              <span class="note">
+                {when(n.sent_at)}{#if n.question} · answer it under Answer{/if}{#if n.escalation?.url} · <a href={n.escalation.url} target="_blank" rel="noreferrer">open the session</a>{/if}{#if !n.unread && n.seen_by} · seen by {n.seen_by}{/if}
+              </span>
+            </div>
+            {#if n.unread && onseen}
+              <button type="button" class="btn" disabled={seeing} onclick={() => see([n.id])}>Seen</button>
+            {/if}
+          </li>
+        {/each}
+      </ol>
+    </div>
+  {/if}
   <div class="cols">
     <div class="col" data-column="answer">
       <div class="ch"><h3>Answer</h3><span>{questions.length} · {questions.length === 1 ? "an agent waits" : "agents wait"}</span></div>
@@ -193,6 +243,17 @@
   .more { margin: 6px 0 4px; padding: 4px 0; font-size: 12px; font-weight: 600; color: var(--mute); text-decoration: underline; text-underline-offset: 3px; }
   .more:hover { color: var(--ink); }
   .quiet { margin-top: 10px; font-size: 12px; color: var(--mute); }
+  .inbox { margin-bottom: 14px; padding: 10px 14px 6px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
+  .inbox .ch { justify-content: flex-start; }
+  .inbox .ch .more { margin: 0 0 0 auto; padding: 0; }
+  .note-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--hair); }
+  .note-item:last-child { border-bottom: 0; }
+  .dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; border: 1.5px solid var(--line); }
+  .note-item.unread .dot { border-color: var(--alert); background: var(--alert); }
+  .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+  .what { font-size: 12px; color: var(--ink); }
+  .note-item:not(.unread) .what, .note-item:not(.unread) .said { color: var(--mute); }
+  .said { font-size: 12.5px; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .item.moved { animation: moved 1.4s ease-out 3; border-radius: 4px; }
   @keyframes moved { from { box-shadow: 0 0 0 0 rgba(201, 138, 26, 0.5); } to { box-shadow: 0 0 0 8px rgba(201, 138, 26, 0); } }
 

@@ -246,6 +246,48 @@ class Registry:
                 "INSERT INTO merged_pulls (ref, url, merge_commit, merged_at, seen_at) VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT (ref) DO NOTHING", (ref, url, merge_commit, merged_at, int(time.time())))
 
+    # What the Sorties' notifications sent, for every project.
+
+    def record_notification(self, host: str, notification_id: str, identifier: str, event_type: str, payload: str,
+                            received_at: float) -> tuple[int, bool]:
+        """Keep one notification; Sortie sending the same one again keeps
+        the first. The row's id, and whether it is new."""
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO notifications (host, notification_id, identifier, event_type, payload, received_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (host, notification_id) DO NOTHING",
+                (host, notification_id, identifier, event_type, payload, received_at))
+            if cur.rowcount:
+                return cur.lastrowid, True
+            row = self._db.execute("SELECT id FROM notifications WHERE host = ? AND notification_id = ?",
+                                   (host, notification_id)).fetchone()
+        return row["id"], False
+
+    def notifications(self, identifiers: list[str] | None = None) -> list[dict]:
+        """The notifications kept, oldest first; only those naming one of
+        ``identifiers`` when it is given."""
+        with self._lock:
+            if identifiers is None:
+                rows = self._db.execute("SELECT * FROM notifications ORDER BY received_at, id").fetchall()
+            else:
+                rows = []
+                # SQLite takes a bounded number of parameters per statement.
+                for i in range(0, len(identifiers), 500):
+                    part = identifiers[i:i + 500]
+                    rows += self._db.execute(
+                        f"SELECT * FROM notifications WHERE identifier IN ({','.join('?' * len(part))})", part).fetchall()
+                rows.sort(key=lambda r: (r["received_at"], r["id"]))
+        return [dict(r) for r in rows]
+
+    def see_notifications(self, ids: list[int], seen_by: str, seen_at: float) -> int:
+        """Mark the notifications seen, now; how many there were."""
+        with self._lock:
+            n = 0
+            for i in ids:
+                n += self._db.execute("UPDATE notifications SET seen_at = ?, seen_by = ? WHERE id = ?",
+                                      (seen_at, seen_by, i)).rowcount
+        return n
+
     def delete(self, slug: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM projects WHERE slug = ?", (slug,))

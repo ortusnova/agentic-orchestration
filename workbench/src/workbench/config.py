@@ -183,6 +183,10 @@ class Config:
     notify_chat_id: str = ""
     # Where people reach this workbench, for the links in what it pushes.
     public_url: str = ""
+    # The directory of <host>.token files: the token each host's Sortie
+    # posts its notifications with (workbench.notifications). None: the
+    # notifications endpoint takes none.
+    notify_tokens_dir: Path | None = None
 
     @property
     def oidc(self) -> bool:
@@ -273,4 +277,6 @@ class Config:
             notify_secret=notify_secret,
             notify_chat_id=notify_chat_id,
             public_url=public_url,
+            notify_tokens_dir=(Path(env["WORKBENCH_NOTIFY_TOKENS"].strip()).expanduser()
+                               if env.get("WORKBENCH_NOTIFY_TOKENS", "").strip() else None),
         )

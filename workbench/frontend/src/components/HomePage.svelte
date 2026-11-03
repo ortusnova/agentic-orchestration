@@ -10,7 +10,7 @@
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsessions, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsessions, onseen, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -23,6 +23,8 @@
     onreplace?: (replacement: string) => Promise<string | null>;
     /** Give a story its session budget holds more sessions; resolves to an error message, or null. */
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
+    /** A person saw these notifications; resolves to an error message, or null. */
+    onseen?: (ids: number[]) => Promise<string | null>;
     actions?: Snippet;
   } = $props();
 
@@ -104,7 +106,7 @@
       </section>
     {/if}
 
-    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} />
+    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} notifications={home.notifications ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onseen} />
 
     <section class="progress" aria-labelledby="ms-h">
       <h2 id="ms-h">Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,7 +38,7 @@ class ProjectRuntime:
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
                  sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
                  github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
-                 alerts: Alerts | None = None):
+                 alerts: Alerts | None = None, clock: Callable[[], float] = time.time):
         self.project = project
         self.store = store
         self.config = config
@@ -50,7 +51,8 @@ class ProjectRuntime:
         self.hub = Hub(self.plan, own, records=self.records, pulls=self.deliveries.pulls,
                        peers=[p.bind(project.huly_project, name) for name, p in (peers or {}).items()],
                        previews=lambda: read_previews(config.previews_file),
-                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None)
+                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None,
+                       notifications=registry.notifications if registry is not None else None, clock=clock)
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
@@ -211,8 +213,9 @@ class ProjectManager:
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
                  session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
                  github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
-                 alerts: Alerts | None = None):
+                 alerts: Alerts | None = None, clock: Callable[[], float] = time.time):
         self.config = config
+        self.clock = clock
         self.github = github
         self.peers = peers or {}
         self.alerts = alerts
@@ -262,7 +265,8 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport, github=self.github, peers=self.peers, alerts=self.alerts)
+                            broker_transport=self.broker_transport, github=self.github, peers=self.peers, alerts=self.alerts,
+                            clock=self.clock)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt
