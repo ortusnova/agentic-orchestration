@@ -83,6 +83,8 @@ class FakeSortie:
         self.grants: list[dict[str, Any]] = []
         self.grants_supported = True
         self.history: dict[str, dict[str, Any]] = {}
+        # Finished runs, as GET /api/v1/runs serves them, newest first.
+        self.runs: list[dict[str, Any]] = []
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -242,6 +244,14 @@ class FakeSortie:
                                              "used_sessions": entry.get("used_sessions", 0),
                                              "budget_sessions": budget + add if isinstance(budget, int) else None,
                                              "granted_sessions": granted})
+        if path == "/api/v1/runs":
+            q = request.url.params
+            runs = sorted(self.runs, key=lambda r: r["started_at"], reverse=True)
+            if q.get("since"):
+                runs = [r for r in runs if r["started_at"] >= q["since"]]
+            if q.get("status"):
+                runs = [r for r in runs if r["status"] == q["status"]]
+            return httpx.Response(200, json={"runs": runs[: int(q.get("limit") or 50)], "next_cursor": None})
         if path.startswith("/api/v1/runs/") and path.endswith("/events"):
             dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
             run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)
