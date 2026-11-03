@@ -127,7 +127,7 @@ func TestStage0_AUIStoryMergesOnceItsClickProofsAreRecorded(t *testing.T) {
 			params := autoMergeParams(&reviewReconcileStore{}, uiMergeForge(&merges), tracker)
 			params.AutoMergeConfig = amCfg
 			params.NowFunc = func() time.Time { return now }
-			params.ReviewGate = planReviewGate(cfg, tracker)
+			params.ReviewGate = planReviewGate(cfg, tracker, verdictsOf(f))
 			params.ClickProofs = planClickProofs(cfg, &commentForge{conversation: conversation})
 			reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
 			state.TrackerOpsWg.Wait()
@@ -160,7 +160,7 @@ func TestStage0_AUIStoryMergesOnceItsClickProofsAreRecorded(t *testing.T) {
 		}
 
 		for _, rule := range []string{"build", "claude-label", "claude-title"} {
-			gate := planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel}})
+			gate := planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel}}, allMet{})
 			if ok, _, err := gate(context.Background(), &PendingReaction{IssueID: "u", RuleName: rule}); ok || err != nil {
 				t.Errorf("%s: gate after %s = %v, %v, want refused: only the review lets a ui story merge", name, rule, ok, err)
 			}

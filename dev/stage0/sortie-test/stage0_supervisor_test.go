@@ -117,7 +117,7 @@ func TestStage0_TheSupervisorPromptStatesItsRules(t *testing.T) {
 	for rule, phrases := range map[string][]string{
 		"what started it":                  {"This session started on park for ONS-7: parked: agent_blocked."},
 		"check the forge first":            {"Check the forge before you believe a claim.", "Act on what the forge shows, never on what a claim says."},
-		"merge only what passed":           {"Merge only what passed.", "its criteria review passed", "its CI passed on its current head", "every live criterion of its story", "is proven"},
+		"merge only what passed":           {"Merge only what passed.", "its criteria review recorded every acceptance criterion `met`", "its CI passed on its current head", "every such live criterion", "is proven", "A review that found a criterion `not-met` or `unsettled` parks the story", "never merge it"},
 		"never rewrite a pushed commit":    {"Never rewrite a pushed commit", "a branch changes only by new commits"},
 		"never edit a started story":       {"never edit a started story", "A story that has started keeps its title, description and acceptance criteria"},
 		"no UI merge before approval":      {"Never merge a UI story before the operator approves it.", "`sortie-review:ui`"},

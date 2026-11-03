@@ -120,6 +120,13 @@ func fakeAgent() int {
 	if err := os.WriteFile(".sortie/pr.json", []byte(testPR), 0o600); err != nil {
 		return 6
 	}
+	for env, file := range map[string]string{"AGENT_STATUS": ".sortie/status", "AGENT_CRITERIA": ".sortie/criteria.json"} {
+		if v := os.Getenv(env); v != "" {
+			if err := os.WriteFile(file, []byte(v), 0o600); err != nil {
+				return 6
+			}
+		}
+	}
 	gitSteps := [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=agent@example.invalid", "commit", "-q", "-m", "agent work"}}
 	switch os.Getenv("AGENT_GIT") {
 	case "none":
