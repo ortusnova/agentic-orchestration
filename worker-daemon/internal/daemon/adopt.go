@@ -77,6 +77,7 @@ func loadRecord(dir string) (record, error) {
 // that no job record names is deleted.
 func (d *Daemon) adopt(ctx context.Context) {
 	known := map[string]bool{}
+	adopted, notAdopted := 0, 0
 	entries, err := os.ReadDir(d.jobsDir())
 	if err != nil {
 		d.log.Warn("reading the jobs left by the last start failed", slog.String("error", err.Error()))
@@ -93,13 +94,19 @@ func (d *Daemon) adopt(ctx context.Context) {
 			continue
 		}
 		known[MachineName(rec.Offer.Job.ID, rec.Offer.Job.Attempt)] = true
-		d.adoptJob(ctx, dir, rec)
+		if d.adoptJob(ctx, dir, rec) {
+			adopted++
+		} else {
+			notAdopted++
+		}
 	}
+	d.log.Info("jobs left by the last start", slog.Int("adopted", adopted), slog.Int("not_adopted", notAdopted))
 	d.deleteStrays(ctx, known)
 }
 
-// adoptJob takes one job a previous daemon left in dir.
-func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) {
+// adoptJob takes one job a previous daemon left in dir, and reports
+// whether it runs on.
+func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) bool {
 	o := rec.Offer
 	log := d.log.With(slog.String("job", o.Job.ID), slog.Int("attempt", o.Job.Attempt))
 	fail := func(m machine.Machine, why string) {
@@ -124,30 +131,30 @@ func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) {
 	if err != nil {
 		cancel(nil)
 		fail(nil, err.Error())
-		return
+		return false
 	}
 	var m machine.Machine
 	if r, ok := d.backend.(machine.Reopener); ok {
 		if m, err = r.Reopen(ctx, spec); err != nil {
 			cancel(nil)
 			log.Warn("the job's machine cannot be read; leaving the job for the next start", slog.String("error", err.Error()))
-			return
+			return false
 		}
 	}
 	if m == nil {
 		cancel(nil)
 		fail(nil, "the worker daemon restarted and the job's machine "+spec.Name+" is gone")
-		return
+		return false
 	}
 	if rec.Seed == nil {
 		cancel(nil)
 		fail(m, "the worker daemon restarted before the job's agent started")
-		return
+		return false
 	}
 	if j.inputEnv, err = imageEnv(img); err != nil {
 		cancel(nil)
 		fail(m, err.Error())
-		return
+		return false
 	}
 	j.m, j.state = m, protocol.MachineRunning
 	d.mu.Lock()
@@ -167,6 +174,7 @@ func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) {
 			return j.agentAndResult(m, filepath.Join(dir, "share"), s, true)
 		})
 	})
+	return true
 }
 
 // resume takes the adopted job's offer again from the control plane, its
