@@ -103,10 +103,10 @@ class SortieClient:
     async def grant_sessions(self, identifier: str, sessions: int, author: str) -> dict[str, Any]:
         """Give the issue more sessions than the workflow's budget: Sortie
         raises that issue's session budget by ``sessions`` and dispatches it
-        again, with no change to the workflow. Sortie answers 409 for an
-        issue its session budget does not hold."""
+        again, with no change to the workflow. Sortie answers 404
+        ``issue_not_found`` for an issue it does not hold."""
         return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/sessions",
-                                   json={"sessions": sessions, "author": author})
+                                   json={"add": sessions, "by": author})
 
     async def run_events(self, dispatch_id: str) -> dict[str, Any]:
         """The agent events Sortie kept of one run, oldest first."""

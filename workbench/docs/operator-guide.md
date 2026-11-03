@@ -264,7 +264,7 @@ What the workbench reads of each Sortie's `GET /api/v1/state`. Where a Sortie la
 | `pulls[]` | Each open pull request of a story: `{"issue_identifier", "number", "repository", "url", "waits_on", "reason", "since", "worker"}`, `waits_on` one of `review`, `ci`, `conflict`, `live_proof`, `person`, `none`. Without it, a running review or fix names its `pull_request` as waiting on its review or CI. |
 | `dispatch_paused` | A deploy that waits for the host to drain. |
 
-Sortie serves the session grant as `POST /api/v1/<identifier>/sessions` (`{"sessions": n, "author": "…"}`): it raises that issue's session budget by `n` and dispatches it again, and answers `409` for an issue its session budget does not hold.
+Sortie serves the session grant as `POST /api/v1/<identifier>/sessions` (`{"add": n, "by": "…"}`, `add` from 1 to 64; ortusnova/sortie#32): it raises that issue's session budget by `n` and dispatches it again, and answers `404 issue_not_found` for an issue it does not hold. The workbench offers the grant only to a story the session budget holds, and answers `409 not_budget_held` for any other.
 
 ### Projects from before story approval
 

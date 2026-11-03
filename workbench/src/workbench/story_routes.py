@@ -208,14 +208,20 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         if not n or n.get("kind") != "story" or not ident:
             raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
         writable(rt)
+        not_held = HTTPException(status_code=409, detail={"code": "not_budget_held",
+                                                          "message": f"{body.key} is not held by its session budget"})
+        # Sortie grants sessions to any issue it holds; the workbench offers
+        # them only to a story its session budget holds.
+        if not any(s["identifier"] == ident and s["kind"] == "budget"
+                   for w in rt.hub.fleet.get("workers") or [] for s in w.get("stuck") or []):
+            raise not_held
         sortie = rt.hub.sortie_for(ident)
         try:
             result = await sortie.grant_sessions(ident, body.sessions, who.name or who.email or who.key)
         except SortieError as exc:
-            if exc.status == 409:
+            if exc.status == 409 or (exc.status == 404 and exc.code == "issue_not_found"):
                 await rt.hub.poll_once()
-                raise HTTPException(status_code=409, detail={"code": exc.code or "not_budget_held",
-                                                             "message": f"{body.key} is not held by its session budget"}) from exc
+                raise not_held from exc
             if exc.status in (404, 405):
                 raise HTTPException(status_code=501, detail={"code": "grant_unsupported",
                                                              "message": f"{sortie.name}'s Sortie cannot grant sessions per issue yet"}) from exc

@@ -160,7 +160,8 @@ def test_more_sessions_in_p1s_lane_reach_p1s_sortie(store):
         r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
         assert r.status_code == 200, r.text
         assert r.json()["sortie"] == "p1"
-        assert p1.grants == [{"identifier": "T-3", "sessions": 4, "author": "Local operator"}] and taichi.grants == []
+        # In Sortie's words: POST /api/v1/{identifier}/sessions takes {"add", "by"}.
+        assert p1.grants == [{"identifier": "T-3", "add": 4, "by": "Local operator"}] and taichi.grants == []
         # p1's Sortie runs it again: the lane is no longer stuck.
         assert workers(client)["p1"]["lanes"][0]["stuck"] is None
         rows = client.get(f"{P}/workers/T-3/messages").json()["commands"]
@@ -168,6 +169,24 @@ def test_more_sessions_in_p1s_lane_reach_p1s_sortie(store):
         # A story the budget no longer holds is refused, and so is a silly grant.
         assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4}).status_code == 409
         assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 0}).status_code == 400
+        # A running story is not offered sessions, though Sortie would grant them.
+        p1.run("T-3", "s3")
+        settle(client)
+        assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4}).status_code == 409
+        assert len(p1.grants) == 1
+
+
+def test_a_story_sortie_no_longer_holds_is_not_held_by_its_budget(store):
+    app, p1, _ = fleet_app(store)
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "session_budget", "used_sessions": 32, "budget_sessions": 32}]
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        # Sortie released it between the workbench's poll and the grant: it answers 404 issue_not_found.
+        p1.budget_exhausted = []
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "not_budget_held"
+        assert p1.grants == []
 
 
 def test_a_sortie_that_cannot_grant_sessions_says_so(store):

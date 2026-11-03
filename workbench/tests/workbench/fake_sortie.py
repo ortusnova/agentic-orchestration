@@ -178,7 +178,7 @@ class FakeSortie:
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
-"config": {"agent": agent}, **self.extra_state})
+                                             "config": {"agent": agent}, **self.extra_state})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:
@@ -193,12 +193,16 @@ class FakeSortie:
             ident = path.removeprefix("/api/v1/").removesuffix("/sessions")
             if not self.grants_supported:
                 return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
-            if not any(b["issue_identifier"] == ident for b in self.budget_exhausted):
-                return httpx.Response(409, json={"error": {"code": "not_budget_held", "message": f"{ident} is not held by its budget"}})
-            self.grants.append({"identifier": ident, "sessions": body["sessions"], "author": body["author"]})
+            add = body.get("add") if isinstance(body, dict) else None
+            if not isinstance(add, int) or isinstance(add, bool) or not 1 <= add <= 64:
+                return httpx.Response(400, json={"error": {"code": "invalid_request", "message": "add from 1 to 64"}})
+            held = any(b["issue_identifier"] == ident for b in self.budget_exhausted)
+            if not held and ident not in self.running and ident not in self.retrying and ident not in self.park_details:
+                return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": f"issue {ident} is not known"}})
+            self.grants.append({"identifier": ident, "add": add, "by": body.get("by") or "operator"})
             # Sortie raises the issue's budget and dispatches it again.
             self.budget_exhausted = [b for b in self.budget_exhausted if b["issue_identifier"] != ident]
-            return httpx.Response(200, json={"issue_identifier": ident, "granted": body["sessions"]})
+            return httpx.Response(200, json={"issue_identifier": ident, "granted_sessions": add})
         if path.startswith("/api/v1/runs/") and path.endswith("/events"):
             dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
             run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)
