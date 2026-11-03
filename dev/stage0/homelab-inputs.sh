@@ -96,7 +96,7 @@ homelab_image_json() {
         \"user\": \"builder\",
         \"lib_dir\": $(json_str "$krunfw"),
         \"mounts\": [$mounts],
-        \"env\": {\"NODE_EXTRA_CA_CERTS\": $(json_str "$STAGE0_GUEST_CA")},
+        \"env\": {\"NODE_EXTRA_CA_CERTS\": $(json_str "$STAGE0_GUEST_CA"), \"IS_SANDBOX\": \"1\"},
         \"env_files\": {\"HOMELAB_VM_AGE_KEY\": $(json_str "$STAGE0_HOME/inputs/vm-age/keys.txt"), \"ORTUS_EGRESS_CA\": $(json_str "$STAGE0_EGRESS_CA")},
         \"setup\": [$(json_str "$(guest_ca_setup)"), $(json_str "$(homelab_setup)")]
       }"

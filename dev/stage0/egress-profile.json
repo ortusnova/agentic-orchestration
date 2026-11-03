@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "ortus-stage0-egress",
-    "description": "The egress flow of the stage-1 edge on p1 (dev/stage0/README.md): the hosts the workflow allows, and the credentials it binds, read by run-nono.sh"
+    "description": "The egress flow of the stage-1 edge on p1 (dev/stage0/README.md): the hosts a job of any repository may reach, and the credentials the workflow binds, read by run-nono.sh"
   },
   "network": {
     "allow_domain": [

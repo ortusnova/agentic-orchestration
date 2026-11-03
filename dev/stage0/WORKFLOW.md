@@ -168,8 +168,11 @@ dispatch:
 # 127.0.0.1:${STAGE0_EDGE_WORKER_PORT} on its own loopback: p1's worker
 # directly, a worker host's through the tunnel p1 opens to it. The flows go
 # through the edge; egress is nono on p1, which holds the credentials and
-# allows only the hosts below (egress-profile.json). acp-broker on p1 carries
-# each session, so the workbench can watch and steer it.
+# allows only the hosts egress-profile.json lists, for every repository.
+# The remote kind takes no allow_hosts and no pass_env: the hosts are nono's,
+# and IS_SANDBOX is in each worker image's env (worker-config.sh). The hooks
+# are gone too (above). acp-broker on p1 carries each session, so the
+# workbench can watch and steer it.
 environment:
   kind: remote
   host_prefix: [acp-broker, -http, 127.0.0.1:0, -viewer-token-file, "${STAGE0_HOME}/viewer-token", --]
@@ -185,42 +188,10 @@ environment:
       mcp: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/mcp"}
       bundles: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/bundles"}
       usage: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/usage"}
-    # Every repository's hosts: nono allows a job only these and the hosts of
-    # the credentials it holds. homelab's are a first list from the chain's
-    # pins; the pilot replaces it with what a chain needed (homelab-pilot).
-    allow_hosts:
-      - models.opencode.ai
-      - registry.npmjs.org
-      - proxy.golang.org
-      - sum.golang.org
-      # proxy.golang.org serves module zips by redirect to Google Cloud Storage.
-      - storage.googleapis.com
-      - codeload.github.com
-      - "*.githubusercontent.com"
-      - ghcr.io
-      - registry-1.docker.io
-      - auth.docker.io
-      - production.cloudflare.docker.com
-      # Docker Hub's blob CDN redirects here too (ONS-22, 2026-11-01).
-      - production.cloudfront.docker.com
-      - quay.io
-      - "*.quay.io"
-      - registry.k8s.io
-      - "*.pkg.dev"
-      - cdimage.debian.org
-      - deb.debian.org
-      - security.debian.org
-      - pypi.org
-      - files.pythonhosted.org
-      - charts.jetstack.io
-      - charts.longhorn.io
-      - cloudnative-pg.github.io
-      - kubernetes.github.io
     credentials:
       # nono holds the value and replaces it in the job's egress; Sortie reads
       # none under the remote kind (refresh-token.sh keeps nono's fresh).
       - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
-    pass_env: [IS_SANDBOX]
     # A story runs in the repository its plan node names (the Huly label
     # sortie-repository:<name>), else in sortie. Every one is dispatched here:
     # no other Sortie polls the project.

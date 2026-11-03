@@ -50,7 +50,7 @@ render_worker_config() {
   local out=$1 name=$2 url=$3 ca=$4 packs images nested=false
   packs="$(json_str "$STAGE0_AGENT_IMAGE"): $(json_str "$STAGE0_PACK")"
   images="$(json_str "$STAGE0_AGENT_IMAGE"): {
-        \"env\": {\"NODE_EXTRA_CA_CERTS\": $(json_str "$STAGE0_GUEST_CA")},
+        \"env\": {\"NODE_EXTRA_CA_CERTS\": $(json_str "$STAGE0_GUEST_CA"), \"IS_SANDBOX\": \"1\"},
         \"env_files\": {\"ORTUS_EGRESS_CA\": $(json_str "$ca")},
         \"setup\": [$(json_str "$(guest_ca_setup)")]
       }"

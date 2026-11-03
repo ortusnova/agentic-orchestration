@@ -13,4 +13,4 @@ RUN curl -fsSLo /tmp/gl.tgz "https://github.com/golangci/golangci-lint/releases/
  && rm /tmp/gl.tgz \
  && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends shellcheck && rm -rf /var/lib/apt/lists/* \
  && golangci-lint --version && shellcheck --version
-# Claude Code accepts bypassPermissions as root only with IS_SANDBOX=1 (pass_env).
+# Claude Code accepts bypassPermissions as root only with IS_SANDBOX=1 (the worker image's env, worker-config.sh).

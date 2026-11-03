@@ -47,6 +47,7 @@ grep -q '"stage0.smolmachine": "'"$STAGE0_PACK"'"' "$conf" && ok "the stage-0 pa
 grep -q '"nested": false' "$conf" && ok "a worker without homelab's inputs does not declare nested" || fail "nested: $(cat "$conf")"
 grep -q '"ORTUS_EGRESS_CA": "'"$tmp/ca.crt"'"' "$conf" && grep -q 'update-ca-certificates' "$conf" \
   && ok "every machine trusts the egress CA's interception" || fail "CA: $(cat "$conf")"
+grep -q '"IS_SANDBOX": "1"' "$conf" && ok "the agent runs with IS_SANDBOX, which the remote kind does not pass" || fail "IS_SANDBOX: $(cat "$conf")"
 grep -q '"url": "http://127.0.0.1:7700"' "$conf" && ok "the worker dials the edge on its own loopback" || fail "url: $(cat "$conf")"
 for host in p1 taichi; do
   if grep -v '"worker_id"' "$conf" | grep -q "\"$host\""; then fail "the configuration names the host $host beyond worker_id"; fi
@@ -62,6 +63,7 @@ render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 "$daemon" check -config "$conf" > "$tmp/out" 2>&1 && ok "the daemon accepts the homelab image" || fail "check homelab: $(cat "$tmp/out")"
 grep -q '"homelab.smolmachine": "'"$STAGE0_HOMELAB_PACK"'"' "$conf" && grep -q '"nested": true' "$conf" \
   && ok "a worker with homelab's inputs has the homelab pack and declares nested" || fail "homelab pack: $(cat "$conf")"
+[[ $(grep -c '"IS_SANDBOX": "1"' "$conf") == 2 ]] && ok "the homelab image has IS_SANDBOX too" || fail "homelab IS_SANDBOX: $(cat "$conf")"
 grep -q '"user": "builder"' "$conf" && grep -q '"lib_dir": "/opt/krunfw"' "$conf" && grep -q '"per_job": true' "$conf" \
   && grep -q '"HOMELAB_VM_AGE_KEY": "'"$STAGE0_HOME"'/inputs/vm-age/keys.txt"' "$conf" \
   && ok "the homelab job gets builder, the guest kernel, the shared folders and the vm key" || fail "homelab image: $(cat "$conf")"

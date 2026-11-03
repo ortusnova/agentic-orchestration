@@ -136,3 +136,36 @@ func TestRequirementsNameWhatAJobNeeds(t *testing.T) {
 		t.Errorf("%d of the five flows are at the edge on the worker's loopback, the same on every worker", n)
 	}
 }
+
+// environment.remote holds only the keys the remote kind takes, so Sortie
+// neither refuses the workflow nor warns of a key it ignores
+// (unknown_sub_key): the allowed hosts are nono's (egress-profile.json),
+// and IS_SANDBOX is the worker image's, not a pass_env.
+func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
+	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository"}
+	key := regexp.MustCompile(`^    ([a-z_]+):`)
+	in := false
+	for _, line := range workflowFrontMatter(t) {
+		switch {
+		case line == "  remote:":
+			in = true
+			continue
+		case in && !strings.HasPrefix(line, "    "):
+			in = false
+		}
+		if m := key.FindStringSubmatch(line); in && m != nil && !slices.Contains(known, m[1]) {
+			t.Errorf("environment.remote.%s is not a key of the remote kind", m[1])
+		}
+	}
+	keys := regexp.MustCompile(`^      ([a-z_]+):`)
+	_, entries := repositories(t, workflowFrontMatter(t))
+	repoKeys := []string{"name", "url", "base", "provider", "project", "image", "requires", "dispatch"}
+	for name, lines := range entries {
+		for _, l := range lines {
+			l = "      " + strings.TrimPrefix(l, "- ")
+			if m := keys.FindStringSubmatch(l); m != nil && !slices.Contains(repoKeys, m[1]) {
+				t.Errorf("repository %s has %s, which a remote repository does not take", name, m[1])
+			}
+		}
+	}
+}

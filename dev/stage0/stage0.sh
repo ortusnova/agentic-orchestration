@@ -349,7 +349,12 @@ render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://12
 
 say "Rendering Sortie's workflow"
 STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
-"$KIT/run-sortie.sh" validate >/dev/null || die "Sortie refused the workflow: $KIT/run-sortie.sh validate"
+validated=$("$KIT/run-sortie.sh" validate 2>&1) || die "Sortie refused the workflow ($KIT/run-sortie.sh validate): $validated"
+# A key Sortie does not know is one it ignores: the workflow would not do
+# what it says, as when the remote kind ignored every repository but one.
+if unknown=$(grep -iE 'unknown_[a-z_]*key' <<< "$validated"); then
+  die "Sortie ignores a key of the workflow ($KIT/run-sortie.sh validate): $unknown"
+fi
 
 say "Installing the user units"
 retire_huly_tunnels "$UNITS"
