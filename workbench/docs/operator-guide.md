@@ -272,6 +272,24 @@ While a lease is live, the story waits on the supervisor, not on you:
 
 When a lease runs out with no renewal, Sortie ends it, publishes the `hold.expired` notification and raises its own attention item, and keeps the story out of dispatch. The workbench then shows the story as **stuck, for you**: in its lane, in the verdict, and in the **Answer** column, as `the supervisor's hold expired at <time>; last evidence: <…>`. Nobody is known to be taking care of it. Release the hold in Sortie (`POST /api/v1/<identifier>/release`), or ask the supervisor to place a new one with new evidence.
 
+### Read the supervisor's actions, and pause it
+
+The supervisor is one agent session that Sortie runs, at a time, for what its own rules cannot settle (spec store `agent-platform/run-supervision`, design D9): a parked story whose pull request already merged, a question whose premise the forge contradicts, a pull request nobody moves, a failure in no fault class. Sortie starts it on a park, on a stopped failure in no class, on a pull request reaction with no progress for an hour, on a free slot with nothing to dispatch while stories are held, and on a sweep (every 30 minutes in the stage-0 kit), in a slot of its own: it never takes a story's slot, and it has its own daily session and token budget. It acts only through its own token, on the supervisor's routes, and every request carries the evidence it is based on. Its prompt tells it to check the forge before it believes a claim, to merge only what its review and CI passed and whose live criteria are proven, never to rewrite a pushed commit or edit a started story, never to merge a UI story before you approve it, and to ask you for credentials, keys, approvals and decisions, one question per decision. In the stage-0 kit that prompt is `dev/stage0/supervisor.md` (see `dev/stage0/README.md`, "The supervisor").
+
+**What it did.** Sortie's state (`GET /api/v1/state`, no token needed) holds:
+
+| Field | What it says |
+| --- | --- |
+| `supervisor` | `status` (`idle`, `running`, `paused`, `budget_exhausted` or `unavailable`, with `unavailable` saying why), `paused` (`since`, `by`, `reason`), the `running` session or the `last_session` (its triggers, `outcome`, `error` and `tokens`), the `last_trigger`, the `pending_triggers`, the day's `budget` (`sessions_used` of `sessions_limit`, `tokens_used` of `tokens_limit`, `resets_at`) and `next_sweep_at` |
+| `supervisor_actions` | its 50 newest requests, newest first, refused ones included: `action` (such as `merge`, `record_merge`, `answer`, `fix_run`, `ask_person`), `route`, `issue_identifier`, `evidence` (what it read and where), `result` and `status` (the HTTP status), `detail` (why Sortie refused it, such as `ui_story` or `ci_not_passed`), `pull_request`, `merge_commit` and `at` |
+| `platform_faults` | each question it raised, of class `supervisor_question`: the `person_action` (`action`, `where`), the `stories` it holds, and in `detail` what it already checked |
+
+Read each action against its evidence: a merge names the pull request, its review, its CI and its head; an answer names what the forge showed. An action whose evidence does not hold up is one to undo, and a reason to pause it. In the stage-0 kit, `dev/stage0/supervisor.sh status` prints all of it, one action and its evidence per line, and `journalctl --user -u ortus-stage0-sortie` logs each session's start and end with its trigger, outcome and tokens.
+
+**Its questions.** A question holds its stories out of dispatch, retries included. Take the action where it says, then mark it done with `POST /api/v1/platform-faults/<id>/action-done` (control token); Sortie checks it again at once and releases the stories once the check passes.
+
+**Pause and resume it.** `POST /api/v1/supervisor/pause` (control token, optional body `{"by": "...", "reason": "..."}`) stops its running session (outcome `paused`) and starts no new one; triggers keep coming in and wait. `POST /api/v1/supervisor/resume` starts a session at once for what waited. The supervisor's own token cannot pause or resume it. Sortie keeps the pause in memory, so a restart clears it: in the stage-0 kit run `dev/stage0/supervisor.sh pause [why]` and `dev/stage0/supervisor.sh resume` instead, which record the pause and pause each restarted Sortie again until you resume. Pausing dispatch does not pause the supervisor, nor the other way around.
+
 ### Watch and steer workers
 
 The context card lists the project's **Workers**: the stories Sortie runs, retries, or holds, with their stage (the workflow rule that runs them), attempt, turn, last message, and who holds the floor. A project that Sortie does not dispatch has none. Choose **Watch** in the list, or **Watch the worker** on a selected running story, to show that worker's session in the chat pane in place of the planning chat. The pane shows the session from its start. **Back to planning** returns to the planning chat, which kept running.
