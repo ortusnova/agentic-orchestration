@@ -17,6 +17,7 @@ they are not, so an older Sortie still gives slots, jobs and holds.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from typing import Any, Iterable
@@ -686,15 +687,21 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         reasons.append({"code": s["kind"], "identifier": s["identifier"], "key": s["key"],
                         "text": f"{s['label']} {s['reason']}", "action": s["action"]})
     slot_waits = [x for x in w.waits if x["kind"] == "slot"]
+    # A story Sortie keeps back because this worker lacks the CPU, memory
+    # or disk it requires waits on the worker's resources, not on a free
+    # lane: its run slots follow its capacity, so a slot can be free while
+    # what runs, or another program on the host, holds the rest.
+    short = {id(x): r for x in slot_waits if (r := _short_of(x.get("reason"), w.name))}
+    open_waits = [x for x in slot_waits if id(x) not in short]
     idle_lanes = [lane for lane in lanes if lane["job"] is None and lane["stuck"] is None and not lane["extra"]]
     # A free lane takes a story only while its Sortie's cap has room: at
     # the cap the stories wait on the cap, not on a stuck worker.
     room = _cap_room(w.cap)
     free_slots = len(idle_lanes) if room is None else min(len(idle_lanes), room)
     capped = bool(slot_waits and idle_lanes and room == 0 and not w.draining)
-    if slot_waits and free_slots and not w.draining:
-        reasons.append({"code": "slot_idle", "identifier": slot_waits[0]["identifier"], "key": slot_waits[0]["key"],
-                        "text": f"{_plural(len(slot_waits), 'story', 'stories')} wait for a slot while "
+    if open_waits and free_slots and not w.draining:
+        reasons.append({"code": "slot_idle", "identifier": open_waits[0]["identifier"], "key": open_waits[0]["key"],
+                        "text": f"{_plural(len(open_waits), 'story', 'stories')} wait for a slot while "
                                 f"{_plural(free_slots, 'slot')} {'is' if free_slots == 1 else 'are'} free", "action": "story"})
     if reasons:
         verdict = "stuck"
@@ -711,6 +718,11 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         verdict = "idle"
         reasons.append({"code": "idle", "identifier": None, "key": None, "action": None,
                         "text": "nothing runs and nothing waits" if not w.waits else f"nothing runs; {_plural(len(w.waits), 'item')} waiting"})
+    if short and free_slots and not w.draining:
+        first = next(x for x in slot_waits if id(x) in short)
+        reasons.append({"code": "resources_full", "identifier": first["identifier"], "key": first["key"], "action": None,
+                        "text": f"{_plural(len(short), 'story', 'stories')} wait for this worker's resources, not a slot: "
+                                f"{short[id(first)]}"})
     if capped and verdict != "stuck" and w.cap is not None:
         reasons.append({"code": "cap_full", "identifier": None, "key": None, "action": None,
                         "text": _cap_text(len(slot_waits), w.cap)})
@@ -732,6 +744,23 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         "waits": waits, "next": nxt[:3], "unmanaged": unmanaged, "draining": w.draining, "known": dict(w.known),
         "capped": capped, "later": 0, "past_hidden": 0,
     }
+
+
+def _short_of(reason: Any, worker: str) -> str | None:
+    """What this worker lacks for a waiting job, from the reason Sortie
+    gives (sortie Matcher.Placeable: "worker NAME: WHY, WHY; worker ..."),
+    when only CPU, memory or disk keep it back; None when the worker's run
+    slots are in use too, or the reason does not name the worker."""
+    if not isinstance(reason, str):
+        return None
+    for part in reason.split("; "):
+        name, sep, why = part.partition(": ")
+        if sep and name == f"worker {worker}":
+            whys = [y.strip() for y in why.split(", ") if y.strip()]
+            if whys and all(re.search(r"\b(CPUs|GiB memory|GiB disk) free$", y) for y in whys):
+                return ", ".join(whys)
+            return None
+    return None
 
 
 def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[str, Any]:
