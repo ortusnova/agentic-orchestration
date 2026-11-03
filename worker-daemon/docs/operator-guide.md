@@ -227,13 +227,25 @@ stops, the daemon keeps the machine, stops the agent, and dials the
 stream again until Sortie serves it; it then starts the agent again in
 the same `/workspace`, and the restarted Sortie resumes the agent's
 session there (Sortie's `docs/workflow-reference.md`, "A restart keeps
-the remote runs"). A failed heartbeat that is not a `409` is retried at
-the next beat. Usage and the result are sent again while Sortie answers
-`404`, `502`, `503` or `504`, or cannot be reached, until it takes them
-or the job ends, and the report while Sortie answers a `5xx` or cannot
-be reached, until the lease would have run out. A stream refused `401`,
-which a Sortie that no longer knows the job answers, ends the attempt as
-failed.
+the remote runs"). A failed heartbeat that is not a `409` or `410`,
+such as a `503` while the restarted Sortie still adopts its runs, is
+retried at the next beat. The stream is dialled again, and usage and
+the result sent again, while Sortie answers `404`, `502`, `503` or `504`,
+or cannot be reached, for at most one lease (`lease_ms`) each, and the
+report while Sortie answers a `5xx` or cannot be reached, until the lease
+would have run out. A stream refused `401`, or not served again within
+the lease, ends the attempt as failed, with no usage or result. A job is
+never held forever: when no heartbeat has been accepted for longer than
+the lease, Sortie can no longer hold the job, and the daemon stops the
+machine, deletes it and reports nothing.
+
+A job the control plane no longer wants is released at once. When a
+heartbeat, a report or any flow request, the `stdio` dial included,
+answers `410` (`job_gone`: Sortie cancelled or finished the attempt, or
+no longer knows it after its restart), the daemon logs `the control
+plane no longer wants the job` with Sortie's reason, stops the agent and
+the machine, deletes the machine, frees what the job reserved at its
+next check-in, and sends no result, usage or report for that attempt.
 
 When a heartbeat answers `409`, the daemon stops the machine at once,
 within the heartbeat interval, and sends no result, usage or report for
