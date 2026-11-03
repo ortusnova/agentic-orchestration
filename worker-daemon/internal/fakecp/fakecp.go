@@ -1,6 +1,6 @@
 // Package fakecp is a fake control plane for tests. It serves worker
 // API protocol 1 as Sortie does under environment.kind remote (the same
-// routes, bodies, header checks and 400, 401 and 409 answers), and the
+// routes, bodies, header checks and 400, 401, 409 and 410 answers), and the
 // five data-plane flows of each job it offers, each behind that job's
 // flow token. It records every request in order.
 package fakecp
@@ -58,6 +58,9 @@ type lease struct {
 	expires time.Time
 	ended   bool
 	lost    bool
+	// gone is an attempt Sortie cancelled: its heartbeat, report and
+	// flows answer 410 job_gone.
+	gone bool
 }
 
 // Fake is a fake control plane.
@@ -80,6 +83,9 @@ type Fake struct {
 	// down answers every request 502, as a proxy in front of a Sortie
 	// that is restarting does.
 	down bool
+	// unserved holds the attempts whose stdio stream is answered 404,
+	// as an attempt Sortie has not opened, while their lease is kept.
+	unserved map[string]bool
 }
 
 // attemptData is what the worker sent on an attempt's flows.
@@ -111,7 +117,8 @@ func key(job string, attempt int) string { return job + "#" + strconv.Itoa(attem
 // New starts a fake on loopback.
 func New() *Fake {
 	f := &Fake{LeaseMS: 3000, jobs: map[string]Job{}, tokens: map[string]map[string]string{}, leases: map[string]*lease{},
-		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{}}
+		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{},
+		unserved: map[string]bool{}}
 	f.Server = httptest.NewServer(f)
 	return f
 }
@@ -206,6 +213,33 @@ func (f *Fake) Up() {
 			l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
 		}
 	}
+}
+
+// Cancel ends the attempt as a Sortie that no longer wants the job
+// does: its heartbeat, report and flows answer 410 job_gone from now on,
+// and its open stdio stream, if any, is closed without the C frame.
+func (f *Fake) Cancel(job string, attempt int) {
+	f.mu.Lock()
+	k := key(job, attempt)
+	if l := f.leases[k]; l != nil {
+		l.gone = true
+	}
+	a := f.data(k)
+	c := a.stream
+	a.stream = nil
+	f.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// Unserve answers the attempt's stdio stream 404, as an attempt Sortie
+// has not opened, while its heartbeats keep the lease: the worker never
+// gets its stream back.
+func (f *Fake) Unserve(job string, attempt int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unserved[key(job, attempt)] = true
 }
 
 // Streams counts the stdio streams the attempt opened.
@@ -538,6 +572,12 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, bod
 		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: code})
 		return
 	}
+	if l := f.leases[k]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone: Sortie withdrew attempt "+strconv.Itoa(attempt)+" of job "+job)
+		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
 	l := f.live(id, job, attempt)
 	if l == nil {
 		f.mu.Unlock()
@@ -565,6 +605,12 @@ func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body [
 		return
 	}
 	f.mu.Lock()
+	if l := f.leases[key(job, attempt)]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone")
+		f.record(Event{Kind: "report", Job: job, Attempt: attempt, Status: http.StatusGone, Body: body})
+		return
+	}
 	l := f.live(id, job, attempt)
 	if l == nil {
 		f.mu.Unlock()
@@ -630,6 +676,21 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(protocol.ProtocolHeader) != "1" {
 		problem(w, http.StatusBadRequest, "unsupported_protocol", "send "+protocol.ProtocolHeader+": 1")
 		f.record(Event{Kind: "bad-protocol", Job: job, Attempt: attempt, Status: 400})
+		return
+	}
+	f.mu.Lock()
+	l := f.leases[key(job, attempt)]
+	gone := l != nil && l.gone
+	unserved := f.unserved[key(job, attempt)] && flow == protocol.FlowStdio
+	f.mu.Unlock()
+	if gone && f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
+		problem(w, http.StatusGone, "job_gone", "the job's attempt has ended; release its machine")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
+	if unserved {
+		problem(w, http.StatusNotFound, "not_found", "the attempt is not open")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusNotFound})
 		return
 	}
 	if !f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
