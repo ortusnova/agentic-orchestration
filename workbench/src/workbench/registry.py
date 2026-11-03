@@ -93,6 +93,7 @@ class Registry:
         # Re-entrant: the first use opens and migrates the database under it.
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = None
+        self._closed = False
 
     def __enter__(self) -> "Registry":
         return self
@@ -104,8 +105,12 @@ class Registry:
     def _db(self) -> sqlite3.Connection:
         """The connection, opened and migrated on first use, so a registry
         that is built but never used, such as an app that never starts,
-        holds no database open."""
+        holds no database open. A closed registry stays closed: a refresh
+        still running in a thread at shutdown must not open a connection
+        that nobody closes."""
         with self._lock:
+            if self._closed:
+                raise RegistryError(503, "registry_closed", "the workbench is shutting down")
             if self._conn is None:
                 conn = self._connect()
                 conn.execute("PRAGMA journal_mode=WAL")
@@ -137,6 +142,7 @@ class Registry:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
