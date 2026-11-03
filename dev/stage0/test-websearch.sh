@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks that opencode in a Sortie machine can search the web without a
 # prompt: both opencode configs select Firecrawl's keyless provider and keep
-# webfetch denied, and both stage-0 workflows and p1's egress profile allow
-# Firecrawl's MCP host. Without a provider, opencode asks the user to choose
+# webfetch denied, and p1's egress profile, the one host list under the
+# remote kind (nono enforces it for every worker), allows Firecrawl's MCP
+# host. Without a provider, opencode asks the user to choose
 # one, and Sortie refuses the prompt.
 set -euo pipefail
 
@@ -22,15 +23,6 @@ for cfg in "$KIT/pack/opencode.json" "$ROOT/smol-builder/layers/base/opencode.js
     echo "ok: $name still denies webfetch"
   else
     echo "FAIL: $name no longer ends with the webfetch deny"; failed=1
-  fi
-done
-
-for wf in WORKFLOW.md WORKFLOW-homelab.md; do
-  hosts=$(awk '/^    allow_hosts:/{on=1; next} on && /^      #/{next} on && /^      - /{print $2; next} on{exit}' "$KIT/$wf")
-  if grep -qx "$host" <<< "$hosts"; then
-    echo "ok: $wf allows $host"
-  else
-    echo "FAIL: $wf does not allow $host"; failed=1
   fi
 done
 

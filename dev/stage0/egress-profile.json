@@ -1,17 +1,37 @@
 {
   "meta": {
     "name": "ortus-stage0-egress",
-    "description": "The egress flow of the stage-1 edge on p1 (dev/stage0/README.md): the hosts the workflow allows, and the credentials it binds, read by run-nono.sh"
+    "description": "The egress flow of the stage-1 edge on p1 (dev/stage0/README.md): the hosts a job of any repository may reach, and the credentials the workflow binds, read by run-nono.sh"
   },
   "network": {
     "allow_domain": [
+      "*.githubusercontent.com",
+      "*.pkg.dev",
+      "*.quay.io",
       "api.anthropic.com",
       "api.github.com",
+      "auth.docker.io",
+      "cdimage.debian.org",
+      "charts.jetstack.io",
+      "charts.longhorn.io",
+      "cloudnative-pg.github.io",
+      "codeload.github.com",
+      "deb.debian.org",
+      "files.pythonhosted.org",
+      "ghcr.io",
       "github.com",
+      "kubernetes.github.io",
       "mcp.firecrawl.dev",
       "models.opencode.ai",
+      "production.cloudflare.docker.com",
+      "production.cloudfront.docker.com",
       "proxy.golang.org",
+      "pypi.org",
+      "quay.io",
+      "registry-1.docker.io",
+      "registry.k8s.io",
       "registry.npmjs.org",
+      "security.debian.org",
       "storage.googleapis.com",
       "sum.golang.org"
     ],
