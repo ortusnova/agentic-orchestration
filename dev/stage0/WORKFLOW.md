@@ -112,10 +112,9 @@ polling:
 workspace:
   root: ${STAGE0_HOME}/workspaces
 
-hooks:
-  after_create: |
-    if [ -f go.mod ]; then GOTOOLCHAIN=local go mod download; fi
-  timeout_ms: 600000
+# No hooks: under the remote kind only the agent runs in a job's workspace,
+# on the worker, and Sortie refuses to prepare a workspace whose workflow
+# has a hook (sortie internal/orchestrator/remote.go, errRunsOnTheWorker).
 
 # One ACP launch for both harnesses, both on the operator's Claude
 # subscription: the pack's agent-acp runs opencode by default, and Claude
