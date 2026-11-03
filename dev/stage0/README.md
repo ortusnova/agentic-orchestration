@@ -79,7 +79,9 @@ the pull request merges, Sortie moves the story to `Done`.
   in, never rebases or rewrites a pushed commit, fixes the cause on the
   branch, including a CI or toolchain setting the change exposed (an old Go
   is raised to the latest stable release), and checks the criteria again.
-  Sortie pushes its commits, and `auto_merge` merges once CI passes. A pull
+  A later turn of the run gets only a short continuation: the earlier
+  commits are in the workspace and `origin/<branch>` moves only after the
+  run, so the agent does not redo the fix. Sortie pushes its commits, and `auto_merge` merges once CI passes. A pull
   request that still fails after `max_retries` fix runs (2 for CI, 1 for a
   conflict) is a stopped failure: Sortie escalates it, comments on the
   story, and runs no further fix until a new commit lands or a person
