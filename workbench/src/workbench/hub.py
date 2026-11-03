@@ -15,6 +15,7 @@ from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
+from .supervisor import supervisor_view
 from .workers import worker_fields
 
 log = logging.getLogger(__name__)
@@ -160,11 +161,13 @@ class Hub:
         approvals, rereviews = self.records()
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
                               self.previews())
+        supervisor, acted_on = supervisor_view(self.agent_state, doc["nodes"])
         for n in doc["nodes"]:
             n.update(self.fields.get(n["plan_key"], {}))
             ident = (n.get("tracker") or {}).get("identifier")
             if n.get("kind") == "story":
                 n["question"] = self.questions.get(ident) if ident else None
+                n["supervisor_actions"] = acted_on.get(n["plan_key"], [])
             if n.get("runtime") and n.get("tracker"):
                 n["runtime"] = {"stage": None, "session_id": None, "held": False, "holder": None, "watchable": False,
                                 **n["runtime"], **self.workers.get(n["tracker"]["identifier"], {})}
@@ -184,6 +187,9 @@ class Hub:
             },
         )
         doc["plan_states"] = (self.tracker or {}).get("plan_states")
+        # Sortie's supervisor and its recent actions, from the state of the
+        # project Sortie dispatches; None when Sortie reports none.
+        doc["supervisor"] = supervisor
         doc["sync"] = self.sync_status
         doc["home"] = self.home = self._home(doc, snap)
         self.doc = doc

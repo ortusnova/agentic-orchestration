@@ -11,6 +11,12 @@ from tests.workbench.conftest import SORTIE_TOKEN
 from workbench.sortie import SortieClient
 
 
+# What the supervisor's scoped token allows (agent-platform/run-supervision):
+# Sortie refuses every other action for it, and records each one either way.
+SUPERVISOR_ACTIONS = {"answer_question", "release_park", "grant_sessions", "record_merge", "start_fix_run",
+                      "mark_draft", "merge_pull", "file_issue", "request_proof"}
+
+
 def built_unapproved(n: dict[str, Any]) -> bool:
     """A ui story that covers a requirement: Sortie syncs and releases it
     without an approval, and refuses one that names an approver."""
@@ -72,6 +78,26 @@ class FakeSortie:
         self.refresh_down = False
         self.refreshes = 0
         self.released: set[str] = set()
+        # The supervisor, as the state lists it, or None for a Sortie that
+        # has none; and the pauses and resumes people asked for.
+        self.supervisor: dict[str, Any] | None = {"status": "active", "paused_at": None, "paused_by": None, "actions": []}
+        self.supervisor_controls: list[dict[str, str]] = []
+
+    def supervise(self, action: str, identifier: str | None = None, *, evidence: Any = None,
+                  pull: dict[str, Any] | None = None, at: str = "2026-11-03T10:00:00Z", detail: str | None = None) -> dict[str, Any]:
+        """The supervisor asks for ``action`` with its scoped token. Sortie
+        does it only if the token allows it and the supervisor is not paused,
+        and records the action, its evidence and its result either way."""
+        assert self.supervisor is not None, "this Sortie has no supervisor"
+        paused = self.supervisor["status"] != "active"
+        allowed = action in SUPERVISOR_ACTIONS and not paused
+        if detail is None and not allowed:
+            detail = "the supervisor is paused" if paused else f"{action.replace('_', ' ')} is not the supervisor's to do"
+        record = {"id": f"a-{len(self.supervisor['actions']) + 1}", "at": at, "action": action,
+                  "issue_identifier": identifier, "pull_request": pull, "evidence": evidence,
+                  "result": "done" if allowed else "refused", "detail": detail}
+        self.supervisor["actions"].append(record)
+        return record
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -186,9 +212,24 @@ class FakeSortie:
             if self.state_down:
                 return httpx.Response(503, json={"error": {"code": "unavailable", "message": "state"}})
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
-            return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
-                                             "budget_exhausted": self.budget_exhausted, "parked": self.parked,
-                                             "config": {"agent": agent}})
+            state = {"running": list(self.running.values()), "retrying": list(self.retrying.values()),
+                     "budget_exhausted": self.budget_exhausted, "parked": self.parked, "config": {"agent": agent}}
+            if self.supervisor is not None:
+                state["supervisor"] = self.supervisor
+            return httpx.Response(200, json=state)
+        if path in ("/api/v1/supervisor/pause", "/api/v1/supervisor/resume") and request.method == "POST":
+            if self.supervisor is None:
+                return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
+            author = (body or {}).get("author")
+            if not author:
+                return httpx.Response(400, json={"error": {"code": "invalid_request", "message": "author"}})
+            op = path.rsplit("/", 1)[1]
+            self.supervisor_controls.append({"op": op, "author": author})
+            if op == "pause":
+                self.supervisor.update(status="paused", paused_at="2026-11-03T11:00:00Z", paused_by=author)
+            else:
+                self.supervisor.update(status="active", paused_at=None, paused_by=None)
+            return httpx.Response(200, json={k: v for k, v in self.supervisor.items() if k != "actions"})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:

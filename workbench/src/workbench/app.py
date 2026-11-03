@@ -24,6 +24,7 @@ from .registry import Registry, RegistryError
 from .sortie import SortieClient
 from .session_routes import session_router
 from .story_routes import story_router
+from .supervisor_routes import supervisor_router
 from .sync import sync_router
 from .worker_routes import worker_router
 
@@ -134,6 +135,7 @@ def create_app(config: Config, **services) -> FastAPI:
 
     app.include_router(sync_router(projects, require_operator))
     app.include_router(story_router(projects, require_role))
+    app.include_router(supervisor_router(projects, require_role))
     app.include_router(session_router(projects, require_operator))
     app.include_router(worker_router(projects, require_role))
 

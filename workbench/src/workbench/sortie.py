@@ -100,6 +100,14 @@ class SortieClient:
         return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/answer",
                                    json={"text": text, "author": author})
 
+    async def supervisor(self, op: str, author: str) -> dict[str, Any]:
+        """Pause or resume Sortie's supervisor (``op`` is "pause" or "resume"):
+        paused, it takes no action until it is resumed. Sortie answers with
+        the supervisor's status, and records who did it."""
+        if op not in ("pause", "resume"):
+            raise ValueError(f"unknown supervisor operation {op!r}")
+        return await self._request("POST", f"/api/v1/supervisor/{op}", json={"author": author})
+
     def bind(self, project: str) -> "ProjectSortie":
         return ProjectSortie(self, project)
 
@@ -144,3 +152,8 @@ class ProjectSortie:
 
     async def answer(self, identifier: str, text: str, author: str) -> dict[str, Any]:
         return await self.client.answer(identifier, text, author)
+
+    # The supervisor is Sortie's, not the project's: it acts on every
+    # project Sortie dispatches.
+    async def supervisor(self, op: str, author: str) -> dict[str, Any]:
+        return await self.client.supervisor(op, author)
