@@ -12,6 +12,12 @@
 # and those of egress-live-proof.json, on STAGE0_NONO_LIVE_PROOF_PORT. The
 # edge sends it only the CONNECTs of a live-proof job that runs
 # ($STAGE0_HOME/live-proofs/active, README.md "Live proofs").
+#
+# run-nono.sh homelab (the ortus-stage0-nono-homelab unit) starts the third,
+# of homelab jobs: the same credentials, and only the hosts homelab declares
+# in its egress-hosts.yaml ($STAGE0_HOME/egress-profile-homelab.json, which
+# stage0.sh renders, homelab-egress.sh), on STAGE0_NONO_HOMELAB_PORT. The
+# edge sends it the CONNECTs of every homelab job.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -31,7 +37,12 @@ case ${1:-} in
     stage0-live-proofs profile -base "$KIT/egress-profile.json" -extra "$KIT/egress-live-proof.json" -out "$profile" \
       || die "could not render the live-proof profile"
     ;;
-  *) die "usage: run-nono.sh [live-proof]" ;;
+  homelab)
+    profile=$STAGE0_HOME/egress-profile-homelab.json
+    port=${STAGE0_NONO_HOMELAB_PORT:-7692}
+    [[ -s $profile ]] || die "$profile is missing: stage0.sh renders it from homelab's egress-hosts.yaml"
+    ;;
+  *) die "usage: run-nono.sh [live-proof|homelab]" ;;
 esac
 
 # shellcheck source=egress-credentials.sh

@@ -13,6 +13,9 @@ STAGE0_NONO_PORT=${STAGE0_NONO_PORT:-7690}
 # jobs that run, which stage0-live-proofs writes and the edge reads.
 STAGE0_NONO_LIVE_PROOF_PORT=${STAGE0_NONO_LIVE_PROOF_PORT:-7691}
 STAGE0_LIVE_PROOFS=$STAGE0_HOME/live-proofs
+# The homelab nono (run-nono.sh homelab), the egress of every homelab job:
+# only the hosts homelab declares (homelab-egress.sh).
+STAGE0_NONO_HOMELAB_PORT=${STAGE0_NONO_HOMELAB_PORT:-7692}
 # The service of each path flow; Sortie until a flow gets a service of its own.
 STAGE0_EDGE_STDIO_URL=${STAGE0_EDGE_STDIO_URL:-http://127.0.0.1:$STAGE0_SORTIE_PORT/api/v1/flows/stdio}
 STAGE0_EDGE_MCP_URL=${STAGE0_EDGE_MCP_URL:-http://127.0.0.1:$STAGE0_SORTIE_PORT/mcp}
@@ -67,6 +70,9 @@ render_edge_config() {
   "live_proof": {
     "egress": "127.0.0.1:$STAGE0_NONO_LIVE_PROOF_PORT",
     "jobs_file": "$STAGE0_LIVE_PROOFS/active"
+  },
+  "repositories": {
+    "homelab": "127.0.0.1:$STAGE0_NONO_HOMELAB_PORT"
   }
 }
 EOF

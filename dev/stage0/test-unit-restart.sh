@@ -62,9 +62,9 @@ rm "$tmp/down"
 # through restart_changed.
 grep -qx 'systemctl --user restart ortus-stage0-sortie.service' "$KIT/stage0.sh" \
   && ok "stage0.sh restarts Sortie at once" || fail "stage0.sh does not restart Sortie"
-if grep -E 'systemctl --user restart .*ortus-stage0-(nono|nono-live-proof|edge|worker)\.service' "$KIT/stage0.sh"; then
+if grep -E 'systemctl --user restart .*ortus-stage0-(nono|nono-live-proof|nono-homelab|edge|worker)\.service' "$KIT/stage0.sh"; then
   fail "stage0.sh restarts a unit that carries runs unconditionally"
 else
-  ok "stage0.sh restarts both nonos, the edge and the worker daemon only when changed"
+  ok "stage0.sh restarts the nonos, the edge and the worker daemon only when changed"
 fi
 exit $failed

@@ -8,7 +8,9 @@
 // Sortie's token introspection says its job token is live and granted for
 // that flow. The egress flow is the CONNECT proxy on the same port; its
 // service is nono's proxy, which holds the credentials. A live-proof job
-// that runs gets a second nono's, of the live-proof profile, instead.
+// that runs gets a second nono's, of the live-proof profile, instead,
+// and a job of a repository with a profile of its own (homelab) gets the
+// nono of that profile.
 //
 // Pomerium and the CA in control-plane-images replace it later.
 package main
@@ -81,6 +83,12 @@ type Config struct {
 	// LiveProof, when set, is the egress of the live-proof profile: the
 	// jobs its file names reach the hosts of the second nono's profile.
 	LiveProof *LiveProof `json:"live_proof,omitempty"`
+	// Repositories maps a repository Sortie dispatches to the host:port
+	// of the nono proxy of that repository's own profile, on loopback: a
+	// job of the repository reaches only the hosts of that profile, as
+	// homelab's reach only those homelab declares. It takes the same
+	// credential as Egress. A job of any other repository gets Egress.
+	Repositories map[string]string `json:"repositories,omitempty"`
 }
 
 // LiveProof is the egress of live-proof jobs (agent-platform/run-supervision,
@@ -142,6 +150,14 @@ func (c Config) Validate() error {
 			return errors.New("live_proof.jobs_file is missing")
 		}
 	}
+	for repo, addr := range c.Repositories {
+		if !workerName.MatchString(repo) {
+			return fmt.Errorf("repositories: %q is not a repository name", repo)
+		}
+		if addr == "" || addr == c.Egress || (c.LiveProof != nil && addr == c.LiveProof.Egress) {
+			return fmt.Errorf("repositories.%s: want the address of its own nono, apart from egress and live_proof.egress", repo)
+		}
+	}
 	return nil
 }
 
@@ -163,6 +179,9 @@ type Edge struct {
 	log            *slog.Logger
 	toSortie       http.Handler
 	toFlow         map[string]http.Handler
+
+	reposMu sync.Mutex
+	repos   map[string]string // job#attempt -> its repository
 }
 
 // New reads the token files and builds the edge.
@@ -194,6 +213,7 @@ func New(cfg Config, log *slog.Logger) (*Edge, error) {
 		client:         &http.Client{Timeout: 10 * time.Second},
 		log:            log,
 		toFlow:         map[string]http.Handler{},
+		repos:          map[string]string{},
 	}
 	if e.identityHeader == "" {
 		e.identityHeader = DefaultIdentityHeader
@@ -415,6 +435,17 @@ func (e *Edge) serveEgress(w http.ResponseWriter, r *http.Request, worker string
 	if e.liveProof(g.Job) {
 		egress = e.cfg.LiveProof.Egress
 		attrs = append(attrs, slog.String("profile", "live-proof"))
+	} else if len(e.cfg.Repositories) > 0 {
+		repo, err := e.jobRepository(r.Context(), g)
+		if err != nil {
+			e.log.Warn("job repository unknown", append(attrs, slog.String("error", err.Error()))...)
+			unavailable(w)
+			return
+		}
+		if addr, ok := e.cfg.Repositories[repo]; ok {
+			egress = addr
+			attrs = append(attrs, slog.String("profile", repo))
+		}
 	}
 	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", egress)
 	if err != nil {
@@ -483,6 +514,61 @@ func (e *Edge) liveProof(job string) bool {
 		}
 	}
 	return false
+}
+
+// errJobNotRunning is a job Sortie's state does not list as running yet.
+var errJobNotRunning = errors.New("no running job of Sortie's has that identifier")
+
+// jobRepository returns the repository the attempt of g runs in, from the
+// running entry of Sortie's state (GET /api/v1/state, with the control
+// token): its issue_identifier is the job, and its repository the name
+// the workflow gives the repository. The answer is kept for the attempt,
+// so Sortie is asked once per attempt.
+func (e *Edge) jobRepository(ctx context.Context, g Grant) (string, error) {
+	key := g.Job + "#" + strconv.FormatUint(g.Attempt, 10)
+	e.reposMu.Lock()
+	repo, ok := e.repos[key]
+	e.reposMu.Unlock()
+	if ok {
+		return repo, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.sortie.JoinPath("/api/v1/state").String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+e.controlToken)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("the state answered %s", resp.Status)
+	}
+	var state struct {
+		Running []struct {
+			IssueIdentifier string `json:"issue_identifier"`
+			Repository      string `json:"repository"`
+		} `json:"running"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&state); err != nil {
+		return "", fmt.Errorf("the state: %w", err)
+	}
+	for _, r := range state.Running {
+		if r.IssueIdentifier != g.Job {
+			continue
+		}
+		if r.Repository != "" {
+			e.reposMu.Lock()
+			if len(e.repos) >= 4096 {
+				clear(e.repos)
+			}
+			e.repos[key] = r.Repository
+			e.reposMu.Unlock()
+		}
+		return r.Repository, nil
+	}
+	return "", errJobNotRunning
 }
 
 // pipe copies both ways until either side ends, then closes both.
