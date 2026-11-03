@@ -74,8 +74,8 @@
         },
         "notes": { "type": "string" },
         "review": {
-          "description": "How the work is reviewed before it merges: human (a person merges the pull request) or criteria (a separate agent checks the acceptance criteria). Default human.",
-          "enum": ["human", "criteria"]
+          "description": "How the work is reviewed before it merges: human (a person merges the pull request) or criteria (a separate agent checks the acceptance criteria), or ui (built without an approval once it covers a requirement; after its criteria review and CI pass, its pull request is deployed as a preview, and the operator's merge is its approval). Default human.",
+          "enum": ["human", "criteria", "ui"]
         },
         "supersedes": {
           "description": "The deliverable this one replaces, once that one has started. Its dependents move to this one.",

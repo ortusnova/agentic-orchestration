@@ -25,7 +25,7 @@ _UNSET = object()
 
 class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
-                 peers: list[ProjectSortie] | None = None):
+                 peers: list[ProjectSortie] | None = None, previews=None):
         self.plan = plan
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
@@ -45,6 +45,8 @@ class Hub:
         self.records = records or (lambda: ({}, {}))
         # What GitHub reported of each pull request a story names, by ref.
         self.pulls = pulls or (lambda: {})
+        # The previews of the ui stories' pull requests, by tracker identifier.
+        self.previews = previews or (lambda: {})
         self.frozen: dict[str, str] = {}
         self.fields: dict[str, dict[str, Any]] = {}
         self._pulled_back: set[str] = set()
@@ -218,7 +220,8 @@ class Hub:
         snap = self.plan.snapshot()
         doc = merge(snap["graph"], self.tracker)
         approvals, rereviews = self.records()
-        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls())
+        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
+                              self.previews())
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         try:
             self.fleet = build_fleet(self.states(), doc["nodes"], statements)

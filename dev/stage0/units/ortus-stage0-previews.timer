@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova stage 0: keep the ui stories' previews on their pull requests, every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

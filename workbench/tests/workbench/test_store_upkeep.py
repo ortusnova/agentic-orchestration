@@ -250,3 +250,51 @@ def test_ensure_pull_reports_what_github_refuses():
             await client.aclose()
 
     asyncio.run(run())
+
+
+def predating_ui(store) -> None:
+    """A store whose breakdown schema predates review: ui, with a ui story."""
+    path = store.root / BREAKDOWN
+    old = json.loads(path.read_text())
+    old["$defs"]["deliverable"]["properties"]["review"]["enum"] = ["human", "criteria"]
+    path.write_text(json.dumps(old, indent=2))
+    store.plan([(C, [])])
+    store.change(C, breakdown(deliverable("worker-activity-view", covers=[f"{C}#Show worker activity"], review="ui")))
+
+
+def test_a_store_without_review_ui_gets_it_through_a_pull_request(store, tmp_path):
+    predating_ui(store)
+    bare = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "main", str(bare))
+    git(store.root, "init", "-q", "-b", "main")
+    commit_all(store.root, "The store")
+    git(store.root, "config", f"url.{bare}.insteadOf", GITHUB_URL)
+    git(store.root, "remote", "add", "origin", GITHUB_URL)
+    git(store.root, "push", "-q", "-u", "origin", "main")
+    github = FakeGitHub()
+
+    validation = start(store, github)
+
+    # The ui story validates before the pull request merges.
+    assert validation["valid"] is True, validation["errors"]
+    assert '"ui"' not in (store.root / BREAKDOWN).read_text()
+    [pull] = github.opened
+    assert BREAKDOWN in pull["body"]
+    assert '"ui"' in git(bare, "show", f"{pull['head']}:{BREAKDOWN}")
+
+
+def test_a_read_only_workbench_writes_and_pushes_no_upgrade(store, upstream):
+    head = rev(store.root)
+    github = FakeGitHub()
+    app = create_app(make_config(store.root, sync_enabled=False), validate=validate_offline,
+                     sortie=FakeSortie().client(), github=github.client())
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        validation = client.get(f"{P}/graph").json()["validation"]
+
+    # It validates against the shipped schemas, as the live one does.
+    assert validation["valid"] is True, validation["errors"]
+    assert github.opened == []
+    assert git(upstream, "for-each-ref", "refs/heads/workbench/") == ""
+    assert rev(store.root) == head and git(store.root, "status", "--porcelain") == ""

@@ -31,6 +31,7 @@ export function httpSync(slug: string): SyncClient {
 
 const STATUS_LABELS: Record<string, string> = {
   needs_spec: "Needs a spec", draft: "Draft", held: "Held", ready: "Ready", released: "Released", frozen: "Started", needs_rereview: "Re-review",
+  building: "Building", preview: "Ready for you to look",
   delivered: "Delivered", delivery_unconfirmed: "Not confirmed",
 };
 
