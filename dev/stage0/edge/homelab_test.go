@@ -201,6 +201,11 @@ func TestAJobOfUnknownRepositoryReachesNoNono(t *testing.T) {
 	if status := h.connect("taichi", "ghcr.io:443", h.sortie.mintFor("ONS-99", 1, "egress")); status != http.StatusServiceUnavailable {
 		t.Errorf("a job Sortie does not list as running: %d, want 503", status)
 	}
+	// Sortie lists the job before its workspace names the repository.
+	h.sortie.run("ONS-21", "")
+	if status := h.connect("taichi", "charts.jetstack.io:443", h.sortie.mintFor("ONS-21", 1, "egress")); status != http.StatusServiceUnavailable {
+		t.Errorf("a running job with no repository yet: %d, want 503", status)
+	}
 	h.sortie.mu.Lock()
 	h.sortie.stateDown = true
 	h.sortie.mu.Unlock()

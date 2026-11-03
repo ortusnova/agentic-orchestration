@@ -87,7 +87,8 @@ type Config struct {
 	// of the nono proxy of that repository's own profile, on loopback: a
 	// job of the repository reaches only the hosts of that profile, as
 	// homelab's reach only those homelab declares. It takes the same
-	// credential as Egress. A job of any other repository gets Egress.
+	// credential as Egress. A job of any other repository gets Egress;
+	// a job Sortie lists with no repository yet gets neither.
 	Repositories map[string]string `json:"repositories,omitempty"`
 }
 
@@ -558,18 +559,24 @@ func (e *Edge) jobRepository(ctx context.Context, g Grant) (string, error) {
 		if r.IssueIdentifier != g.Job {
 			continue
 		}
-		if r.Repository != "" {
-			e.reposMu.Lock()
-			if len(e.repos) >= 4096 {
-				clear(e.repos)
-			}
-			e.repos[key] = r.Repository
-			e.reposMu.Unlock()
+		if r.Repository == "" {
+			return "", errNoRepositoryYet
 		}
+		e.reposMu.Lock()
+		if len(e.repos) >= 4096 {
+			clear(e.repos)
+		}
+		e.repos[key] = r.Repository
+		e.reposMu.Unlock()
 		return r.Repository, nil
 	}
 	return "", errJobNotRunning
 }
+
+// errNoRepositoryYet is a running job whose workspace Sortie has not yet
+// recorded a repository for: it could be a homelab job, so it reaches no
+// nono until Sortie says which.
+var errNoRepositoryYet = errors.New("the running job has no repository in Sortie's state yet")
 
 // pipe copies both ways until either side ends, then closes both.
 func pipe(client net.Conn, fromClient io.Reader, upstream net.Conn, fromUpstream io.Reader) {
