@@ -75,6 +75,23 @@ def _peers(env: dict[str, str]) -> tuple[tuple[str, str, str], ...]:
     return tuple(out)
 
 
+def _proxies(env: dict[str, str], peers: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """WORKBENCH_SORTIE_PROXY_<NAME>: the proxy through which the workbench
+    reaches the brokers of the runs that Sortie holds, which listen on its
+    host's loopback, such as ``socks5://127.0.0.1:7781``, a SOCKS forward in
+    the SSH connection that forwards the Sortie."""
+    out: list[tuple[str, str]] = []
+    for name, _, _ in peers:
+        var = "WORKBENCH_SORTIE_PROXY_" + name.upper().replace("-", "_")
+        url = env.get(var, "").strip()
+        if not url:
+            continue
+        if not url.startswith(("socks5://", "socks5h://", "http://")):
+            raise ConfigError(f"{var}: {url!r} is not socks5://host:port or http://host:port")
+        out.append((name, url))
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class Config:
     """Everything the backend needs. Tokens stay server-side: no response carries them."""
@@ -131,6 +148,8 @@ class Config:
     # and the other Sorties whose workers it shows: (name, url, token).
     sortie_name: str = "sortie"
     peer_sorties: tuple[tuple[str, str, str], ...] = ()
+    # The proxy that reaches each other Sortie's brokers: (name, proxy url).
+    peer_proxies: tuple[tuple[str, str], ...] = ()
     # Local mode on a non-loopback address, which `workbench serve` refuses otherwise.
     allow_local_mode: bool = False
     # Where the people who use this workbench can get its source, as the
@@ -185,7 +204,8 @@ class Config:
             sortie_url=need("WORKBENCH_SORTIE_URL").rstrip("/"),
             sortie_token=env.get("WORKBENCH_SORTIE_TOKEN", ""),
             sortie_name=env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie",
-            peer_sorties=_peers(env),
+            peer_sorties=(peers := _peers(env)),
+            peer_proxies=_proxies(env, peers),
             password_hash=password_hash,
             secret_key=need("WORKBENCH_SECRET_KEY"),
             broker_command=shlex.split(env.get("WORKBENCH_BROKER_COMMAND", "acp-broker")),

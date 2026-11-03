@@ -29,19 +29,24 @@ else
   WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-workbench.sh: gh has no token: run gh auth login" >&2; exit 1; }
 fi
 # The other Sorties whose workers the workbench shows (agent-platform/run-supervision):
-# STAGE0_PEER_SORTIES in stage0.env, as name=url[,name=url], such as taichi's homelab
-# Sortie through a local SSH forward, taichi=http://127.0.0.1:7781. Each one's
-# control token is the file $STAGE0_HOME/sortie-token-<name>.
-export WORKBENCH_SORTIE_NAME=${STAGE0_SORTIE_NAME:-$(hostname -s)}
-export WORKBENCH_SORTIES=${STAGE0_PEER_SORTIES:-}
-IFS=, read -ra peers <<< "$WORKBENCH_SORTIES"
-for peer in "${peers[@]}"; do
-  name=${peer%%=*}
-  name=${name// /}
-  [[ -n $name ]] || continue
-  var=WORKBENCH_SORTIE_TOKEN_$(tr 'a-z-' 'A-Z_' <<< "$name")_FILE
-  export "$var=$STAGE0_HOME/sortie-token-$name"
+# each one huly-tunnel.sh reached, as $STAGE0_HOME/sorties/<name>.env (its
+# address on this host's loopback, and the SOCKS forward that reaches its
+# agents' brokers on its host's loopback) and <name>.token (its control token).
+export WORKBENCH_SORTIE_NAME=${STAGE0_SORTIE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
+peers=()
+for f in "$STAGE0_HOME"/sorties/*.env; do
+  [[ -e $f ]] || continue
+  name=$(basename "$f" .env)
+  url=$(sed -n 's/^SORTIE_URL=//p' "$f")
+  [[ -n $url && -s $STAGE0_HOME/sorties/$name.token ]] || continue
+  peers+=("$name=$url")
+  var=$(tr 'a-z-' 'A-Z_' <<< "$name")
+  export "WORKBENCH_SORTIE_TOKEN_${var}_FILE=$STAGE0_HOME/sorties/$name.token"
+  proxy=$(sed -n 's/^SORTIE_BROKER_PROXY=//p' "$f")
+  [[ -z $proxy ]] || export "WORKBENCH_SORTIE_PROXY_${var}=$proxy"
 done
+WORKBENCH_SORTIES=$(IFS=,; echo "${peers[*]}")
+export WORKBENCH_SORTIES
 WB=$STAGE0_KIT_ROOT/workbench
 home=$STAGE0_HOME/home sessions=$STAGE0_HOME/sessions port=$STAGE0_WORKBENCH_PORT
 mode=(WORKBENCH_PREVIEWS="$STAGE0_HOME/previews.json")

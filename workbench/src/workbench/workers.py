@@ -56,15 +56,26 @@ class WorkerRelay:
     """Relays the brokers of one project's workers."""
 
     def __init__(self, sortie: ProjectSortie, transport: httpx.AsyncBaseTransport | None = None,
-                 follow_poll: float = FOLLOW_POLL_SECONDS, sortie_for: Callable[[str], ProjectSortie] | None = None):
+                 follow_poll: float = FOLLOW_POLL_SECONDS, sortie_for: Callable[[str], ProjectSortie] | None = None,
+                 proxies: dict[str, str] | None = None):
         self.sortie = sortie
         # The Sortie that runs a story: this project's own, or another one.
         self.sortie_for = sortie_for or (lambda _identifier: sortie)
         self.follow_poll = follow_poll
-        self._http = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0, read=None))
+        timeout = httpx.Timeout(30.0, read=None)
+        self._http = httpx.AsyncClient(transport=transport, timeout=timeout)
+        # Another host's brokers listen on its loopback: the workbench reaches
+        # them through that Sortie's proxy, a SOCKS forward to the host.
+        self._proxied = {name: httpx.AsyncClient(transport=transport, proxy=None if transport else url, timeout=timeout)
+                         for name, url in (proxies or {}).items() if url}
+
+    def _client(self, identifier: str) -> httpx.AsyncClient:
+        return self._proxied.get(self.sortie_for(identifier).name, self._http)
 
     async def aclose(self) -> None:
         await self._http.aclose()
+        for client in self._proxied.values():
+            await client.aclose()
 
     async def _broker(self, identifier: str) -> tuple[str, str]:
         try:
@@ -81,7 +92,7 @@ class WorkerRelay:
         run = await self._run(identifier)
         url, token = await self._broker(identifier)
         try:
-            r = await self._http.post(f"{url}/commands", json=cmd, headers={"Authorization": f"Bearer {token}"})
+            r = await self._client(identifier).post(f"{url}/commands", json=cmd, headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError as exc:
             raise WorkerError(502, "broker_unreachable", f"the worker's broker did not answer: {exc}") from exc
         try:
@@ -169,7 +180,7 @@ class WorkerRelay:
                 headers["Last-Event-ID"] = last_event_id
             first = False
             try:
-                async with self._http.stream("GET", f"{url}/events", headers=headers) as r:
+                async with self._client(identifier).stream("GET", f"{url}/events", headers=headers) as r:
                     if r.status_code != 200:
                         log.warning("broker of %s answered %s", identifier, r.status_code)
                     else:

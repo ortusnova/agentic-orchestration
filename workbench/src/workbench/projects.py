@@ -52,7 +52,8 @@ class ProjectRuntime:
         self._own_github = github is None
         self.sessions = sessions
         # The brokers of the workers Sortie runs for this project's stories.
-        self.workers = WorkerRelay(own, transport=broker_transport, sortie_for=self.hub.sortie_for)
+        self.workers = WorkerRelay(own, transport=broker_transport, sortie_for=self.hub.sortie_for,
+                                   proxies=dict(config.peer_proxies))
         # The approved plan syncs to the tracker on its own.
         self.sync = SyncLoop(lambda: sync_project(self.hub), debounce=config.debounce_ms / 1000,
                              first_backoff=config.sync_backoff_first, max_backoff=config.sync_backoff_max)

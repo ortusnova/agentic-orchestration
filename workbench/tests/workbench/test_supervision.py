@@ -204,6 +204,25 @@ def test_a_token_budget_is_not_offered_sessions(store):
         assert p1.grants == []
 
 
+def test_a_peers_brokers_are_reached_through_its_proxy(store, tmp_path):
+    app, _, taichi = fleet_app(store)
+    taichi.run("T-4", "s4", stage="build")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        relay = project(app).workers
+    env = {"WORKBENCH_SORTIE_URL": "http://127.0.0.1:7680", "WORKBENCH_SECRET_KEY": "k", "WORKBENCH_PASSWORD_HASH": "h",
+           "WORKBENCH_HOME": str(tmp_path), "WORKBENCH_SORTIES": "taichi=http://127.0.0.1:7681",
+           "WORKBENCH_SORTIE_PROXY_TAICHI": "socks5://127.0.0.1:7781"}
+    assert Config.from_env(env).peer_proxies == (("taichi", "socks5://127.0.0.1:7781"),)
+    with pytest.raises(ConfigError):
+        Config.from_env({**env, "WORKBENCH_SORTIE_PROXY_TAICHI": "ftp://x"})
+    # taichi's broker listens on taichi's loopback: its stories go through taichi's proxy, p1's do not.
+    from workbench.workers import WorkerRelay
+    proxied = WorkerRelay(relay.sortie, sortie_for=relay.sortie_for, proxies={"taichi": "socks5://127.0.0.1:7781"})
+    assert proxied._client("T-4") is proxied._proxied["taichi"] and proxied._client("T-1") is proxied._http
+
+
 def test_a_sortie_that_cannot_grant_sessions_says_so(store):
     app, p1, _ = fleet_app(store)
     p1.grants_supported = False
