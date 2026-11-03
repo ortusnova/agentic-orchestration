@@ -274,3 +274,13 @@ def test_a_supervisor_with_no_status_reads_from_paused():
     assert (view["actions"][0]["result"], view["actions"][0]["detail"]) == ("failed", "forge down")
     assert by_key == {"c/s": view["actions"]}
     assert supervisor_view({}, nodes) == (None, {})
+
+
+def test_an_action_on_this_projects_epic_stays():
+    nodes = [{"plan_key": "c", "kind": "epic", "title": "C", "tracker": {"identifier": "T-1", "url": None}},
+             {"plan_key": "c/s", "kind": "story", "title": "S", "tracker": {"identifier": "T-2", "url": None}}]
+    view, by_key = supervisor_view({"supervisor_actions": [
+        {"id": 2, "action": "file_issue", "issue_identifier": "T-1", "result": "done"},
+        {"id": 1, "action": "grant_sessions", "issue_identifier": "X-9", "result": "done"}]}, nodes)
+    assert [(a["action"], a["key"], a["label"]) for a in view["actions"]] == [("file_issue", "c", "c")]
+    assert by_key == {"c": view["actions"]}

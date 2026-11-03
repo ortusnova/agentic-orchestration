@@ -152,7 +152,7 @@ def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
                     peers: list[tuple[str, dict[str, Any]]] = (), own: str | None = None,
                     ) -> tuple[dict[str, Any] | None, dict[str, list[dict[str, Any]]]]:
     """The supervisor's status and its recent actions on this project's
-    stories, newest first, and the actions on each story, by plan key; None
+    issues, newest first, and the actions on each, by plan key; None
     and none when no Sortie reports a supervisor. ``state`` is the state of
     the Sortie that dispatches the project, named ``own``; ``peers`` are the
     other Sorties' names and states. An action on another project's issue is
@@ -164,7 +164,7 @@ def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
         return None, {}
     node_of = {n["plan_key"]: n for n in nodes if n.get("plan_key")}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes
-              if n.get("kind") == "story" and (n.get("tracker") or {}).get("identifier")}
+              if n.get("plan_key") and (n.get("tracker") or {}).get("identifier")}
     raws: list[tuple[str | None, dict[str, Any]]] = [(own, a) for a in (sup or {}).get("actions") or []]
     for name, s in sources:
         raws += [(name, a) for a in s.get("supervisor_actions") or []]
