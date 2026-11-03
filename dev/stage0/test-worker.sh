@@ -96,6 +96,8 @@ echo control > "$STAGE0_HOME/sortie-token"
 echo pass > "$STAGE0_HOME/nono-pass"
 [[ $("$edge" -check -config "$STAGE0_HOME/edge.json" | tr '\n' ';') == "p1 127.0.0.1:7700;taichi 127.0.0.1:7701;" ]] \
   && ok "the edge names p1's worker by the port the workflow's flows use" || fail "edge: $(cat "$STAGE0_HOME/edge.json")"
+grep -q "\"jobs_file\": \"$STAGE0_HOME/live-proofs/active\"" "$STAGE0_HOME/edge.json" && grep -q '"egress": "127.0.0.1:7691"' "$STAGE0_HOME/edge.json" \
+  && ok "the edge sends a running live proof's egress to the live-proof nono" || fail "edge live_proof: $(cat "$STAGE0_HOME/edge.json")"
 [[ $(edge_port mac) == 7702 ]] && ok "a new worker host gets the next free port" || fail "next port: $(edge_port mac)"
 
 # Sortie's agent cap is a ceiling above the workers' run slots, not p1's own

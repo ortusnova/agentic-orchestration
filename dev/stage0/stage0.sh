@@ -150,6 +150,8 @@ STAGE0_SORTIE_MAX_AGENTS=
 # host's tunnel ends on, on that host's loopback.
 STAGE0_NONO_PORT=7690
 STAGE0_EDGE_WORKER_PORT=7700
+# The live-proof nono, the egress of a live-proof job that runs (README.md).
+STAGE0_NONO_LIVE_PROOF_PORT=7691
 # The operator's channel for every question (README.md): slack, discord, telegram or
 # webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
 # where people reach the workbench, for the link in each question.
@@ -315,8 +317,9 @@ say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-
 export PATH=$STAGE0_HOME/bin:$PATH
 # shellcheck source=nono-version.sh
 . "$KIT/nono-version.sh"
-say "Building the stage-1 edge and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
+say "Building the stage-1 edge and stage0-live-proofs, and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
 (cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
+(cd "$KIT/live-proofs" && go build -o "$STAGE0_HOME/bin/stage0-live-proofs" .)
 nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
 
 say "Installing workbench dependencies and building the frontend"
@@ -399,7 +402,8 @@ mkdir -p "$UNITS"
 units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
   ortus-stage0-store.service ortus-stage0-store.timer
   ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
-  ortus-stage0-nono.service ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
+  ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
+  ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
 deploy=''
@@ -414,21 +418,23 @@ else
   systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
-  ortus-stage0-edge.service ortus-stage0-worker.service
+  ortus-stage0-nono-live-proof.service ortus-stage0-edge.service ortus-stage0-worker.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
 # The ui stories' previews follow their pull requests (run-previews.sh).
 systemctl --user enable -q --now ortus-stage0-previews.timer
+# The supervisor's live-proof requests become jobs (run-live-proofs.sh).
+systemctl --user enable -q --now ortus-stage0-live-proofs.timer
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
-systemctl --user restart ortus-stage0-nono.service ortus-stage0-edge.service
+systemctl --user restart ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-edge.service
 for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
 systemctl --user restart ortus-stage0-worker.service
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
-for unit in ortus-stage0-nono ortus-stage0-edge ortus-stage0-worker; do
+for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-edge ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
 say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker(s), p1's own and $(tunnel_workers | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"
