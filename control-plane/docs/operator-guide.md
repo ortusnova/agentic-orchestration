@@ -22,7 +22,7 @@ its certificate instead of a tunnel (see
 | `pomerium` | `docker.io/pomerium/pomerium`, pinned by digest | The only door for worker hosts, on `CP_PUBLIC_PORT` (8443). See [Pomerium](#pomerium). |
 | `egress-gate` | `localhost/ortus-nova/control-plane:<commit>`, built here | Behind Pomerium's egress route: admits each `CONNECT` only with a live egress job token (Sortie's token introspection), logs it with the worker, job and attempt, and tunnels it through nono. |
 | `nono` | `ghcr.io/nolabs-ai/nono`, pinned by digest | Holds every platform credential. It allows only the hosts of `nono/egress-profile.json`, replaces a job's placeholder with the credential only on requests to that credential's hosts, and logs every request (`podman logs cp-nono`). A guest sees only placeholders. |
-| `huly` and `huly-*` | `hardcoreeng/*`, CockroachDB, Redpanda, MinIO and nginx, each pinned by digest | The tracker. Its entry, nginx, is at `http://huly.cp.internal:8087` (`CP_HULY_HOST`, `CP_HULY_PORT`), published on `127.0.0.1`. |
+| `huly` and `huly-*` | `hardcoreeng/*`, CockroachDB, Redpanda, Silo (the MinIO fork huly-selfhost runs, as MinIO left Docker Hub) and nginx, each pinned by digest | The tracker. Its entry, nginx, is at `http://huly.cp.internal:8087` (`CP_HULY_HOST`, `CP_HULY_PORT`), published on `127.0.0.1`. |
 
 Two networks: `ortus-cp-internal` has no route out, and every service is on
 it; `ortus-cp-outside` carries the published ports and the egress of Sortie

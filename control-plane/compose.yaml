@@ -111,7 +111,7 @@ services:
   # The only door for worker hosts: mTLS against the control plane's CA,
   # one route per flow, rendered by cpctl from the worker list.
   pomerium:
-    image: docker.io/pomerium/pomerium:v0.33.6
+    image: docker.io/pomerium/pomerium:v0.33.6@sha256:58354b2f45c01dbd8e34b54c1a8db2af07f834cb215f5e8b1cef60f871bce968
     container_name: cp-pomerium
     restart: unless-stopped
     command: ["--config", "/pomerium/config.yaml"]
@@ -158,7 +158,7 @@ services:
   # standard error). Its standard output, which repeats its own proxy
   # credential, goes nowhere.
   nono:
-    image: ghcr.io/nolabs-ai/nono:0.81.0
+    image: ghcr.io/nolabs-ai/nono:0.81.0@sha256:e03c93e54feb9d7b1c91c96e1195595bcdd6892a23529cc10dc7dc690ce13c0f
     container_name: cp-nono
     restart: unless-stopped
     stop_signal: SIGINT
@@ -191,7 +191,7 @@ services:
   # project the entry is also reached by the name of its public URL, so
   # Sortie follows the URLs Huly's configuration gives browsers.
   huly:
-    image: docker.io/library/nginx:stable-alpine
+    image: docker.io/library/nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
     container_name: cp-huly
     restart: unless-stopped
     depends_on: [huly-front, huly-account, huly-transactor, huly-collaborator]
@@ -210,7 +210,7 @@ services:
       retries: 60
 
   huly-front:
-    image: docker.io/hardcoreeng/front:v0.7.432
+    image: docker.io/hardcoreeng/front:v0.7.432@sha256:fbdc2d115600a101660fe398fb133e71a4195c78993bfd0f91f31080c23a8f11
     container_name: cp-huly-front
     restart: unless-stopped
     environment:
@@ -229,7 +229,7 @@ services:
     networks: [internal]
 
   huly-account:
-    image: docker.io/hardcoreeng/account:v0.7.432
+    image: docker.io/hardcoreeng/account:v0.7.432@sha256:fed0819aa02dc9fb55a783890b583f7daa4d500e5f9973a73b7edc4fe4cd202f
     container_name: cp-huly-account
     restart: unless-stopped
     depends_on: [huly-cockroach, huly-redpanda, huly-minio]
@@ -248,7 +248,7 @@ services:
     networks: [internal]
 
   huly-workspace:
-    image: docker.io/hardcoreeng/workspace:v0.7.432
+    image: docker.io/hardcoreeng/workspace:v0.7.432@sha256:5e6556747493fc3eb9307fad83ca057fca1dfbac0df973443a76681483b4baf1
     container_name: cp-huly-workspace
     restart: unless-stopped
     depends_on: [huly-cockroach, huly-redpanda, huly-minio, huly-account]
@@ -266,7 +266,7 @@ services:
     networks: [internal]
 
   huly-transactor:
-    image: docker.io/hardcoreeng/transactor:v0.7.432
+    image: docker.io/hardcoreeng/transactor:v0.7.432@sha256:27453ae70f03bce99289a471fde4cc8a617e0071c8b896b849074989693fcaba
     container_name: cp-huly-transactor
     restart: unless-stopped
     depends_on: [huly-cockroach, huly-redpanda, huly-minio, huly-account]
@@ -284,7 +284,7 @@ services:
     networks: [internal]
 
   huly-collaborator:
-    image: docker.io/hardcoreeng/collaborator:v0.7.432
+    image: docker.io/hardcoreeng/collaborator:v0.7.432@sha256:0b226a3a22f0629cfaedc5ba5d045e3c122f1e16844f8cdaa4ed70d7cce73539
     container_name: cp-huly-collaborator
     restart: unless-stopped
     depends_on: [huly-account, huly-minio]
@@ -298,7 +298,7 @@ services:
     networks: [internal]
 
   huly-stats:
-    image: docker.io/hardcoreeng/stats:v0.7.432
+    image: docker.io/hardcoreeng/stats:v0.7.432@sha256:b2139a2b84fe76ea5003f16eabd0a7c8fedcc1c278745c6f1cf326d92f2d2376
     container_name: cp-huly-stats
     restart: unless-stopped
     environment:
@@ -309,7 +309,7 @@ services:
 
   # Huly's stores, reachable only on the internal network.
   huly-cockroach:
-    image: docker.io/cockroachdb/cockroach:latest-v24.3
+    image: docker.io/cockroachdb/cockroach:latest-v24.3@sha256:c26f6eca2ce7ab783862cca4a88f6b8b0da006864e16109b1bb3e30d7670bab9
     container_name: cp-huly-cockroach
     restart: unless-stopped
     command: ["start-single-node", "--insecure"]
@@ -318,7 +318,7 @@ services:
     networks: [internal]
 
   huly-redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v24.3.6
+    image: docker.io/redpandadata/redpanda:v24.3.6@sha256:04baa40ed34edf86028396f762be802f3b6b0acaab65e9de696a3f15d54c550f
     container_name: cp-huly-redpanda
     restart: unless-stopped
     command:
@@ -336,8 +336,9 @@ services:
       - huly-redpanda:/var/lib/redpanda/data
     networks: [internal]
 
+  # Silo, the MinIO fork huly-selfhost runs: MinIO's images left Docker Hub.
   huly-minio:
-    image: docker.io/minio/minio:latest
+    image: docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z@sha256:7bb2aff6b89efe1cb1303c10fc21d579447434ed06649ac9ec05a5e2dbf30ad7
     container_name: cp-huly-minio
     restart: unless-stopped
     command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
