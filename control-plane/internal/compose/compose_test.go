@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ortusnova/agentic-orchestration/control-plane/internal/home"
+	"github.com/ortusnova/agentic-orchestration/control-plane/internal/pomerium"
 )
 
 const composeFile = "../../compose.yaml"
@@ -126,5 +127,59 @@ func TestSecretsAreExternalPodmanSecrets(t *testing.T) {
 		if strings.Contains(line, "file:") {
 			t.Errorf("a file secret is a bind mount, not a podman secret: %s", strings.TrimSpace(line))
 		}
+	}
+}
+
+// Every /run/secrets file a service's definition names, and every one
+// Pomerium's rendered configuration names, is a podman secret of that
+// service, under that name.
+func TestSecretFilesAreMounted(t *testing.T) {
+	services, err := Services(composeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sortie", "pomerium", "egress-gate", "nono"} {
+		if services[name] == nil {
+			t.Fatalf("no service %s", name)
+		}
+	}
+	for name, s := range services {
+		for _, f := range s.Mentions {
+			if !s.SecretFiles[f] {
+				t.Errorf("%s names /run/secrets/%s, which none of its secrets is", name, f)
+			}
+		}
+	}
+	for _, f := range []string{pomerium.Defaults.CertFile, pomerium.Defaults.KeyFile} {
+		if !strings.HasPrefix(f, "/run/secrets/") || !services["pomerium"].SecretFiles[strings.TrimPrefix(f, "/run/secrets/")] {
+			t.Errorf("Pomerium's configuration reads %s, which none of its secrets is", f)
+		}
+	}
+}
+
+func TestServicesReadsSecretFiles(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "compose.yaml")
+	_ = os.WriteFile(f, []byte(`services:
+  a:
+    command: ["x", "-f=/run/secrets/one", "/run/secrets/renamed"]
+    secrets:
+      - one
+      - {source: two, type: env, target: TWO}
+      - {source: three, target: renamed}
+    networks: [internal]
+  b:
+    command: ["/run/secrets/missing"]
+volumes:
+  v:
+`), 0o600)
+	s, err := Services(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s["a"].SecretFiles; !got["one"] || !got["renamed"] || got["two"] || got["TWO"] || got["three"] || len(got) != 2 {
+		t.Errorf("a's secret files are %v, want one and renamed", got)
+	}
+	if !slices.Equal(s["a"].Mentions, []string{"one", "renamed"}) || !slices.Equal(s["b"].Mentions, []string{"missing"}) {
+		t.Errorf("mentions: a %v, b %v", s["a"].Mentions, s["b"].Mentions)
 	}
 }

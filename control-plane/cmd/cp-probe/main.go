@@ -56,7 +56,11 @@ func run() error {
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// A probe checks a service of the project directly, whatever proxy
+	// the environment names.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	resp, err := (&http.Client{Transport: tr}).Do(req)
 	if err != nil {
 		return err
 	}

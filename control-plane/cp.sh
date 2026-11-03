@@ -51,10 +51,21 @@ container_of() {
   esac
 }
 
+# podman-compose before 1.5 runs every health check through /bin/sh, which
+# the images built here do not have.
+compose_version() { podman-compose --version 2> /dev/null | sed -n 's/^podman-compose version \([0-9.]*\).*/\1/p'; }
+compose_version_ok() {
+  local v major minor
+  v=$(compose_version)
+  IFS=. read -r major minor _ <<< "$v"
+  [[ -n $major ]] && ((major > 1 || (major == 1 && ${minor:-0} >= 5)))
+}
+
 compose() {
   local files=(-f "$CP/compose.yaml") f
   for f in ${CP_COMPOSE_FILES:-}; do files+=(-f "$f"); done
   command -v podman-compose > /dev/null || die "podman-compose is not installed"
+  compose_version_ok || die "podman-compose $(compose_version) is too old: the health checks need 1.5 or later (pipx install podman-compose)"
   podman-compose -p ortus-cp "${files[@]}" "$@"
 }
 
@@ -95,7 +106,8 @@ health() {
 
 # wait_healthy SECONDS [SERVICE...]: until every service is up.
 wait_healthy() {
-  local deadline=$((SECONDS + $1)) svc pending
+  local timeout=$1 svc pending
+  local deadline=$((SECONDS + timeout))
   shift
   local want=("$@")
   [[ ${#want[@]} -gt 0 ]] || want=("${SERVICES[@]}")
@@ -104,7 +116,7 @@ wait_healthy() {
     for svc in "${want[@]}"; do check_one "$svc" || pending+=("$svc"); done
     [[ ${#pending[@]} -eq 0 ]] && return 0
     if ((SECONDS >= deadline)); then
-      say "not up after $1 s: ${pending[*]}"
+      say "not up after $timeout s: ${pending[*]}"
       return 1
     fi
     sleep 5
@@ -114,7 +126,10 @@ wait_healthy() {
 # secrets [partial]: one podman secret per file in $CP_HOME/secrets,
 # replaced at each start, so a changed file reaches the containers when
 # they start again. cp-github-basic is derived: the forge token as git's
-# Basic credential. Without partial, every file must be there.
+# Basic credential. Without partial, every file must be there. A file's
+# trailing newlines are not part of its secret: a podman secret given to a
+# container as an environment variable keeps them, and a credential nono
+# injects or a password it checks must not end in one.
 secrets() {
   local missing name state
   if [[ ${1:-} != partial ]]; then
@@ -124,7 +139,7 @@ $missing"
   fi
   while read -r name state _; do
     [[ $state == present ]] || continue
-    podman secret create --replace "$name" "$CP_HOME/secrets/$name" > /dev/null
+    printf '%s' "$(< "$CP_HOME/secrets/$name")" | podman secret create --replace "$name" - > /dev/null
   done < <(cpctl secrets)
   if [[ -s $CP_HOME/secrets/cp-github-token ]]; then
     printf 'x-access-token:%s' "$(tr -d '\n' < "$CP_HOME/secrets/cp-github-token")" \
@@ -153,7 +168,7 @@ up() {
 # Huly's first start).
 huly() {
   secrets partial
-  compose up -d huly-cockroach huly-redpanda huly-minio huly-stats huly-account huly-workspace huly-transactor huly-collaborator huly-front huly
+  compose up -d huly-cockroach huly-redpanda huly-minio huly-elastic huly-stats huly-rekoni huly-account huly-workspace huly-transactor huly-fulltext huly-collaborator huly-front huly
   wait_healthy "${CP_UP_TIMEOUT:-600}" huly
 }
 

@@ -46,8 +46,8 @@ var Defaults = Settings{
 	Egress:         "http://egress-gate:7691",
 	IdentityHeader: "X-Sortie-Worker-Identity",
 	CAFile:         "/pomerium/ca.crt",
-	CertFile:       "/run/secrets/pomerium-cert",
-	KeyFile:        "/run/secrets/pomerium-key",
+	CertFile:       "/run/secrets/cp-pomerium-cert",
+	KeyFile:        "/run/secrets/cp-pomerium-key",
 }
 
 // IdentityValue is what Pomerium sets the identity header to: the DNS

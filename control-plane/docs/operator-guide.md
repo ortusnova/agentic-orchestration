@@ -22,7 +22,7 @@ its certificate instead of a tunnel (see
 | `pomerium` | `docker.io/pomerium/pomerium`, pinned by digest | The only door for worker hosts, on `CP_PUBLIC_PORT` (8443). See [Pomerium](#pomerium). |
 | `egress-gate` | `localhost/ortus-nova/control-plane:<commit>`, built here | Behind Pomerium's egress route: admits each `CONNECT` only with a live egress job token (Sortie's token introspection), logs it with the worker, job and attempt, and tunnels it through nono. |
 | `nono` | `ghcr.io/nolabs-ai/nono`, pinned by digest | Holds every platform credential. It allows only the hosts of `nono/egress-profile.json`, replaces a job's placeholder with the credential only on requests to that credential's hosts, and logs every request (`podman logs cp-nono`). A guest sees only placeholders. |
-| `huly` and `huly-*` | `hardcoreeng/*`, CockroachDB, Redpanda, Silo (the MinIO fork huly-selfhost runs, as MinIO left Docker Hub) and nginx, each pinned by digest | The tracker. Its entry, nginx, is at `http://huly.cp.internal:8087` (`CP_HULY_HOST`, `CP_HULY_PORT`), published on `127.0.0.1`. |
+| `huly` and `huly-*` | `hardcoreeng/*`, CockroachDB, Redpanda, Elasticsearch, Silo (the MinIO fork huly-selfhost runs, as MinIO left Docker Hub) and nginx, each pinned by digest | The tracker. Its entry, nginx, is at `http://huly.cp.internal:8087` (`CP_HULY_HOST`, `CP_HULY_PORT`), published on `127.0.0.1`. |
 
 Two networks: `ortus-cp-internal` has no route out, and every service is on
 it; `ortus-cp-outside` carries the published ports and the egress of Sortie
@@ -40,7 +40,9 @@ test` fails while one is not (see [Pin the upstream images](#pin-the-upstream-im
 On the control-plane host, as the user that will run it (never root):
 
 - podman 4.7 or later, rootless (`podman info` says `rootless: true`), and
-  podman-compose 1.1 or later.
+  podman-compose 1.5 or later (`pipx install podman-compose`), which runs
+  each health check as the command it names rather than through `/bin/sh`:
+  the images built here have no shell.
 - This repository, with the `sortie/` submodule, to build the images
   (`git submodule update --init sortie`), and Go to build `cpctl` if you do
   not run it from the image.
@@ -114,7 +116,8 @@ up` they become podman secrets (`podman secret create --replace`), which the
 compose project hands each container that needs one: as an environment
 variable, or as a file under `/run/secrets`. No secret is a value in
 `compose.yaml` or a layer of an image; `cpctl secrets` lists them and which
-are missing. To change one, replace its file and run `cp.sh up` again.
+are missing. To change one, replace its file and run `cp.sh up` again. A
+file may end in a newline; `cp.sh` drops trailing newlines from each secret.
 
 | File (`$CP_HOME/secrets/...`) | Made by | Goes to |
 |---|---|---|

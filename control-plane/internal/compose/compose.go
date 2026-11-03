@@ -120,3 +120,80 @@ func Secrets(file string) (map[string]string, error) {
 	}
 	return out, sc.Err()
 }
+
+var (
+	serviceLine  = regexp.MustCompile(`^  ([a-z0-9-]+):\s*$`)
+	secretsLine  = regexp.MustCompile(`^    secrets:\s*$`)
+	listItem     = regexp.MustCompile(`^      - (.*)$`)
+	secretField  = regexp.MustCompile(`\b(source|type|target):\s*([^,}\s]+)`)
+	secretInFile = regexp.MustCompile(`/run/secrets/([A-Za-z0-9_.-]+)`)
+)
+
+// Service is what a service of a compose file does with secrets: the
+// files under /run/secrets its secrets become, and the /run/secrets
+// paths its definition names.
+type Service struct {
+	SecretFiles map[string]bool
+	Mentions    []string
+}
+
+// Services reads the secret files and mentions of every service of a
+// compose file.
+func Services(file string) (map[string]*Service, error) {
+	b, err := os.ReadFile(file) // #nosec G304 -- the repository's file
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*Service{}
+	var cur *Service
+	inServices, inSecrets := false, false
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	for sc.Scan() {
+		line := sc.Text()
+		if m := topKey.FindStringSubmatch(line); m != nil {
+			inServices, cur = m[1] == "services", nil
+			continue
+		}
+		if !inServices {
+			continue
+		}
+		if m := serviceLine.FindStringSubmatch(line); m != nil {
+			cur = &Service{SecretFiles: map[string]bool{}}
+			out[m[1]] = cur
+			inSecrets = false
+			continue
+		}
+		if cur == nil {
+			continue
+		}
+		if strings.HasPrefix(line, "    ") && !strings.HasPrefix(line, "     ") {
+			inSecrets = secretsLine.MatchString(line)
+		}
+		if inSecrets {
+			if m := listItem.FindStringSubmatch(line); m != nil {
+				item := strings.TrimSpace(m[1])
+				if !strings.HasPrefix(item, "{") {
+					cur.SecretFiles[item] = true
+					continue
+				}
+				f := map[string]string{}
+				for _, kv := range secretField.FindAllStringSubmatch(item, -1) {
+					f[kv[1]] = kv[2]
+				}
+				if f["type"] == "env" {
+					continue
+				}
+				name := f["source"]
+				if f["target"] != "" {
+					name = f["target"]
+				}
+				cur.SecretFiles[name] = true
+				continue
+			}
+		}
+		for _, m := range secretInFile.FindAllStringSubmatch(line, -1) {
+			cur.Mentions = append(cur.Mentions, m[1])
+		}
+	}
+	return out, sc.Err()
+}

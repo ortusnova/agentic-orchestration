@@ -125,7 +125,10 @@ jobs:
       - name: Install podman and podman-compose
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q podman podman-compose
+          sudo apt-get install -y -q podman pipx
+          # 1.5 or later runs each health check as its command, not
+          # through /bin/sh, which the images built here do not have.
+          pipx install podman-compose==1.6.0
           podman --version
           podman-compose --version
           podman info --format 'rootless: {{.Host.Security.Rootless}}'
