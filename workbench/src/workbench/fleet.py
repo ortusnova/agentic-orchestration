@@ -335,12 +335,19 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
 
         forecasts[name] = {"queue": queue, "state": state}
 
+        # A job in Sortie's queue is in running[] too, as Sortie counts it
+        # against its cap, but no worker took it: it waits for a slot, and
+        # runs on no worker's lane.
+        queued = {((q.get("job") or {}).get("issue") or {}).get("identifier") or (q.get("job") or {}).get("id")
+                  for q in (state.get("workers") or {}).get("queue") or [] if isinstance(q, dict)}
         for r in state.get("running") or []:
             ident = r.get("issue_identifier")
             if not ours(ident):
                 continue
             where[ident] = name
             lease = leases.get(ident) or {}
+            if ident in queued and not r.get("worker") and not lease:
+                continue
             w = _pick(mine, r.get("worker") or lease.get("worker"))
             step, step_at = step_of(r)
             if step is None:
