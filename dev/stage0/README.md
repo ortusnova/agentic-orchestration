@@ -80,9 +80,10 @@ by the same Sortie, like any other.
   one. Sortie merges a `review: human` story after a review only from the
   Sortie commit that lets its gate do so (`planReviewGate`); with an older
   Sortie a person still merges those. A `review: ui` story
-  (`sortie-review:ui`) is never merged by Sortie: once its review and CI
-  pass, it gets a preview ([below](#previews-of-ui-stories)) and the
-  operator merges it. `test-review-gate.sh` checks all of this against
+  (`sortie-review:ui`) is merged by Sortie too, with no person involved,
+  once its review and CI pass and the review on its preview
+  ([below](#previews-of-ui-stories)) records its click-proofs for the head
+  (sortie#42). `test-review-gate.sh` checks all of this against
   Sortie's own loader, exit and merge code: it needs the `sortie/`
   submodule, or `SORTIE_SRC` naming a Sortie checkout.
 
@@ -107,14 +108,15 @@ by the same Sortie, like any other.
   repository.
   `test-review-gate.sh` checks the fix runs too.
 
-- **Operator comments.** On p1 `review_comments` is on: a comment on a ui
-  story's pull request that no bot wrote, or a review that requests changes
-  on any story, starts a review fix run on the branch with the comments and
-  the fix prompt (at most 5 per story, a minute after the last comment).
-  Its triage, a `node` one-liner in the machine, passes over the kit's own
-  comment with the preview's address (`<!-- workbench-preview -->`), which
-  GitHub does not mark as a bot's because the kit posts it with the
-  operator's token.
+- **Comments on a pull request.** On p1 `review_comments` is on: a comment
+  on a ui story's pull request that no bot wrote, apart from a click-proofs
+  record, or a review that requests changes on any story, starts a run on
+  the review rule with the comments (at most 5 per story, a minute after the
+  last comment). The kit's own comment with a preview's address
+  (`<!-- workbench-preview -->`, which GitHub does not mark as a bot's
+  because the kit posts it with the operator's token) starts the review on
+  the preview, with its click-proofs prompt; any other comment starts a fix
+  run with the fix prompt.
 - **Harness.** Every story runs opencode (`anthropic/claude-opus-5-5`),
   unless its title holds `[claude]` or it has the Huly label `claude-code`;
   then its build runs Claude Code. The review always runs opencode.
@@ -168,11 +170,16 @@ by the same Sortie, like any other.
 
 ## Previews of ui stories
 
-A `review: ui` story is built before it is approved, and the operator's
-merge is its approval (spec store `agent-platform/run-supervision`, design
-D8). Every minute `ortus-stage0-previews.timer` runs `run-previews.sh`, one
-pass of `workbench preview-sync` against Sortie and GitHub
-(`STAGE0_AO_REPO_PROJECT`):
+A `review: ui` story changes an interface: the operator approves it as a
+design prototype before the story is written, its acceptance criteria name
+that prototype, and after that no person approves or merges it (spec store
+`agent-platform/run-supervision`, "A UI is approved as a prototype, and the
+built story merges after its review"). Sortie merges its pull request once
+its review and CI pass and the pull request records the click-proofs on its
+preview for its head, a comment line `sortie:click-proofs passed <head sha>`
+(sortie#42). Every minute `ortus-stage0-previews.timer` runs
+`run-previews.sh`, one pass of `workbench preview-sync` against Sortie and
+GitHub (`STAGE0_AO_REPO_PROJECT`):
 
 - A ui story whose run is over, that waits in `In Review` (its review
   passed), and whose pull request (`sortie/<identifier>`) passes CI on its
@@ -182,11 +189,20 @@ pass of `workbench preview-sync` against Sortie and GitHub
   `ortus-stage0-preview@<identifier>`: `run-workbench.sh <identifier>`,
   the branch's workbench with `WORKBENCH_SYNC=0`, against the live store
   and Sortie, on `127.0.0.1:<port>` from `STAGE0_PREVIEW_FIRST_PORT` (8800)
-  up. The pull request gets one comment with the address, and the live
-  workbench shows the story as "Ready for you to look" with it, from
+  up. The pull request gets a comment with the address and the commit, and
+  the live workbench shows the address on the story, from
   `$STAGE0_HOME/previews.json`.
+- That comment starts the review on the preview (`review_comments`, with
+  the workflow's click-proofs prompt): a run on the review rule that clicks
+  every action the story's criteria name on the preview and, when they
+  pass, comments the click-proofs record for the head on the pull request
+  through GitHub's API. Sortie then merges it. Until then the workbench
+  shows the story as waiting for click-proofs, and once the record names the
+  head, as merging.
 - The preview follows the branch: a fix run's new head is deployed once its
-  run is over and CI passes on it; until then the last one stays up.
+  run is over and CI passes on it, and gets its own comment and review; a
+  record for an earlier commit does not count. Until then the last one stays
+  up.
 - When the pull request closes, merged or not, `preview.sh down` stops and
   removes it. A merge makes the story Done, and the change deploys as any
   workbench merge does.
@@ -199,6 +215,11 @@ each change rewrites `$STAGE0_HOME/previews/routes`, one `HOST PORT` line
 per preview, for the proxy in front of the live workbench, and runs
 `STAGE0_PREVIEW_ROUTES_HOOK` (for example, that proxy's reload). Without
 `STAGE0_WORKBENCH_URL` the address is the preview's loopback port.
+
+The review on the preview runs in a job's machine, so it reaches the preview
+only through the job's egress: `egress-profile.json` must allow the
+preview's name, and the preview must let the review sign in. The kit sets up
+neither by itself.
 
 A preview runs the branch's code on this host with the kit's Sortie and
 GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
