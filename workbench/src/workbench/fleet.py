@@ -78,6 +78,25 @@ def phase_of(entry: dict[str, Any]) -> str:
     return "build"
 
 
+def run_phases(states: Iterable[dict[str, Any] | None]) -> dict[str, str]:
+    """The phase of each issue's run, by tracker identifier: one that runs,
+    or that waits to run again after a retry or a budget hold."""
+    out: dict[str, str] = {}
+    for state in states:
+        for key in ("running", "retrying", "budget_exhausted"):
+            for r in (state or {}).get(key) or []:
+                if isinstance(r, dict) and r.get("issue_identifier"):
+                    out.setdefault(r["issue_identifier"], phase_of(r))
+    return out
+
+
+def merge_waits(states: Iterable[dict[str, Any] | None]) -> set[str]:
+    """The issues whose pull request Sortie's merge watch holds: their
+    review passed, and Sortie merges them once what is left passes."""
+    return {p["issue_identifier"] for state in states for p in (state or {}).get("pending_reactions") or []
+            if isinstance(p, dict) and p.get("kind") == "merge" and p.get("issue_identifier")}
+
+
 def step_of(entry: dict[str, Any]) -> tuple[str | None, float | None]:
     """The step the job reports, and when it reported it."""
     step = entry.get("step")

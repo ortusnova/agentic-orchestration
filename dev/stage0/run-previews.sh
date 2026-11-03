@@ -2,7 +2,8 @@
 # One pass of the previews of the review: ui stories' pull requests
 # (ortus-stage0-previews.timer runs this every minute): `workbench
 # preview-sync` deploys each one whose review and CI passed through
-# preview.sh, comments its address on the pull request, follows the branch,
+# preview.sh, comments its address and commit on the pull request (which
+# starts the review on the preview), follows the branch,
 # and removes the preview once the pull request closes. It keeps the record
 # the live workbench shows them from, $STAGE0_HOME/previews.json.
 #
