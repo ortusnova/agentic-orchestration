@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Deploy, move and remove the preview of a review: ui story's pull request
-# (spec store agent-platform/run-supervision, "A UI story is built before it
-# is approved, and its merge is the approval"). A preview is the branch's
-# workbench, read-only toward the tracker (WORKBENCH_SYNC=0), against live
-# data: the live spec store, Sortie's plan graph, and a copy of the live
-# workbench's registry taken at each deploy. `workbench preview-sync`
+# (spec store agent-platform/run-supervision, "A UI is approved as a
+# prototype, and the built story merges after its review"). A preview is
+# the branch's workbench, read-only toward the tracker (WORKBENCH_SYNC=0),
+# against live data: the live spec store, Sortie's plan graph, and a copy of
+# the live workbench's registry taken at each deploy. `workbench preview-sync`
 # (run-previews.sh, every minute) decides when, and calls this:
 #
 #   preview.sh up IDENTIFIER BRANCH SHA PORT ADDRESS

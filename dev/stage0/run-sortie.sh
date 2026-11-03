@@ -17,6 +17,9 @@
 #                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
+#   STAGE0_SUPERVISOR_TOKEN  $STAGE0_HOME/supervisor-token (supervisor.sh), for
+#                            server.supervisor_token; Sortie hands it to the
+#                            supervisor session only
 #   SORTIE_NOTIFY_SECRET     $STAGE0_HOME/notify-credential, mode 0600, when
 #                            stage0.env names the operator's channel
 # Git reaches GitHub over HTTPS with that same token, through a credential
@@ -30,6 +33,13 @@ STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 die() { printf 'run-sortie.sh: %s\n' "$*" >&2; exit 1; }
 
 export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+# The supervisor session runs on this host with the host's opencode and gh,
+# found where the last stage0.sh found them (it records its PATH), after the
+# kit's own tools. Its opencode reads the kit's configuration on top of the
+# operator's: the stories' model and the Anthropic sign-in plugin
+# (supervisor-opencode.json).
+if [[ -s $STAGE0_HOME/path ]]; then PATH=$PATH:$(cat "$STAGE0_HOME/path"); fi
+export OPENCODE_CONFIG=$STAGE0_KIT_ROOT/dev/stage0/supervisor-opencode.json
 export STAGE0_HULY_TOKEN
 STAGE0_HULY_TOKEN=$(python3 "$STAGE0_KIT_ROOT/dev/huly_project.py" "$STAGE0_HULY_URL" "$STAGE0_HULY_WORKSPACE" \
   "$STAGE0_HULY_EMAIL" "$STAGE0_HULY_PASSWORD" "$STAGE0_HULY_PROJECT") || die "could not log in to Huly"
@@ -41,6 +51,8 @@ else
 fi
 export STAGE0_SORTIE_TOKEN
 STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
+export STAGE0_SUPERVISOR_TOKEN
+STAGE0_SUPERVISOR_TOKEN=$(cat "$STAGE0_HOME/supervisor-token")
 # The operator's channel (notify-channel.sh): its webhook URL or bot token,
 # from the file only the operator writes, for the workflow's notifications.
 if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then

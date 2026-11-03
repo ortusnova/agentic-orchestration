@@ -1,27 +1,34 @@
 """The preview of each ``review: ui`` story's pull request
-(agent-platform/run-supervision, "A UI story is built before it is approved,
-and its merge is the approval").
+(agent-platform/run-supervision, "A UI is approved as a prototype, and the
+built story merges after its review").
 
-A ui story is built before anyone approves it. Once its criteria review has
-passed and CI passes on its pull request's head, the kit deploys the branch
-as a read-only workbench against live data, at an address of its own, and
-comments that address on the pull request. Sortie never merges the pull
-request: the operator looks at the preview, comments to ask for a change,
-which starts a fix run on the branch, and merges it to approve the story.
+A ui story is approved as its design prototype before it is written, and is
+built with no further approval. Once its criteria review has passed and CI
+passes on its pull request's head, the kit deploys the branch as a
+read-only workbench against live data, at an address of its own, and
+comments that address and the commit on the pull request. Sortie reads that
+comment as feedback on a ui story, so it starts the review on the preview:
+the reviewer clicks every action the story's criteria name there and, when
+they pass, records it on the pull request with the line
+``sortie:click-proofs passed <head sha>``. Sortie merges the pull request
+once that record names its head; no person approves it.
 
 :class:`PreviewSync` is one pass of that, run by the kit's timer:
 
 - a ui story whose pull request is open, whose run is over and whose review
   passed (the story is in the handoff state), and whose head passed CI, is
   deployed at that head by the deploy command; its pull request gets one
-  comment with the address;
+  comment with the address for each head deployed;
 - the preview follows the branch: a new head is deployed once its run is
   over and CI passes on it, and until then the preview at the last head
   stays up;
+- the record keeps whether the pull request holds the click-proofs record
+  for its head (``click_proofs``), so the workbench shows the story as
+  merging rather than waiting for them;
 - a pull request that closes, merged or not, takes its preview down.
 
 What is deployed is kept in the record file, which the live workbench reads
-(``WORKBENCH_PREVIEWS``) to show each story's preview.
+(``WORKBENCH_PREVIEWS``) to show each story's preview and state.
 """
 
 from __future__ import annotations
@@ -44,13 +51,47 @@ from .sortie import ProjectSortie, SortieError
 log = logging.getLogger(__name__)
 
 # Marks the kit's comment on a pull request. Sortie reads every comment on a
-# ui story's pull request that no bot wrote as the operator's; the kit's
-# workflow tells its review fix runs to pass over this one.
+# ui story's pull request that no bot wrote as feedback, so this one starts
+# the review on the preview.
 MARKER = "<!-- workbench-preview -->"
+
+# Opens the line of a pull request comment that records a ui story's
+# click-proofs as passed on its preview, for the head commit it names
+# (Sortie's ClickProofsMarker, internal/orchestrator/plan_control.go).
+CLICK_PROOFS = "sortie:click-proofs passed"
+# The shortest commit prefix a record may name, as Sortie reads it.
+MIN_CLICK_PROOFS_SHA = 7
 
 
 class PreviewError(Exception):
     pass
+
+
+def click_proofs_record(body: str) -> str | None:
+    """The lower-cased commit a click-proofs record line in ``body`` names,
+    or None; read as Sortie reads it, ignoring code ticks and quote marks."""
+    for line in (body or "").splitlines():
+        fields = line.strip().strip("`>* ").split()
+        if len(fields) < 3 or f"{fields[0]} {fields[1]}".lower() != CLICK_PROOFS:
+            continue
+        sha = fields[2].strip("`.,;:").lower()
+        if len(sha) >= MIN_CLICK_PROOFS_SHA and all(c in "0123456789abcdef" for c in sha):
+            return sha
+    return None
+
+
+def click_proofs_recorded(comments: list[dict[str, Any]], head: str) -> bool:
+    """Whether a comment no bot wrote records the click-proofs for ``head``.
+    A record naming an earlier commit does not count: a fix pushed after
+    the click-proofs needs them again."""
+    head = (head or "").lower()
+    for c in comments:
+        if ((c.get("user") or {}).get("type") or "").lower() == "bot":
+            continue
+        sha = click_proofs_record(c.get("body") or "")
+        if sha and head.startswith(sha):
+            return True
+    return False
 
 
 def read_previews(path: Path | None) -> dict[str, dict[str, Any]]:
@@ -105,11 +146,15 @@ def _is_ip(host: str) -> bool:
     return True
 
 
-def comment_text(identifier: str, address: str) -> str:
-    return (f"{MARKER}\nPreview of {identifier}: {address}\n\n"
-            "This branch's workbench, read-only toward the tracker, against live data. It follows the "
-            "branch: each new commit is deployed once its run is over and CI passes. Comment here to ask "
-            "for a change, and merge this pull request to approve the story.\n")
+def comment_text(identifier: str, address: str, sha: str, pull: str) -> str:
+    """The kit's comment for one deployed head. No line of it starts with
+    the click-proofs record, so it is never read as one."""
+    return (f"{MARKER}\nPreview of {identifier} at `{sha}`: {address}\n\n"
+            f"This is the branch's workbench at that commit, read-only toward the tracker, against live data. "
+            f"This comment starts the review on the preview: it clicks every action the story's acceptance "
+            f"criteria name there and, when they pass, comments on {pull} a line that starts with "
+            f"`{CLICK_PROOFS}` and names this commit. Sortie merges the pull request once that record names its "
+            f"head. Each new commit is deployed once its run is over and CI passes, and gets a comment like this one.\n")
 
 
 class Deployer(Protocol):
@@ -216,9 +261,18 @@ class PreviewSync:
             return
         head = pull.get("head") or {}
         sha, branch = head.get("sha") or "", head.get("ref") or self.settings.branch_prefix + ident
+        comments = None
+        if entry:
+            comments = await self.github.comments(self.owner, self.repo, int(entry["number"]))
+            proofs = sha if sha and click_proofs_recorded(comments, sha) else None
+            if entry.get("click_proofs") != proofs:
+                entry["click_proofs"] = proofs
+                write_previews(self.settings.record, record)
+                if proofs:
+                    log.info("%s's click-proofs are recorded for %s: Sortie merges it", ident, sha[:12])
         if entry and entry.get("sha") == sha:
-            if not entry.get("commented"):
-                await self._comment(ident, record)
+            if entry.get("commented") != sha:
+                await self._comment(ident, record, comments)
             return
         if not sha or not self.reviewed(node):
             return
@@ -230,7 +284,7 @@ class PreviewSync:
             "url": preview_address(self.settings.live_url, ident, port),
             "pull": f"{self.settings.repo}#{pull.get('number')}", "number": pull.get("number"),
             "pull_url": pull.get("html_url") or "", "deployed_at": self.clock(),
-            "commented": bool(entry and entry.get("commented")),
+            "commented": None, "click_proofs": entry.get("click_proofs") if entry else None,
         }
         try:
             await self.deployer.up(preview)
@@ -240,18 +294,20 @@ class PreviewSync:
         log.info("deployed the preview of %s at %s: %s", ident, sha[:12], preview["url"])
         record[ident] = preview
         write_previews(self.settings.record, record)
-        if not preview["commented"]:
-            await self._comment(ident, record)
+        await self._comment(ident, record, comments)
 
-    async def _comment(self, ident: str, record: dict[str, dict[str, Any]]) -> None:
-        """Comment the preview's address on the pull request, once."""
+    async def _comment(self, ident: str, record: dict[str, dict[str, Any]],
+                       comments: list[dict[str, Any]] | None = None) -> None:
+        """Comment the preview's address and commit on the pull request,
+        once per head deployed: each comment starts a review on it."""
         entry = record[ident]
-        number = int(entry["number"])
-        comments = await self.github.comments(self.owner, self.repo, number)
-        if not any(MARKER in (c.get("body") or "") for c in comments):
-            await self.github.comment(self.owner, self.repo, number, comment_text(ident, entry["url"]))
-            log.info("commented the preview of %s on %s", ident, entry["pull"])
-        entry["commented"] = True
+        number, sha = int(entry["number"]), entry["sha"]
+        if comments is None:
+            comments = await self.github.comments(self.owner, self.repo, number)
+        if not any(MARKER in (c.get("body") or "") and sha in (c.get("body") or "") for c in comments):
+            await self.github.comment(self.owner, self.repo, number, comment_text(ident, entry["url"], sha, entry["pull"]))
+            log.info("commented the preview of %s at %s on %s", ident, sha[:12], entry["pull"])
+        entry["commented"] = sha
         write_previews(self.settings.record, record)
 
     async def _down(self, ident: str, record: dict[str, dict[str, Any]]) -> None:

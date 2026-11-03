@@ -6,6 +6,9 @@ After=podman-restart.service network-online.target
 Type=exec
 Environment=STAGE0_HOME=@STAGE0_HOME@
 ExecStart=@KIT@/run-sortie.sh
+# A restart clears Sortie's pause of the supervisor; the operator's stands
+# (supervisor.sh). Its failure does not stop Sortie.
+ExecStartPost=-@KIT@/supervisor.sh repause
 Restart=on-failure
 RestartSec=30
 # Sortie drains running sessions on SIGTERM; give it time.

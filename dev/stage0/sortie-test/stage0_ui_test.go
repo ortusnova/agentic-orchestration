@@ -1,35 +1,95 @@
-// The stage-0 kit's ui stories (agent-platform/run-supervision#A UI story
-// is built before it is approved, and its merge is the approval), checked
-// against Sortie itself as stage0_review_test.go checks the review gate:
-// a sortie-review:ui story goes through the review and is never
-// auto-merged; on p1 the operator's comment on its pull request starts a
-// fix run with the kit's fix prompt, and the kit's own preview comment does
-// not; the operator's merge makes it Done.
+// The stage-0 kit's ui stories (agent-platform/run-supervision#A UI is
+// approved as a prototype, and the built story merges after its review),
+// checked against Sortie itself as stage0_review_test.go checks the review
+// gate: a sortie-review:ui story goes through the review; the kit's comment
+// with its preview's address starts the review on the preview, whose prompt
+// asks the reviewer to click every action the criteria name there and, when
+// they pass, to record `sortie:click-proofs passed <head sha>` on the pull
+// request; Sortie merges it once that record names the head, with no person
+// involved, and the merge makes it Done. An operator's comment still starts
+// a fix run with the kit's fix prompt.
 
 package orchestrator
 
 import (
 	"context"
-	"encoding/json"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/prompt"
 )
 
 // previewMarker opens the kit's comment with a preview's address
 // (workbench/src/workbench/preview.py).
 const previewMarker = "<!-- workbench-preview -->"
 
-// Scenario: A UI story from spec to merge. It is built by a rule that is
-// not the review, its chain ends in the review, and after a passing review
-// with clean, green CI Sortie still does not merge it.
-func TestStage0_AUIStoryIsReviewedAndNeverAutoMerged(t *testing.T) {
+// previewComment is the kit's comment on a ui story's pull request for one
+// deployed head, as preview.py writes it.
+func previewComment(sha string) string {
+	return previewMarker + "\nPreview of ONS-97 at `" + sha + "`: https://workbench-ons-97.example/\n\n" +
+		"This is the branch's workbench at that commit, read-only toward the tracker, against live data. " +
+		"This comment starts the review on the preview: it clicks every action the story's acceptance criteria name " +
+		"there and, when they pass, comments on ortusnova/agentic-orchestration#80 a line that starts with " +
+		"`" + ClickProofsMarker + "` and names this commit. Sortie merges the pull request once that record names its head."
+}
+
+// The prompt of the review on the preview: it asks the reviewer to click
+// every action the criteria name on the story's preview and, when they
+// pass, to record the click-proofs for the head on the pull request.
+var clickProofsPrompt = []string{
+	"You are reviewing story **ONS-97** on its preview: Show worker activity",
+	"The worker column shows each worker.",
+	"The operator approved its interface as a design prototype before it was written",
+	"Sortie merges its pull request once a comment on the pull request records the click-proofs on its preview for the pull request's head commit; no person approves or merges it.",
+	`<comment>"\u003c!-- workbench-preview --\u003e\nPreview of ONS-97 at`,
+	"Read its `AGENTS.md` first",
+	"check that `git rev-parse HEAD` is the commit the kit's comment names",
+	"Open the preview's address in a headless browser",
+	"Click every action the story's acceptance criteria name, on the story's preview, one at a time",
+	"what the approved prototype shows",
+	"When every action passes, comment on the pull request the kit's comment names, through GitHub's API",
+	"`POST https://api.github.com/repos/<owner>/<repo>/issues/<number>/comments`",
+	"The comment's first line is exactly `sortie:click-proofs passed <head sha>`, with the full commit that `git rev-parse HEAD` prints",
+	"That record is what Sortie waits for, and then it merges the pull request.",
+	"Write no other comment on the pull request",
+	"When you add a commit, write no click-proofs record",
+	"When an action fails and you can fix it, fix it on the branch, with a test, and write no record",
+	"stop with `blocked` in `.sortie/status`",
+	"Never rewrite a commit that is already pushed",
+	"Do not push",
+}
+
+// renderUI renders the given turn of a run of a ui story on the review
+// rule: the review itself with no continuation, else a reaction's run.
+func renderUI(t *testing.T, w stage0Fix, turn int, continuation map[string]any) string {
+	t.Helper()
+	issue := domain.Issue{
+		ID: "u", Identifier: "ONS-97", Title: "Show worker activity",
+		Description: "## Acceptance criteria\n\n- The worker column shows each worker.",
+		Labels:      []string{config.ReviewUILabel, w.review.Stage},
+	}
+	text, err := prompt.BuildReactionTurnPrompt(w.tmpl, issue.ToTemplateMap(), 0, turn, w.cfg.Agent.MaxTurns, continuation,
+		prompt.WithStage(prompt.StageContext{Current: w.review.Name}))
+	if err != nil {
+		t.Fatalf("%s: render the ui story's run: %v", w.name, err)
+	}
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// reviewCommentsOf is the review_comments continuation Sortie hands a run.
+func reviewCommentsOf(comments ...domain.ReviewComment) map[string]any {
+	return map[string]any{"review_comments": buildReviewTemplateMap(comments)}
+}
+
+// Scenario: A built UI story. It is built by a rule that is not the review,
+// and its chain ends in the review. After a passing review with clean,
+// green CI, Sortie waits for the click-proofs on its preview, asking no one
+// to approve or merge it, and merges it once a record names its head.
+func TestStage0_AUIStoryMergesOnceItsClickProofsAreRecorded(t *testing.T) {
 	for _, name := range stage0Workflows {
 		cfg := loadStage0(t, name)
 		review := stage0Review(t, cfg)
@@ -53,52 +113,94 @@ func TestStage0_AUIStoryIsReviewedAndNeverAutoMerged(t *testing.T) {
 		f := reviewExit(t, cfg, review, []string{config.ReviewUILabel})
 		f.exit()
 		state := NewState(5000, 4, 0, nil, AgentTotals{})
-		// The passing review seeds the merge watch; the gate is what refuses it.
-		pending := f.state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]
+		key := ReactionKey(hopExitIssueID, ReactionKindAutoMerge)
+		pending := f.state.PendingReactions[key]
 		if pending == nil {
 			t.Fatalf("%s: no auto-merge watch after the review; reactions = %v", name, f.state.PendingReactions)
 		}
 		p := *pending
-		state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)] = &p
-		merged := false
-		scm := &controlledSCMAdapter{
-			getMergeabilityFn: func(context.Context, int, string, string) (domain.PRMergeStatus, error) {
-				return domain.PRMergeStatus{Mergeability: domain.MergeabilityClean, HeadSHA: "deadbeef"}, nil
-			},
-			getReviewDecisionFn: func(context.Context, int, string, string) (domain.ReviewDecision, error) {
-				return domain.ReviewDecisionApproved, nil
-			},
-			getCIStatusFn: func(context.Context, int, string, string) (string, error) { return "success", nil },
-			mergePRFn: func(context.Context, int, string, string, domain.MergeStrategy, string, string, string) (domain.MergeResult, error) {
-				merged = true
-				return domain.MergeResult{SHA: "merge-97"}, nil
-			},
+		state.PendingReactions[key] = &p
+		tracker := &uiMergeTracker{labelTracker: labelTracker{labels: []string{config.ReviewUILabel, review.Stage}}}
+		pass := func(conversation []domain.ReviewComment, now time.Time) int {
+			merges := 0
+			state.PendingReactions[key].PendingRetryAt = time.Time{}
+			params := autoMergeParams(&reviewReconcileStore{}, uiMergeForge(&merges), tracker)
+			params.AutoMergeConfig = amCfg
+			params.NowFunc = func() time.Time { return now }
+			params.ReviewGate = planReviewGate(cfg, tracker, verdictsOf(f))
+			params.ClickProofs = planClickProofs(cfg, &commentForge{conversation: conversation})
+			reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
+			state.TrackerOpsWg.Wait()
+			return merges
 		}
-		params := autoMergeParams(&reviewReconcileStore{}, scm, &reviewTrackerStub{})
-		params.AutoMergeConfig = amCfg
-		params.NowFunc = func() time.Time { return time.Now().Add(time.Hour) }
-		params.ReviewGate = planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel, review.Stage}})
-		reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
-		state.TrackerOpsWg.Wait()
-		if merged {
-			t.Errorf("%s: Sortie merged a ui story", name)
+
+		// The preview is up, and its review has not recorded anything yet.
+		kit := domain.ReviewComment{ID: "issuecomment-1", Reviewer: "brian", Body: previewComment(uiHeadSHA)}
+		if merges := pass([]domain.ReviewComment{kit}, time.Now().Add(time.Hour)); merges != 0 {
+			t.Fatalf("%s: Sortie merged a ui story with no click-proofs record", name)
 		}
-		if _, kept := state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]; kept {
-			t.Errorf("%s: auto-merge kept its watch on a ui story, want it dropped: the operator merges", name)
+		if _, kept := state.PendingReactions[key]; !kept {
+			t.Fatalf("%s: auto-merge dropped its watch on a ui story, want it waiting for the click-proofs", name)
 		}
-		for _, rule := range []string{review.Name, "build", "claude-label", "claude-title"} {
-			gate := planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel}})
+		// Still waiting a day later: the kit's merge watch has no window.
+		if merges := pass([]domain.ReviewComment{kit}, time.Now().Add(26*time.Hour)); merges != 0 {
+			t.Fatalf("%s: Sortie merged a ui story with no click-proofs record", name)
+		}
+		for _, c := range tracker.written() {
+			if strings.Contains(strings.ToLower(c), "approve") {
+				t.Errorf("%s: Sortie asks someone to approve a ui story: %q", name, c)
+			}
+		}
+
+		// The review on the preview records the click-proofs for the head.
+		record := domain.ReviewComment{ID: "issuecomment-2", Reviewer: "brian",
+			Body: ClickProofsMarker + " " + uiHeadSHA + "\n\n- The worker column: shows each worker. Pass."}
+		if merges := pass([]domain.ReviewComment{kit, record}, time.Now().Add(27*time.Hour)); merges != 1 {
+			t.Errorf("%s: merges = %d once the click-proofs are recorded for the head, want 1", name, merges)
+		}
+
+		for _, rule := range []string{"build", "claude-label", "claude-title"} {
+			gate := planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel}}, allMet{})
 			if ok, _, err := gate(context.Background(), &PendingReaction{IssueID: "u", RuleName: rule}); ok || err != nil {
-				t.Errorf("%s: gate after %s = %v, %v, want refused", name, rule, ok, err)
+				t.Errorf("%s: gate after %s = %v, %v, want refused: only the review lets a ui story merge", name, rule, ok, err)
 			}
 		}
 	}
 }
 
-// Scenario: The operator asks for a change. On p1, a comment on the ui
-// story's pull request starts a review fix run on the branch, whose prompt
-// carries the comment and the kit's fix rules.
-func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
+// The review prompt of a ui story says that its click-proofs come on the
+// preview, after it, and that Sortie merges it once they are recorded;
+// another story's says nothing of them.
+func TestStage0_TheReviewPromptOfAUIStory(t *testing.T) {
+	for _, name := range stage0Workflows {
+		w := loadStage0Fix(t, name)
+		text := renderUI(t, w, 1, nil)
+		wantPrompt(t, name, text, "You are reviewing the pull request of story **ONS-97**",
+			"Check every acceptance criterion above",
+			"This is a ui story (`sortie-review:ui`): the operator approved its interface as a design prototype before it was written",
+			"Check that the branch builds what the approved prototype shows.",
+			"That review clicks every action the criteria name on the story's preview and, when they pass, comments `sortie:click-proofs passed <head sha>` on the pull request",
+			"Sortie merges it once that record names its head, and no person approves or merges it.",
+			"write no such record in this run",
+			"Sortie merges the pull request once CI passes and the click-proofs on its preview are recorded.")
+
+		other := renderFixTurn(t, w, 1, nil)
+		if !strings.Contains(other, "You are reviewing the pull request of story **ONS-41**") {
+			t.Fatalf("%s: the criteria story's review prompt = %q", name, other)
+		}
+		for _, never := range []string{"click-proofs", "prototype"} {
+			if strings.Contains(other, never) {
+				t.Errorf("%s: a criteria story's review prompt holds %q", name, never)
+			}
+		}
+	}
+}
+
+// Scenario: A built UI story. The kit's comment with its preview's address
+// starts a run on the review rule whose prompt is the review on the
+// preview: it clicks every action the criteria name there and, when they
+// pass, records `sortie:click-proofs passed <head sha>` on the pull request.
+func TestStage0_ThePreviewCommentStartsTheReviewOnThePreview(t *testing.T) {
 	w := loadStage0Fix(t, "WORKFLOW.md")
 	rc := w.cfg.Reactions["review_comments"]
 	if rc.Provider != "github" {
@@ -109,7 +211,12 @@ func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
 		t.Fatalf("review_comments: %v", err)
 	}
 	if !reviewCfg.Triage.Enabled() {
-		t.Error("review_comments has no triage: the kit's preview comment would start a fix run")
+		t.Error("review_comments has no triage: a live-proof job's result would start a fix run")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Log("no node on PATH: the triage of the preview comment is not run")
+	} else if got := runTriage(t, []map[string]any{{"id": "issuecomment-9", "reviewer": "brian", "body": previewComment(uiHeadSHA)}}); got != "dispatch-agent" {
+		t.Errorf("triage of the preview comment = %q, want dispatch-agent: it must reach the agent", got)
 	}
 
 	// The review's passing exit starts the watch on the pull request.
@@ -121,6 +228,71 @@ func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
 	}
 
 	// The triage runs in the machine; here the comment goes to the agent.
+	reviewCfg.Triage = config.ReactionTriageConfig{}
+	state := stateWithReviewReaction(t, "UI-1", 80)
+	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
+	forge := &commentForge{conversation: []domain.ReviewComment{{
+		ID: "issuecomment-9", Reviewer: "brian", Body: previewComment(uiHeadSHA),
+		SubmittedAt: reviewBaseTime.Add(-5 * time.Minute),
+	}}}
+	tracker := &labelTracker{labels: []string{config.ReviewUILabel, w.review.Stage}}
+	params := reviewParams(&reviewReconcileStore{}, forge, tracker)
+	params.ReviewConfig = reviewCfg
+	params.OperatorComments = planOperatorComments(w.cfg, tracker, forge)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
+
+	retry := state.RetryAttempts["UI-1"]
+	if retry == nil || retry.ReactionKind != ReactionKindReview {
+		t.Fatalf("scheduled run = %+v, want the review on the preview", retry)
+	}
+	if retry.RuleName != w.review.Name {
+		t.Errorf("run rule = %q, want %s", retry.RuleName, w.review.Name)
+	}
+	text := renderUI(t, w, 1, retry.ContinuationContext)
+	wantPrompt(t, w.name, text, clickProofsPrompt...)
+	wantPrompt(t, w.name, text, uiHeadSHA, "ortusnova/agentic-orchestration#80")
+	for _, never := range []string{"You are fixing", "You are working on story", "The other comments on the pull request",
+		"approve the story", "operator's merge"} {
+		if strings.Contains(text, never) {
+			t.Errorf("click-proofs prompt holds %q", never)
+		}
+	}
+
+	// A later turn of the run continues it.
+	if next := renderUI(t, w, 2, retry.ContinuationContext); !strings.Contains(next, "Continue with the instructions you received at the start") {
+		t.Errorf("turn 2 = %q, want the continuation", next)
+	}
+}
+
+// The review on the preview takes the newest preview comment and lists the
+// operator's comments beside it, which it handles first.
+func TestStage0_TheReviewOnThePreviewHandlesTheOperatorsComments(t *testing.T) {
+	w := loadStage0Fix(t, "WORKFLOW.md")
+	text := renderUI(t, w, 1, reviewCommentsOf(
+		domain.ReviewComment{ID: "issuecomment-1", Reviewer: "brian", Body: previewComment("1111111111111111111111111111111111111111")},
+		domain.ReviewComment{ID: "issuecomment-2", Reviewer: "brian", Body: "The worker column is missing."},
+		domain.ReviewComment{ID: "issuecomment-3", Reviewer: "brian", Body: previewComment(uiHeadSHA)},
+	))
+	wantPrompt(t, w.name, text, clickProofsPrompt...)
+	wantPrompt(t, w.name, text, "The other comments on the pull request, oldest first",
+		`- brian: <comment>"The worker column is missing."</comment>`,
+		"Make each change a comment above asks for that the branch does not hold yet", uiHeadSHA)
+	if strings.Contains(text, "Preview of ONS-97 at `1111111111111111111111111111111111111111`") {
+		t.Error("the prompt holds an earlier preview's comment, want the newest only")
+	}
+}
+
+// Scenario: An operator's comment on the ui story's pull request starts a
+// review fix run on the branch, whose prompt carries the comment and the
+// kit's fix rules, and says Sortie merges once the click-proofs of the new
+// head are recorded.
+func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
+	w := loadStage0Fix(t, "WORKFLOW.md")
+	reviewCfg, err := BuildReviewReactionConfig(w.cfg.Reactions["review_comments"])
+	if err != nil {
+		t.Fatalf("review_comments: %v", err)
+	}
+	// The triage runs in the machine; here the comment goes to Sortie.
 	reviewCfg.Triage = config.ReactionTriageConfig{}
 	state := stateWithReviewReaction(t, "UI-1", 80)
 	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
@@ -144,62 +316,46 @@ func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
 	text := renderFix(t, w, retry.ContinuationContext)
 	wantPrompt(t, w.name, text, fixPromptRules...)
 	wantPrompt(t, w.name, text, "The operator looked at the pull request, or at its preview, and asks for a change.",
-		`- brian: <comment>"The worker column is missing."</comment>`, "Pass over a comment that starts with",
-		"the preview follows the branch once CI passes", "Sortie does not merge this pull request")
-	for _, never := range []string{"You are reviewing", "You are working on story", "CI fails on", "conflicts with its base branch"} {
+		`- brian: <comment>"The worker column is missing."</comment>`,
+		"the preview follows the branch once CI passes",
+		"Sortie merges the pull request once that review records the click-proofs for the new head: no person approves it.")
+	for _, never := range []string{"You are reviewing", "You are working on story", "CI fails on", "conflicts with its base branch",
+		"operator's merge", "Sortie does not merge this pull request"} {
 		if strings.Contains(text, never) {
 			t.Errorf("operator fix prompt holds %q", never)
 		}
 	}
 }
 
-// The triage passes over the kit's comment with the preview's address,
-// alone, and hands every set with an operator's comment to the agent.
-func TestStage0_TheTriagePassesOverThePreviewComment(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("no node on PATH: the machines run the triage with the pack's node")
+// A click-proofs record on the pull request is no request for a change: it
+// starts no run.
+func TestStage0_TheClickProofsRecordStartsNoRun(t *testing.T) {
+	w := loadStage0Fix(t, "WORKFLOW.md")
+	reviewCfg, err := BuildReviewReactionConfig(w.cfg.Reactions["review_comments"])
+	if err != nil {
+		t.Fatalf("review_comments: %v", err)
 	}
-	script := loadStage0(t, "WORKFLOW.md").Reactions["review_comments"].Triage.Script
-	kit := map[string]any{"id": "issuecomment-1", "reviewer": "brian", "body": previewMarker + "\nPreview of ONS-97: https://workbench-ons-97.example/"}
-	operator := map[string]any{"id": "issuecomment-2", "reviewer": "brian", "body": "The worker column is missing."}
-	for _, tc := range []struct {
-		name     string
-		comments []map[string]any
-		want     string
-	}{
-		{"the preview comment", []map[string]any{kit}, "handled"},
-		{"the operator's comment", []map[string]any{operator}, "dispatch-agent"},
-		{"both", []map[string]any{kit, operator}, "dispatch-agent"},
-		{"none", nil, "dispatch-agent"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			input, result := filepath.Join(dir, "input.json"), filepath.Join(dir, "result.json")
-			doc, _ := json.Marshal(map[string]any{"schema_version": 1, "reaction_kind": "review", "subject": tc.comments})
-			if err := os.WriteFile(input, doc, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command("sh", "-c", script)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "SORTIE_REACTION_KIND=review", "SORTIE_REACTION_INPUT="+input, "SORTIE_REACTION_RESULT="+result)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("triage: %v: %s", err, out)
-			}
-			raw, err := os.ReadFile(result)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got struct{ Disposition string }
-			if err := json.Unmarshal(raw, &got); err != nil || got.Disposition != tc.want {
-				t.Errorf("disposition = %q (%v), want %s", got.Disposition, err, tc.want)
-			}
-		})
+	// The triage runs in the machine; here the comment goes to Sortie.
+	reviewCfg.Triage = config.ReactionTriageConfig{}
+	state := stateWithReviewReaction(t, "UI-1", 80)
+	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
+	forge := &commentForge{conversation: []domain.ReviewComment{{
+		ID: "issuecomment-9", Reviewer: "brian", Body: ClickProofsMarker + " " + uiHeadSHA + "\n\n- The worker column: pass.",
+		SubmittedAt: reviewBaseTime.Add(-5 * time.Minute),
+	}}}
+	tracker := &labelTracker{labels: []string{config.ReviewUILabel, w.review.Stage}}
+	params := reviewParams(&reviewReconcileStore{}, forge, tracker)
+	params.ReviewConfig = reviewCfg
+	params.OperatorComments = planOperatorComments(w.cfg, tracker, forge)
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), newReviewMetricsSpy())
+
+	if retry := state.RetryAttempts["UI-1"]; retry != nil {
+		t.Errorf("scheduled run = %+v after a click-proofs record, want none", retry)
 	}
 }
 
-// Scenario: The operator is satisfied. Their merge reaches the story:
-// merge completion moves it to Done.
-func TestStage0_TheOperatorsMergeMakesAUIStoryDone(t *testing.T) {
+// Sortie's merge reaches the story: merge completion moves it to Done.
+func TestStage0_TheMergeMakesAUIStoryDone(t *testing.T) {
 	for _, name := range stage0Workflows {
 		cfg := loadStage0(t, name)
 		review := stage0Review(t, cfg)

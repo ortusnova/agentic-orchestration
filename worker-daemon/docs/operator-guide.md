@@ -214,7 +214,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 6. When the agent exits, it sends the exit status, the stream's last
    frame. Then it runs the usage command and reports on `usage`, returns
    the result on `bundles` (the issue branch's bundle and the agent's
-   `.sortie/pr.json`), deletes the machine, and reports the outcome:
+   `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
+   when the agent wrote it), deletes the machine, and reports the outcome:
    `succeeded` when the agent exited 0 and the result was returned. The
    result always goes before the report. Usage goes before the result,
    because once Sortie has the result it finishes the attempt and closes
@@ -226,13 +227,25 @@ stops, the daemon keeps the machine, stops the agent, and dials the
 stream again until Sortie serves it; it then starts the agent again in
 the same `/workspace`, and the restarted Sortie resumes the agent's
 session there (Sortie's `docs/workflow-reference.md`, "A restart keeps
-the remote runs"). A failed heartbeat that is not a `409` is retried at
-the next beat. Usage and the result are sent again while Sortie answers
-`404`, `502`, `503` or `504`, or cannot be reached, until it takes them
-or the job ends, and the report while Sortie answers a `5xx` or cannot
-be reached, until the lease would have run out. A stream refused `401`,
-which a Sortie that no longer knows the job answers, ends the attempt as
-failed.
+the remote runs"). A failed heartbeat that is not a `409` or `410`,
+such as a `503` while the restarted Sortie still adopts its runs, is
+retried at the next beat. The stream is dialled again, and usage and
+the result sent again, while Sortie answers `404`, `502`, `503` or `504`,
+or cannot be reached, for at most one lease (`lease_ms`) each, and the
+report while Sortie answers a `5xx` or cannot be reached, until the lease
+would have run out. A stream refused `401`, or not served again within
+the lease, ends the attempt as failed, with no usage or result. A job is
+never held forever: when no heartbeat has been accepted for longer than
+the lease, Sortie can no longer hold the job, and the daemon stops the
+machine, deletes it and reports nothing.
+
+A job the control plane no longer wants is released at once. When a
+heartbeat, a report or any flow request, the `stdio` dial included,
+answers `410` (`job_gone`: Sortie cancelled or finished the attempt, or
+no longer knows it after its restart), the daemon logs `the control
+plane no longer wants the job` with Sortie's reason, stops the agent and
+the machine, deletes the machine, frees what the job reserved at its
+next check-in, and sends no result, usage or report for that attempt.
 
 When a heartbeat answers `409`, the daemon stops the machine at once,
 within the heartbeat interval, and sends no result, usage or report for
@@ -249,7 +262,7 @@ proxy. Paths are under the flow's URL:
 
 | Flow | Request |
 |---|---|
-| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional part `pr` (`.sortie/pr.json`, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
+| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional parts `pr` (`.sortie/pr.json`, at most 64 KiB), `status` (`.sortie/status`, at most 4 KiB) and `criteria` (`.sortie/criteria.json`, a criteria review's verdict per criterion, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
 | `stdio` | `GET /jobs/{job}/attempts/{attempt}` with `Connection: Upgrade` and `Upgrade: sortie-stdio/1` opens a framed stream (answer `101`). A `ws` or `wss` flow URL is dialled as `http` or `https`. |
 | `usage` | `POST /jobs/{job}/attempts/{attempt}` with `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "model", "measured"}`, the attempt's totals so far; `"measured": false` says that spend occurred and its amount is unknown. |
 | `egress` | An HTTP proxy; the daemon carries the guest's `CONNECT` tunnels and absolute-form requests to it. |
