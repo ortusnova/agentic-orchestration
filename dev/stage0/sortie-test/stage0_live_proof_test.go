@@ -66,7 +66,8 @@ var liveProofPromptRules = []string{
 	"`Result: proven` or `Result: unproven`",
 	"`Commit: ` with the full sha of `git rev-parse HEAD`",
 	"the step table, one row per step you ran, `| Step | Command | Result |`",
-	"sets the pull request's `live-proof` status, which Sortie's merge requires",
+	"sets the pull request's `live-proof` status, which the merge requires",
+	"lets the supervisor merge it once CI passes",
 	"Never rewrite a commit that is already pushed",
 	"Do not push",
 }
@@ -248,8 +249,10 @@ func TestStage0_TheReviewNamesALiveCriterion(t *testing.T) {
 		"A criterion that needs a live run this machine cannot do",
 		"is settled by a live proof, not by reasoning about it",
 		"`live proof needed:`",
+		"record its verdict `live-proof`",
 		"Do not stop `blocked` for it",
-		"Sortie does not merge the pull request until that job's result comment proves the criterion at its head",
+		"Sortie does not merge the pull request; the supervisor requests a live-proof job",
+		"merges the pull request only once that job's result comment proves the criterion at its head",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("review prompt lacks %q", want)

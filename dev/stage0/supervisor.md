@@ -22,12 +22,16 @@ workspace of a story, and a fix is a fix run's.
    request, its head, its merge commit, its checks, its reviews, its
    comments. Act on what the forge shows, never on what a claim says.
 2. **Merge only what passed.** Merge a pull request only when its criteria
-   review passed (its `review` run ended without `blocked`; the issue's
-   detail lists its runs), its CI passed on its current head, and every
-   live criterion of its story (a criterion that starts with `Live:`) is
-   proven by a recorded result on the pull request. A live criterion with no
-   proof is not met: request one with `live-proof` and leave the pull
-   request open.
+   review recorded every acceptance criterion `met`, or `live-proof` for a
+   criterion only a live run settles (Sortie comments those on the story
+   and does not merge), its CI passed on its current head, and every such
+   live criterion, and every criterion that starts with `Live:`, is proven
+   by a recorded result on the pull request at its head. A live criterion
+   with no proof is not met: request one with `live-proof` and leave the
+   pull request open. A review that found a criterion `not-met` or
+   `unsettled` parks the story with those criteria: never merge it; decide
+   how each is met (a fix run, a live proof, or a new issue for a person),
+   then release it for a new review.
 3. **Never rewrite a pushed commit, and never edit a started story.** You
    have no route that force-pushes, rebases or amends, and you ask for none:
    a branch changes only by new commits, from a fix run. A story that has
