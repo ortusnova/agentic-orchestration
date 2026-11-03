@@ -238,7 +238,7 @@ def test_only_a_session_budget_offers_more_sessions():
     assert p1["stuck"][0]["budget"]["session_budget"] is True
     fleet = build_fleet([("p1", p1_state(budget_exhausted=budget("token_budget")), None)], NODES, now=NOW)
     s = worker(fleet, "p1")["stuck"][0]
-    assert s["action"] == "story" and s["budget"]["session_budget"] is False
+    assert s["action"] == "story" and s["budget"]["session_budget"] is False and s["reason"] == "token budget exhausted"
     assert story_states(fleet)["ONS-68"]["release"] == "a larger budget in its workflow"
 
 

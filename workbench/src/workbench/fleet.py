@@ -335,7 +335,7 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             if sessions and isinstance(used, int) and isinstance(budget, int):
                 reason = f"used {used} of its {budget} sessions"
             elif not sessions:
-                reason = f"{reason} exhausted" + (f": {b['status_text']}" if b.get("status_text") else "")
+                reason = f"{reason} exhausted"
             w.stuck.append({**stories.ref(ident, b.get("issue_title")), "sortie": name, "worker": w.name,
                             "kind": "budget", "since": ts(b.get("exhausted_at")), "phase": phase_of(b),
                             "reason": reason, "budget": {"used_sessions": used, "budget_sessions": budget,
