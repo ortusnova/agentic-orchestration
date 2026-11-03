@@ -102,10 +102,20 @@ chmod 600 "$home/notify-credential"
 out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
 for want in WORKBENCH_NOTIFY_KIND=slack "WORKBENCH_NOTIFY_CREDENTIAL_FILE=$home/notify-credential" \
   WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev WORKBENCH_SORTIE_NAME=p1 \
-  WORKBENCH_SORTIES=taichi=http://127.0.0.1:7681 "WORKBENCH_SORTIE_TOKEN_DIR=$home/sorties"; do
+  WORKBENCH_SORTIES=taichi=http://127.0.0.1:7681 "WORKBENCH_SORTIE_TOKEN_TAICHI_FILE=$home/sorties/taichi.token"; do
   grep -qxF "$want" <<< "$out" && ok "the workbench gets $want" || fail "run-workbench.sh lacks $want: $out"
 done
 grep -q 'hooks.slack.test' <<< "$out" && fail "the credential is in the workbench's environment" || ok "the credential stays in its file"
+# No channel, the default: both start, with no credential file and nothing about a channel.
+sed -i '/^STAGE0_NOTIFY_KIND=/d' "$home/stage0.env"
+mv "$home/notify-credential" "$home/notify-credential.off"
+out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
+[[ -z $out ]] && ok "with no channel Sortie starts, with no credential" || fail "run-sortie.sh with no channel: $out"
+out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
+[[ $out == *WORKBENCH_SORTIES=taichi=* && $out != *WORKBENCH_NOTIFY_* ]] && ok "with no channel the workbench starts, with no channel" \
+  || fail "run-workbench.sh with no channel: $out"
+echo STAGE0_NOTIFY_KIND=slack >> "$home/stage0.env"
+mv "$home/notify-credential.off" "$home/notify-credential"
 
 # huly-tunnel.sh: the tunnel carries the host's Sortie to p1's loopback, and
 # the workbench gets its address and token.
@@ -124,11 +134,11 @@ rm -rf "$home/sorties"
 out=$(run "$KIT/huly-tunnel.sh" brian@taichi.lan)
 [[ $(cat "$home/sorties/taichi.token" 2>/dev/null) == taichi-control-token && $(stat -c %a "$home/sorties/taichi.token") == 600 ]] \
   && ok "the workbench gets taichi's Sortie token, mode 0600" || fail "huly-tunnel.sh token: $out"
-[[ $(cat "$home/sorties/taichi.env" 2>/dev/null) == SORTIE_URL=http://127.0.0.1:7681 ]] && ok "taichi's Sortie is at 127.0.0.1:7681 on p1" || fail "huly-tunnel.sh env: $out"
+grep -qx SORTIE_URL=http://127.0.0.1:7681 "$home/sorties/taichi.env" 2>/dev/null && ok "taichi's Sortie is at 127.0.0.1:7681 on p1" || fail "huly-tunnel.sh env: $out"
 grep -qx 'SORTIE_FORWARD=127.0.0.1:7681:127.0.0.1:7680' "$home/tunnels/brian@taichi.lan.env" && ok "the tunnel forwards p1's 7681 to taichi's Sortie" \
   || fail "tunnel env: $(cat "$home/tunnels/brian@taichi.lan.env" 2>/dev/null)"
 unit=$tmp/.config/systemd/user/ortus-stage0-huly-tunnel@.service
-grep -q -- "-R 127.0.0.1:8087:127.0.0.1:8087 -L \${SORTIE_FORWARD} %i" "$unit" && grep -q "EnvironmentFile=$home/tunnels/%i.env" "$unit" \
+grep -q -- "-R 127.0.0.1:8087:127.0.0.1:8087 -L \${SORTIE_FORWARD} -D \${SORTIE_SOCKS} %i" "$unit" && grep -q "EnvironmentFile=$home/tunnels/%i.env" "$unit" \
   && ok "the unit opens both forwards" || fail "unit: $(cat "$unit" 2>/dev/null)"
 grep -q 'try-restart ortus-stage0-workbench.service' "$CALLS" && ok "the workbench restarts onto taichi's Sortie" || fail "calls: $(cat "$CALLS")"
 run "$KIT/huly-tunnel.sh" mini > /dev/null

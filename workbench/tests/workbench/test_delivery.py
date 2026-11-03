@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 
 import httpx
@@ -41,7 +42,10 @@ def homelab(store, image_by=(PR,), taichi_by=("ortusnova/homelab#90",)):
 
 class Clock:
     def __init__(self):
-        self.now = time.monotonic()
+        # Whole seconds, so a step of RECHECK - 1 then 1 adds up to RECHECK
+        # exactly; rounded up, so it is never before a lookup the app's own
+        # watch made on the real clock.
+        self.now = float(math.ceil(time.monotonic()))
 
     def __call__(self) -> float:
         return self.now

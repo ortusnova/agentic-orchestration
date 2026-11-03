@@ -9,7 +9,7 @@ Everything is rootless: systemd user units and Huly's podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
-dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
+dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack (it is rebuilt by itself when its inputs change)
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
@@ -80,16 +80,17 @@ the pull request merges, Sortie moves the story to `Done`.
   in, never rebases or rewrites a pushed commit, fixes the cause on the
   branch, including a CI or toolchain setting the change exposed (an old Go
   is raised to the latest stable release), and checks the criteria again.
-  Sortie pushes its commits, and `auto_merge` merges once CI passes. A pull
+  A later turn of the run gets only a short continuation: the earlier
+  commits are in the workspace and `origin/<branch>` moves only after the
+  run, so the agent does not redo the fix. Sortie pushes its commits, and `auto_merge` merges once CI passes. A pull
   request that still fails after `max_retries` fix runs (2 for CI, 1 for a
   conflict) is a stopped failure: Sortie escalates it, comments on the
   story, and runs no further fix until a new commit lands or a person
-  answers it. Neither watch has a window. Sortie's CI provider reads the
-  checks of one repository, `github.project`: on p1 that is
-  `agentic-orchestration`, so a `sortie` pull request gets no CI fix run
-  (its CI reads fail and back off, and its failing CI only holds its
-  merge) until Sortie reads each pull request's own repository; the homelab
-  profile reads `homelab`.
+  answers it. Neither watch has a window. The CI reaction reads each pull
+  request's checks from the pull request's own repository, so a `sortie`
+  pull request on p1 gets CI fix runs as an `agentic-orchestration` one
+  does; `github.project` only names the CI provider's configured
+  repository.
   `test-review-gate.sh` checks the fix runs too.
 
 - **Operator comments.** On p1 `review_comments` is on: a comment on a ui
@@ -114,6 +115,11 @@ the pull request merges, Sortie moves the story to `Done`.
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
+- **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
+  (`websearch.provider` in `pack/opencode.json`), so the workflows allow
+  `mcp.firecrawl.dev` and no credential is bound. With no provider set,
+  opencode asks the user to pick one on the first search, and Sortie
+  refuses that prompt.
 - **What the agent reads.** The VM has no copy of the spec store and no
   network beyond the workflow's hosts, so the prompt carries everything:
   the story's Huly description holds its notes, its acceptance criteria,
@@ -376,7 +382,7 @@ as p1's Sortie. p1's Sortie lists `homelab` closed to dispatch; this one
 lists only `homelab`, with no default, so every other story stays p1's.
 
 ```sh
-# On p1, once: Huly on the homelab host's loopback, through a remote SSH forward.
+# On p1, once: Huly on the homelab host's loopback, and its Sortie on p1's.
 dev/stage0/huly-tunnel.sh taichi
 # On taichi, once homelab's `make dev-host` has run there:
 STAGE0_PROFILE=homelab dev/stage0/stage0.sh   # the first run writes stage0.env with the profile
@@ -394,6 +400,22 @@ dev/stage0/huly-tunnel.sh taichi
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The workflow creates its machines with `user: builder` (the spec store's `smolvm-machine-shape` story); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. A pack no Sortie machine was created from is deleted |
 | Machines | 8 vCPU, 20 GiB, a 200 GiB disk at `/workspace`, nested KVM, `virtio-net`, homelab's guest kernel (`SMOLVM_LIB_DIR`), at most `STAGE0_MAX_AGENTS` (2) at once |
 | Host inputs | Five shared folders, smolvm's ceiling on taichi beside Sortie's own: read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per workspace, `~/.local/state/homelab/sortie-recorder/<issue>`, the flight recorder's folder, which Sortie keeps after the machine is gone. The vm age key, copied alone into `$STAGE0_HOME/inputs/vm-age`, reaches the machines as `HOMELAB_VM_AGE_KEY` (`pass_env`), and `after_create` writes it where sops looks |
+
+p1's workbench shows taichi's workers beside p1's, and sends the answers,
+session grants and session views of the stories taichi's Sortie holds to it
+(`agent-platform/run-supervision`). `huly-tunnel.sh taichi` sets this up in
+the same SSH connection as the Huly forward: a local forward puts taichi's
+Sortie on p1's loopback (`127.0.0.1:7681`, the next free port for another
+host), and a SOCKS forward (`127.0.0.1:7781`) reaches the brokers of
+taichi's agents, which listen on taichi's loopback. It writes
+`$STAGE0_HOME/tunnels/taichi.env` for the unit, copies taichi's control
+token to `$STAGE0_HOME/sorties/taichi.token` (mode 0600) and its address and
+broker proxy to `sorties/taichi.env`, and restarts the workbench;
+`run-workbench.sh` passes each `sorties/<name>` to the workbench as
+`WORKBENCH_SORTIES`, `WORKBENCH_SORTIE_TOKEN_<NAME>_FILE` and
+`WORKBENCH_SORTIE_PROXY_<NAME>`. Run it again after `stage0.sh` first runs
+on taichi, when taichi has its token. p1's Sortie is named after p1's host
+name; set `STAGE0_SORTIE_NAME` in `stage0.env` to name it otherwise.
 
 Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
 and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without

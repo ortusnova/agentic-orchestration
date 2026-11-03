@@ -5,6 +5,7 @@
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
   import QuestionBox from "./QuestionBox.svelte";
+  import RunState from "./RunState.svelte";
   import { workersOf, workerStatus } from "../lib/worker";
   import { renderInline, renderMarkdown } from "../lib/markdown";
   import { groupCovers, type ChangeRequirements, type CoveredRequirement, type SpecReader } from "../lib/spec";
@@ -191,6 +192,11 @@
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
         {#if node.approved_by}<p class="approver">Approved by {node.approved_by.name}{#if node.approved_at} · {new Date(node.approved_at * 1000).toLocaleString()}{/if}</p>{/if}
+
+        {#if node.kind === "story" && node.run_state}
+          <RunState run={node.run_state} story={node.plan_key} canAct={approver} onopen={onwatch ? () => onwatch(node) : undefined}
+            onsessions={actions?.sessions ? (n) => actions.sessions!(node.plan_key, n) : undefined} />
+        {/if}
 
         {#if node.kind === "story" && node.question}
           <div class="asks" data-asks={node.plan_key}>

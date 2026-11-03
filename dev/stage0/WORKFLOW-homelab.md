@@ -174,6 +174,8 @@ environment:
     # chain needed (homelab-pilot).
     allow_hosts:
       - models.opencode.ai
+      # opencode's websearch (pack/opencode.json): Firecrawl's keyless MCP.
+      - mcp.firecrawl.dev
       - registry.npmjs.org
       - github.com
       - codeload.github.com
@@ -214,15 +216,28 @@ environment:
         project: ${STAGE0_HOMELAB_REPO_PROJECT}
 ---
 {{- if or .ci_failure .merge_conflict -}}
+{{- if .run.is_continuation -}}
+You are still fixing the pull request of story **{{ .issue.identifier }}**:
+{{ .issue.title }}. Continue with the instructions you received at the start
+of this session, and start no work they do not ask for.
+
+The commits you made in earlier turns of this run are in this workspace.
+Sortie pushes them only after the run ends, so `origin/<branch>` does not
+move during the run; that is not a failed push. Do not repeat a fix you
+already committed, such as a merge of the base that `git log` shows. Finish
+only what is still missing. Then end your last message with what you fixed
+and the command that proves it, and write no `.sortie/status`, unless only a
+person can fix the cause: then stop with `blocked`, as the first turn said.
+{{ else -}}
 You are fixing the pull request of story **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}
 
 The repository is checked out in the current directory, on the story's
 branch, which Sortie has pushed and opened a pull request for. Read its
-`AGENTS.md` first and follow it. Sortie has brought `origin/<base>` and
-`origin/<branch>` up to date in this workspace; this machine cannot reach
-the forge, so do not fetch.
+`AGENTS.md` first and follow it. At the start of this run Sortie brought
+`origin/<base>` and `origin/<branch>` up to date in this workspace; this
+machine cannot reach the forge, so do not fetch.
 {{- if .merge_conflict }}
 
 Pull request #{{ .merge_conflict.pr_number }} (`{{ .merge_conflict.branch }}`)
@@ -274,6 +289,7 @@ person can fix the cause, such as a token or a setting outside the
 repository, stop with `blocked` in `.sortie/status` and say on the lines
 after it what a person has to do and where. Never write
 `needs-human-review` or `no-change-needed` in this run.
+{{- end }}
 {{- else if eq .stage.current "review" -}}
 You are reviewing the pull request of story **{{ .issue.identifier }}**: {{ .issue.title }}
 

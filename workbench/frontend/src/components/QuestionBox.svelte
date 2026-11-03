@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { renderMarkdown } from "../lib/markdown";
+  import { renderQuestion } from "../lib/markdown";
   import { stoppedAt } from "../lib/questions";
   import type { Question } from "../lib/types";
 
@@ -60,7 +60,7 @@
 
 <div class="question" data-question={story}>
   <div class="statement">
-    {#if question.statement}{@html renderMarkdown(question.statement)}{:else}<p class="none">The agent stopped for a person without saying why.</p>{/if}
+    {#if question.statement}{@html renderQuestion(question.statement)}{:else}<p class="none">The agent stopped for a person without saying why.</p>{/if}
   </div>
   <p class="when">
     Stopped {#if when}<time datetime={when.iso}>{when.text}</time>{:else}at a time Sortie does not report{/if}{#if question.reason} · {question.reason}{/if}{#if question.sortie} · <span data-sortie={question.sortie}>on {question.sortie}'s Sortie</span>{/if}
@@ -98,7 +98,8 @@
 <style>
   .question { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .statement { font-size: 12.5px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere; }
-  .statement :global(p + p) { margin-top: 6px; }
+  .statement :global(p + p) { margin-top: 8px; }
+  .statement { max-width: 72ch; }
   .statement :global(code) { font: 500 11.5px var(--font-mono); padding: 1px 4px; border-radius: var(--r-tag); background: var(--strip); }
   .statement :global(ul), .statement :global(ol) { margin: 4px 0 0 18px; }
   .when { font-size: 11.5px; color: var(--mute); }

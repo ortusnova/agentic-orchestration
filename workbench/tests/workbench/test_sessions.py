@@ -212,7 +212,7 @@ def test_the_configured_model_is_selected_through_acp_before_the_first_turn(stor
         with live_server(app) as base, httpx.Client(base_url=base, timeout=20) as client:
             client.post("/api/login", json={"password": PASSWORD})
             client.post(f"{P}/session", json={"message": "plan billing"})
-            # The agent reports its default model first, then the selected one.
+            # The session shows the model once it is selected, never the agent's default before it.
             status = wait_status(client, lambda s: s.get("model") == "fake/planner")
             assert status["active"] is True and status["model"] == "fake/planner"
             with client.stream("GET", f"{P}/session/events") as r:
@@ -271,7 +271,8 @@ def test_a_person_chooses_model_and_thinking_and_the_next_session_keeps_them(sto
 
             assert client.delete(f"{P}/session").json() == {"active": False}
             client.post(f"{P}/session", json={"message": "plan billing"})
-            status = wait_status(client, lambda s: s.get("thought_level"))
+            # The model's own default level shows first, until the person's choice is applied.
+            status = wait_status(client, lambda s: s.get("thought_level") == "high")
             assert (status["model"], status["thought_level"]) == ("fake/planner", "high")
     finally:
         asyncio.run(manager.stop())

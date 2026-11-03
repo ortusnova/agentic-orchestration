@@ -3,8 +3,9 @@
 # homelab) p1's Huly on its own loopback, through a remote SSH forward kept
 # up by a user unit; and give p1's workbench that host's Sortie on p1's
 # loopback, through a local forward in the same connection, so the workbench
-# reads the questions it holds and answers them (spec store
-# agent-platform/run-supervision). Rootless. Separate from stage0.sh, so
+# reads the questions it holds and answers them; and a SOCKS forward to that
+# host's loopback, so the workbench watches and steers the agents it runs
+# through their brokers (spec store agent-platform/run-supervision). Rootless. Separate from stage0.sh, so
 # enabling it does not restart p1's Sortie; it restarts the workbench once it
 # has the host's Sortie token.
 #
@@ -25,8 +26,11 @@ UNITS=$HOME/.config/systemd/user
 # The homelab profile's defaults on HOST (stage0.sh).
 REMOTE_HOME=.local/share/ortus-nova/stage0
 REMOTE_SORTIE_PORT=7680
-# p1's loopback ports for the homelab hosts' Sorties, one each, from here up.
+# p1's loopback ports for the homelab hosts' Sorties, one each, from here up;
+# and for the SOCKS forwards that reach their agents' brokers, which listen on
+# each host's loopback, one each, from SOCKS_FIRST_PORT up.
 FIRST_PORT=7681
+SOCKS_FIRST_PORT=7781
 die() { printf 'huly-tunnel.sh: %s\n' "$*" >&2; exit 1; }
 
 remove=''
@@ -68,10 +72,16 @@ if [[ -z $port ]]; then
   port=$FIRST_PORT
   while grep -qsx "SORTIE_LOCAL_PORT=$port" "$STAGE0_HOME"/tunnels/*.env; do port=$((port + 1)); done
 fi
+socks=$(sed -n 's/^SORTIE_SOCKS_PORT=//p' "$tunnel" 2>/dev/null || true)
+if [[ -z $socks ]]; then
+  socks=$SOCKS_FIRST_PORT
+  while grep -qsx "SORTIE_SOCKS_PORT=$socks" "$STAGE0_HOME"/tunnels/*.env; do socks=$((socks + 1)); done
+fi
 remote_port=$(ssh -o BatchMode=yes "$host" "sed -n 's/^STAGE0_SORTIE_PORT=//p' $REMOTE_HOME/stage0.env 2>/dev/null" || true)
 remote_port=${remote_port:-$REMOTE_SORTIE_PORT}
 [[ $remote_port =~ ^[0-9]+$ ]] || die "$host's STAGE0_SORTIE_PORT is not a port: $remote_port"
-printf 'SORTIE_LOCAL_PORT=%s\nSORTIE_FORWARD=127.0.0.1:%s:127.0.0.1:%s\n' "$port" "$port" "$remote_port" > "$tunnel"
+printf 'SORTIE_LOCAL_PORT=%s\nSORTIE_FORWARD=127.0.0.1:%s:127.0.0.1:%s\nSORTIE_SOCKS_PORT=%s\nSORTIE_SOCKS=127.0.0.1:%s\n' \
+  "$port" "$port" "$remote_port" "$socks" "$socks" > "$tunnel"
 sed -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$UNIT" > "$UNITS/$UNIT"
 systemctl --user daemon-reload
 systemctl --user enable -q "$instance"
@@ -93,6 +103,6 @@ if ! (umask 077; ssh -o BatchMode=yes "$host" cat "$REMOTE_HOME/sortie-token" > 
   exit 0
 fi
 mv "$sortie.token.new" "$sortie.token"
-printf 'SORTIE_URL=http://127.0.0.1:%s\n' "$port" > "$sortie.env"
+printf 'SORTIE_URL=http://127.0.0.1:%s\nSORTIE_BROKER_PROXY=socks5://127.0.0.1:%s\n' "$port" "$socks" > "$sortie.env"
 restart_workbench
-echo "$name's Sortie is at http://127.0.0.1:$port: the workbench reads its questions and answers them"
+echo "$name's Sortie is at http://127.0.0.1:$port, its agents' brokers through socks5://127.0.0.1:$socks: the workbench answers, grants and steers there"

@@ -22,7 +22,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/scm/github"
 )
 
-// fixRepoProject is the repository each workflow's CI provider reads.
+// fixRepoProject is each workflow's github.project, the repository its CI
+// provider is configured with.
 var fixRepoProject = map[string]string{
 	"WORKFLOW.md":         "ortusnova/agentic-orchestration",
 	"WORKFLOW-homelab.md": "ortusnova/homelab",
@@ -240,12 +241,18 @@ func (s *fixScenario) autoMerge(ci string) bool {
 // the review rule.
 func renderFix(t *testing.T, w stage0Fix, continuation map[string]any) string {
 	t.Helper()
+	return renderFixTurn(t, w, 1, continuation)
+}
+
+// renderFixTurn renders the given turn of a fix run, as renderFix does.
+func renderFixTurn(t *testing.T, w stage0Fix, turn int, continuation map[string]any) string {
+	t.Helper()
 	issue := domain.Issue{
 		ID: "ci-41", Identifier: "ONS-41", Title: "Count the stories",
 		Description: "## Acceptance criteria\n\n- The workbench counts the stories.",
 		Labels:      []string{config.ReviewCriteriaLabel, w.review.Stage},
 	}
-	text, err := prompt.BuildReactionTurnPrompt(w.tmpl, issue.ToTemplateMap(), 0, 1, w.cfg.Agent.MaxTurns, continuation,
+	text, err := prompt.BuildReactionTurnPrompt(w.tmpl, issue.ToTemplateMap(), 0, turn, w.cfg.Agent.MaxTurns, continuation,
 		prompt.WithStage(prompt.StageContext{Current: w.review.Name}))
 	if err != nil {
 		t.Fatalf("%s: render the fix run: %v", w.name, err)
@@ -360,6 +367,33 @@ func TestStage0_FixPrompt(t *testing.T) {
 		}
 		if strings.Contains(ci, "conflicts with its base branch") || strings.Contains(conflict, "CI fails on") {
 			t.Errorf("%s: a fix run's prompt names the other reaction", name)
+		}
+	}
+}
+
+// A later turn of a fix run does not ask for the fix again. Before, every
+// turn sent the whole merge task; the agent, seeing origin/<branch>
+// unchanged because Sortie pushes after the run, redid the merge and parked
+// (ONS-50, ONS-51, ONS-55, ONS-83).
+func TestStage0_FixPromptLaterTurn(t *testing.T) {
+	for _, name := range stage0Workflows {
+		w := loadStage0Fix(t, name)
+		for _, continuation := range []map[string]any{
+			{"merge_conflict": map[string]any{"pr_number": 57, "branch": "sortie/ONS-57", "head_sha": "c57", "base": "main"}},
+			{"ci_failure": (&domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1, Ref: "c57"}).ToTemplateMap()},
+		} {
+			text := renderFixTurn(t, w, 2, continuation)
+			wantPrompt(t, name, text,
+				"You are still fixing the pull request of story **ONS-41**",
+				"The commits you made in earlier turns of this run are in this workspace.",
+				"`origin/<branch>` does not move during the run; that is not a failed push.",
+				"Do not repeat a fix you already committed",
+				"write no `.sortie/status`", "stop with `blocked`")
+			for _, never := range []string{"git merge origin/main", "CI fails on", "You are reviewing", "Rebase "} {
+				if strings.Contains(text, never) {
+					t.Errorf("%s: turn 2 of a fix run holds %q: %s", name, never, text)
+				}
+			}
 		}
 	}
 }

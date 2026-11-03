@@ -19,7 +19,8 @@
 #                      with an operator channel, notify-credential.
 #
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
-#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack
+#   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm pack, which is
+#                                         rebuilt by itself when its inputs change
 #   dev/stage0/stage0.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
 #                                         (deploy.sh does this once plan-bench moves)
 #
@@ -305,9 +306,22 @@ if [[ $STAGE0_PROFILE == control ]]; then
   "$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
 fi
 
-if [[ $STAGE0_PROFILE == control ]] && [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK ]]; then
-  say "Building the pack $STAGE0_PACK"
-  smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK" > "$STAGE0_HOME/pack-report.json"
+# The pack is built again when its inputs change (the kit's pack/,
+# smol-builder's source, which embeds its layers, and smolvm), so a merged
+# change to the agent's config reaches the next machine through deploy.sh.
+# Not the smol-builder binary: Go stamps it with the kit's commit.
+if [[ $STAGE0_PROFILE == control ]]; then
+  pack_inputs=$({
+    (cd "$ROOT" && find dev/stage0/pack smol-builder -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+    smolvm --version
+  } | sha256sum | cut -c1-16)
+  if [[ -n $REBUILD_PACK || ! -s $STAGE0_PACK || $(cat "$STAGE0_PACK.inputs" 2>/dev/null) != "$pack_inputs" ]]; then
+    say "Building the pack $STAGE0_PACK ($pack_inputs)"
+    smol-builder build --repo "$KIT/pack" --output "$STAGE0_PACK.tmp" > "$STAGE0_HOME/pack-report.json" \
+      || { rm -f "$STAGE0_PACK.tmp"; die "the pack did not build: $STAGE0_HOME/pack-report.json"; }
+    mv "$STAGE0_PACK.tmp" "$STAGE0_PACK"
+    echo "$pack_inputs" > "$STAGE0_PACK.inputs"
+  fi
 fi
 
 say "Rendering Sortie's workflow"

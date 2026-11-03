@@ -28,19 +28,28 @@ if [[ -s $STAGE0_HOME/github-token ]]; then
 else
   WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-workbench.sh: gh has no token: run gh auth login" >&2; exit 1; }
 fi
-# Every other Sortie the kit runs, whose questions the workbench reads and
-# answers: each one huly-tunnel.sh reached, as $STAGE0_HOME/sorties/<name>.env
-# (its address on this host's loopback) and <name>.token (its control token).
-sorties=()
+# The other Sorties whose workers the workbench shows (agent-platform/run-supervision):
+# each one huly-tunnel.sh reached, as $STAGE0_HOME/sorties/<name>.env (its
+# address on this host's loopback, and the SOCKS forward that reaches its
+# agents' brokers on its host's loopback) and <name>.token (its control token).
+export WORKBENCH_SORTIE_NAME=${STAGE0_SORTIE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
+peers=()
 for f in "$STAGE0_HOME"/sorties/*.env; do
   [[ -e $f ]] || continue
-  sorties+=("$(basename "$f" .env)=$(sed -n 's/^SORTIE_URL=//p' "$f")")
+  name=$(basename "$f" .env)
+  url=$(sed -n 's/^SORTIE_URL=//p' "$f")
+  [[ -n $url && -s $STAGE0_HOME/sorties/$name.token ]] || continue
+  peers+=("$name=$url")
+  var=$(tr 'a-z-' 'A-Z_' <<< "$name")
+  export "WORKBENCH_SORTIE_TOKEN_${var}_FILE=$STAGE0_HOME/sorties/$name.token"
+  proxy=$(sed -n 's/^SORTIE_BROKER_PROXY=//p' "$f")
+  [[ -z $proxy ]] || export "WORKBENCH_SORTIE_PROXY_${var}=$proxy"
 done
-# This host's Sortie, by the name each question gives the Sortie that holds it.
-name=$(hostname -s | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-\n' '-')
+WORKBENCH_SORTIES=$(IFS=,; echo "${peers[*]}")
+export WORKBENCH_SORTIES
 # The operator's channel (notify-channel.sh): the workbench pushes each open
 # question there with a link to the home on STAGE0_WORKBENCH_PUBLIC_URL, and
-# again every 4 hours while it stays open.
+# again every 4 hours while it stays open. No kind, no channel.
 notify=()
 if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
   notify=(WORKBENCH_NOTIFY_KIND="$STAGE0_NOTIFY_KIND" WORKBENCH_NOTIFY_CHAT_ID="${STAGE0_NOTIFY_CHAT_ID:-}"
@@ -60,7 +69,6 @@ fi
 cd "$WB"
 exec env WORKBENCH_HOME="$home" WORKBENCH_STORE="$STAGE0_STORE" WORKBENCH_HULY_PROJECT="$STAGE0_HULY_PROJECT" \
   WORKBENCH_SORTIE_URL="http://127.0.0.1:$STAGE0_SORTIE_PORT" WORKBENCH_SORTIE_TOKEN="$(cat "$STAGE0_HOME/sortie-token")" \
-  WORKBENCH_SORTIE_NAME="$name" WORKBENCH_SORTIES="${sorties[*]}" WORKBENCH_SORTIE_TOKEN_DIR="$STAGE0_HOME/sorties" \
   WORKBENCH_PUBLIC_URL="${STAGE0_WORKBENCH_PUBLIC_URL:-http://127.0.0.1:$STAGE0_WORKBENCH_PORT}" "${notify[@]}" \
   WORKBENCH_PASSWORD_HASH="$(cat "$STAGE0_HOME/workbench-password-hash")" \
   WORKBENCH_SECRET_KEY="$(cat "$STAGE0_HOME/workbench-secret")" \

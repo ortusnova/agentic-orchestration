@@ -103,7 +103,9 @@ homelab_pack() {
      "$KIT/pack/opencode.json" "$stage/harness/"
   hash=$({
     (cd "$stage" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
-    sha256sum < "$(command -v smol-builder)"
+    # smol-builder's source, which embeds its layers; not its binary, which
+    # Go stamps with the kit's commit, so every kit change would build anew.
+    (cd "$ROOT" && find smol-builder -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
     smolvm --version
   } | sha256sum | cut -c1-16)
   pack=$packs/homelab-$hash.smolmachine

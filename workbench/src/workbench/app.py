@@ -42,19 +42,22 @@ def create_app(config: Config, **services) -> FastAPI:
     ``sessions`` builds each project's session manager from
     ``(project, store, runtime_dir)``, and ``broker_transport`` carries the
     requests to workers' brokers, and ``github`` the GitHub client that looks up
-    the pull requests stories name, and ``sorties`` the clients of the other
+    the pull requests stories name, and ``peers`` the clients of the other
     Sorties by name, ``channel`` the operator's channel and ``clock`` the
     time its pushes are counted in."""
     sortie = services.get("sortie") or SortieClient(config.sortie_url, config.sortie_token)
+    # The other Sorties whose workers the workbench shows, by name.
+    peers = services.get("peers")
+    if peers is None:
+        peers = {name: SortieClient(url, token) for name, url, token in config.peer_sorties}
     github = services.get("github") or GitHubClient(config.github_api_url, config.github_token)
-    others: dict[str, SortieClient] = services.get("sorties") or {s.name: SortieClient(s.url, s.token) for s in config.other_sorties}
     channel = services.get("channel")
     if channel is None and config.notify_kind:
         channel = Channel(config.notify_kind, config.notify_secret, config.notify_chat_id)
     alerts = Alerts(channel, config.public_url, config.home / "alerts.json", clock=services.get("clock") or time.time) if channel else None
     registry = Registry(config.home / "workbench.db")
     projects = ProjectManager(config, registry, sortie, services.get("sessions"), services.get("validate"),
-                              broker_transport=services.get("broker_transport"), github=github, others=others, alerts=alerts)
+                              broker_transport=services.get("broker_transport"), github=github, peers=peers, alerts=alerts)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -64,8 +67,8 @@ def create_app(config: Config, **services) -> FastAPI:
         finally:
             await projects.stop()
             await sortie.aclose()
-            for other in others.values():
-                await other.aclose()
+            for peer in peers.values():
+                await peer.aclose()
             if channel is not None:
                 await channel.aclose()
             await github.aclose()
@@ -109,6 +112,11 @@ def create_app(config: Config, **services) -> FastAPI:
     @app.get("/api/projects/{slug}/home", dependencies=[Depends(require_operator)])
     def home(slug: str) -> dict:
         return projects.get(slug).hub.home
+
+    @app.get("/api/projects/{slug}/workers", dependencies=[Depends(require_operator)])
+    def workers(slug: str) -> dict:
+        """What each worker host does and what waits on it."""
+        return projects.get(slug).hub.fleet
 
     @app.get("/api/projects/{slug}/changes/{change}/requirements", dependencies=[Depends(require_operator)])
     def requirements(slug: str, change: str) -> dict:

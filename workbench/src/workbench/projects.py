@@ -36,7 +36,7 @@ class ProjectRuntime:
 
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
                  sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
-                 github: GitHubClient | None = None, others: dict[str, SortieClient] | None = None,
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
                  alerts: Alerts | None = None):
         self.project = project
         self.store = store
@@ -46,17 +46,17 @@ class ProjectRuntime:
         # The pull requests the stories name in delivered_by, looked up on GitHub.
         self.deliveries = DeliveryWatch(github or GitHubClient(config.github_api_url, config.github_token),
                                         self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
-        # Every Sortie this project's questions may wait in; the main one also serves the plan.
-        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls,
+        own = sortie.bind(project.huly_project, config.sortie_name)
+        self.hub = Hub(self.plan, own, records=self.records, pulls=self.deliveries.pulls,
+                       peers=[p.bind(project.huly_project, name) for name, p in (peers or {}).items()],
                        previews=lambda: read_previews(config.previews_file),
-                       sortie_name=config.sortie_name,
-                       others={name: c.bind(project.huly_project) for name, c in (others or {}).items()},
                        alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None)
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
         # The brokers of the workers Sortie runs for this project's stories.
-        self.workers = WorkerRelay(sortie.bind(project.huly_project), transport=broker_transport)
+        self.workers = WorkerRelay(own, transport=broker_transport, sortie_for=self.hub.sortie_for,
+                                   proxies=dict(config.peer_proxies))
         # The approved plan syncs to the tracker on its own.
         self.sync = SyncLoop(lambda: sync_project(self.hub), debounce=config.debounce_ms / 1000,
                              first_backoff=config.sync_backoff_first, max_backoff=config.sync_backoff_max)
@@ -210,11 +210,11 @@ class ProjectManager:
 
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
                  session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
-                 github: GitHubClient | None = None, others: dict[str, SortieClient] | None = None,
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
                  alerts: Alerts | None = None):
         self.config = config
         self.github = github
-        self.others = others or {}
+        self.peers = peers or {}
         self.alerts = alerts
         self.broker_transport = broker_transport
         self.registry = registry
@@ -262,7 +262,7 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport, github=self.github, others=self.others, alerts=self.alerts)
+                            broker_transport=self.broker_transport, github=self.github, peers=self.peers, alerts=self.alerts)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt

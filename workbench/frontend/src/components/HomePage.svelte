@@ -1,14 +1,16 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { plainTask, progressLines, REASON_TEXT, VERDICT_TEXT, type HomeDoc } from "../lib/home";
+  import { can } from "../lib/identity.svelte";
+  import { progressLines, REASON_TEXT, type HomeDoc } from "../lib/home";
   import { graphHref } from "../lib/router";
   import type { MergedGraph } from "../lib/types";
+  import HomeLanes from "./HomeLanes.svelte";
   import HomeNeeds from "./HomeNeeds.svelte";
   import HomeTimeline from "./HomeTimeline.svelte";
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsessions, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -19,6 +21,8 @@
     onapprove: (keys: string[]) => Promise<string | null>;
     onanswer: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
+    /** Give a story its session budget holds more sessions; resolves to an error message, or null. */
+    onsessions?: (key: string, sessions: number) => Promise<string | null>;
     actions?: Snippet;
   } = $props();
 
@@ -27,9 +31,6 @@
   const goal = $derived(home?.milestones.find((m) => m.id === home?.goal));
   const next = $derived(home?.milestones.find((m) => m.id === home?.next));
   const live = $derived(!doc.sortie.reachable ? "Sortie unreachable" : `Sortie · ${health?.busy ?? 0} running`);
-  const tone = $derived(
-    !health?.verdict ? "none" : health.verdict === "stuck" || health.verdict === "idle_now" ? "alert" : health.verdict === "will_idle" ? "warn" : "ok",
-  );
   const PATH_MAX = 7;
   const chain = $derived.by(() => {
     const stories = home?.critical_path?.stories ?? [];
@@ -37,8 +38,6 @@
     return { head: stories.slice(0, PATH_MAX - 2), skipped: stories.slice(PATH_MAX - 2, -1), tail: stories.slice(-1) };
   });
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
-  const history = $derived(health?.history ?? []);
-  const histMax = $derived(Math.max(1, health?.slots ?? 0, ...(health?.history ?? []).map((h) => Math.max(h.busy ?? 0, h.runway ?? 0))));
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 </script>
 
@@ -77,55 +76,7 @@
       {#if home.timeline}<HomeTimeline {home} {slug} {marks} />{/if}
     </section>
 
-    <section class="strip" aria-label="Execution health">
-      <div class="tile verdict {tone}" data-verdict={health?.verdict ?? "none"}>
-        <h3>Execution</h3>
-        <p class="big">{health?.verdict ? VERDICT_TEXT[health.verdict] : "No verdict"}</p>
-        <ul class="reasons">
-          {#each health?.reasons ?? [] as r (r.code + r.text)}
-            <li data-reason={r.code} class:ask={r.code === "question"} title={r.code === "question" ? r.text : undefined}>{#if r.key}<a href={storyHref(r.key)}>{r.text}</a>{:else}{r.text}{/if}</li>
-          {/each}
-        </ul>
-      </div>
-      <div class="tile" data-tile="slots">
-        <h3>Agent slots</h3>
-        {#if health?.slots != null}
-          <p class="num">{health.busy}<small>{` / ${health.slots} busy`}</small></p>
-          <div class="slots" aria-label="{health.busy} of {health.slots} agent slots busy">
-            {#each Array.from({ length: health.slots }, (_, i) => i) as i (i)}<i class:busy={i < (health.busy ?? 0)}></i>{/each}
-          </div>
-        {:else}
-          <p class="num muted">—</p><p class="cap">Sortie does not report its slots</p>
-        {/if}
-        <div class="hist" aria-hidden="true">{#each history as h (h.end)}<i class:gap={h.busy == null} style:height="{h.busy == null ? 0 : Math.max(4, (h.busy / histMax) * 100)}%"></i>{/each}</div>
-        <p class="cap">most slots busy, by hour</p>
-      </div>
-      <div class="tile" data-tile="runway">
-        <h3>Runway</h3>
-        {#if health?.runway != null}
-          <p class="num">{health.runway}<small>{` ${health.runway === 1 ? "story" : "stories"} ready`}</small></p>
-          <p class="cap">{health.slots != null ? (health.runway >= health.slots ? `fills the ${health.slots} slots` : `needs ${health.slots - health.runway} more to fill the slots`) : ""}</p>
-        {:else}
-          <p class="num muted">—</p><p class="cap">unknown while Sortie is unreachable</p>
-        {/if}
-        <div class="hist g" aria-hidden="true">{#each history as h (h.end)}<i style:height="{h.runway == null ? 0 : Math.max(4, (h.runway / histMax) * 100)}%"></i>{/each}</div>
-        <p class="cap">stories ready, by hour</p>
-      </div>
-      <div class="tile" data-tile="needs">
-        <h3>Needs a person</h3>
-        <p class="num">{home.needs_person.total}</p>
-        <p class="cap ink">{#if home.questions?.length}<b data-questions>{plural(home.questions.length, "question", "questions")} to answer</b><br />{/if}{plural(home.needs_person.spec, "spec to write", "specs to write")} · {plural(home.needs_person.approve, "approval", "approvals")}<br />{plural(home.needs_person.operator, "operator task", "operator tasks")}</p>
-        {#if home.needs_person.nearest}
-          {@const asked = home.questions?.find((q) => q.key === home.needs_person.nearest)}
-          {@const first = home.not_ready.find((i) => i.key === home.needs_person.nearest)}
-          {#if asked}
-            <p class="cap end">nearest: {asked.label}, which asks a question</p>
-          {:else}
-            <p class="cap end">nearest: {first?.kind === "task" ? plainTask(first.title) : (first?.label ?? home.needs_person.nearest)}{first?.critical ? ", on the critical path" : ""}</p>
-          {/if}
-        {/if}
-      </div>
-    </section>
+    <HomeLanes lanes={home.lanes ?? null} health={health} questions={home.questions ?? []} {slug} canAct={can("approver")} {onanswer} {onsessions} />
 
     {#if home.critical_path && next}
       <section class="path" aria-labelledby="path-h">
@@ -196,35 +147,7 @@
   h1 { margin-bottom: 30px; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.12; text-wrap: balance; }
   h1 span { margin-left: 10px; font-size: 15px; font-weight: 400; letter-spacing: 0; color: var(--mute); }
 
-  .strip { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 12px; padding: 14px var(--home-x) 0; }
-  .tile { min-width: 0; min-height: 166px; display: flex; flex-direction: column; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
-  h3 { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
-  .verdict.alert { border-color: #e9b8b3; background: #fbeceb; }
-  .verdict.warn { border-color: #ecd9a8; background: var(--amber-tint); }
-  .verdict.ok { border-color: #bcd6c6; background: var(--done-tint); }
-  .verdict.alert h3, .verdict.alert .reasons { color: #6f1c16; }
-  .verdict.warn h3, .verdict.warn .reasons { color: var(--amber-ink); }
-  .verdict.ok h3, .verdict.ok .reasons { color: #22543a; }
-  .big { margin-top: 4px; font-size: 36px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
-  .verdict.alert .big { color: #8f241d; }
-  .verdict.warn .big { color: var(--amber-ink); }
-  .verdict.ok .big { color: var(--done); }
-  .reasons { margin-top: 6px; list-style: none; font-size: 13.5px; max-width: 60ch; }
-  .reasons a { color: inherit; }
-  /* A question can run long: the Answer column holds it whole. */
-  .reasons li.ask { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-  .num { margin-top: 2px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-  .num small { font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--mute); }
-  .num.muted { color: var(--mute); }
-  .slots { display: flex; gap: 6px; margin-top: 8px; }
-  .slots i { flex: 1; height: 26px; border: 1.5px dashed var(--slate); border-radius: 5px; }
-  .slots i.busy { border: 1.5px solid var(--ink); background: var(--ink); }
-  .hist { margin-top: auto; display: flex; align-items: flex-end; gap: 2px; height: 34px; border-bottom: 1px solid var(--hair); }
-  .hist i { flex: 1; border-radius: 1px 1px 0 0; background: var(--slate); }
-  .hist.g i { background: var(--done); }
   .cap { margin-top: 4px; font-size: 11px; color: var(--mute); }
-  .cap.ink { font-size: 12.5px; color: var(--ink); }
-  .cap.end { margin-top: auto; }
 
   .path { display: flex; align-items: center; gap: 16px; padding: 18px var(--home-x) 0; }
   .t { flex: none; width: 108px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; line-height: 1.3; color: var(--mute); }
@@ -264,20 +187,12 @@
   .st.goal { border-color: var(--ink); background: var(--ink); color: #fff; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-  @media (max-width: 1100px) {
-    .strip { grid-template-columns: 1fr 1fr; }
-    .verdict { grid-column: 1 / -1; }
-  }
   @media (max-width: 760px) {
     .home { --home-x: 16px; }
     h1 { font-size: 22px; margin-bottom: 26px; }
     h1 span { display: block; margin: 6px 0 0; font-size: 13.5px; }
-    .big { font-size: 30px; }
     .path { flex-direction: column; align-items: flex-start; gap: 8px; }
     .t { width: auto; }
     .progress { overflow-x: auto; }
-  }
-  @media (max-width: 480px) {
-    .strip { grid-template-columns: 1fr; }
   }
 </style>

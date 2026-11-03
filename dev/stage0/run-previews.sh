@@ -26,6 +26,9 @@ else
   WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-previews.sh: gh has no token: run gh auth login" >&2; exit 1; }
 fi
 WORKBENCH_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
+# A stage0.env written before this setting existed gets its default here, as
+# stage0.sh gives it.
+STAGE0_AO_REPO_PROJECT=${STAGE0_AO_REPO_PROJECT:-ortusnova/agentic-orchestration}
 exec env WORKBENCH_SORTIE_URL="http://127.0.0.1:$STAGE0_SORTIE_PORT" WORKBENCH_HULY_PROJECT="$STAGE0_HULY_PROJECT" \
   "$STAGE0_KIT_ROOT/workbench/.venv/bin/workbench" preview-sync --repo "$STAGE0_AO_REPO_PROJECT" \
   --record "$STAGE0_HOME/previews.json" --deploy "$KIT/preview.sh" --live-url "${STAGE0_WORKBENCH_URL:-}" \

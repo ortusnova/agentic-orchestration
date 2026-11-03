@@ -1,4 +1,5 @@
 /** The merged graph the backend serves on /api/graph and /api/events. */
+import type { Fleet, RunState } from "./fleet";
 import type { HomeDoc } from "./home";
 
 export type NodeStatus = "draft" | "synced" | "orphaned";
@@ -36,6 +37,8 @@ export interface TrackerView {
   terminal: boolean;
   url: string | null;
   parent_id: string | null;
+  /** The story's pull request, as owner/repo#number, when Sortie holds it. */
+  pr?: string | null;
 }
 
 export interface GraphNode {
@@ -55,6 +58,8 @@ export interface GraphNode {
   runtime: Runtime | null;
   /** Stories only: the open question of a parked story. */
   question?: Question | null;
+  /** Stories only: where it runs or why it waits, its pull request, and what unblocks it. */
+  run_state?: RunState | null;
   // Stories only: the plan status the workbench derives from approvals and Sortie.
   plan_status?: PlanStatus | null;
   held_by?: string[];
@@ -128,6 +133,8 @@ export interface MergedGraph {
   sync?: SyncStatus | null;
   /** The project home, computed with the graph. Absent from an older backend. */
   home?: HomeDoc | null;
+  /** What each worker does and what waits on it. Absent from an older backend. */
+  fleet?: Fleet | null;
   sortie: {
     reachable: boolean; error: string | null; capabilities: string[]; generated_at: string | null;
     /** The tracker project, and whether Sortie runs agents for it (it does for its configured project only). */
@@ -199,4 +206,6 @@ export interface ViewState {
   showCross: boolean;
   /** A milestone whose changes the project level marks. */
   mark?: string | null;
+  /** The story whose worker the chat pane shows, by tracker identifier. */
+  watch?: string | null;
 }

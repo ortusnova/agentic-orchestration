@@ -44,44 +44,11 @@ def _recheck(value: str) -> float:
     return seconds
 
 
-# A Sortie's name, as people read it: "taichi's Sortie".
 SORTIE_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 # The channels the workbench can push questions to: the kinds of Sortie's
 # own notifications.
 NOTIFY_KINDS = ("slack", "discord", "telegram", "webhook")
-
-
-@dataclass(frozen=True)
-class SortieSource:
-    """A Sortie besides the main one, whose questions the workbench reads."""
-
-    name: str
-    url: str
-    token: str = field(default="", repr=False)
-
-
-def _sorties(env: dict[str, str], main: str) -> tuple[SortieSource, ...]:
-    """WORKBENCH_SORTIES: ``name=url`` entries, separated by spaces; each
-    one's control token is the file ``<name>.token`` in
-    WORKBENCH_SORTIE_TOKEN_DIR, when that directory is set."""
-    out: list[SortieSource] = []
-    token_dir = env.get("WORKBENCH_SORTIE_TOKEN_DIR", "").strip()
-    for entry in env.get("WORKBENCH_SORTIES", "").split():
-        name, sep, url = entry.partition("=")
-        if not sep or not SORTIE_NAME.fullmatch(name) or not url.startswith(("http://", "https://")):
-            raise ConfigError(f"WORKBENCH_SORTIES: {entry!r} is not name=http(s)://address")
-        if name == main or any(s.name == name for s in out):
-            raise ConfigError(f"WORKBENCH_SORTIES: the name {name} is taken")
-        token = ""
-        if token_dir:
-            path = Path(token_dir).expanduser() / f"{name}.token"
-            try:
-                token = path.read_text().strip()
-            except OSError as exc:
-                raise ConfigError(f"WORKBENCH_SORTIE_TOKEN_DIR: {exc}") from exc
-        out.append(SortieSource(name, url.rstrip("/"), token))
-    return tuple(out)
 
 
 def _notify_secret(env: dict[str, str]) -> str:
@@ -99,6 +66,51 @@ def _notify_secret(env: dict[str, str]) -> str:
     if not secret:
         raise ConfigError(f"WORKBENCH_NOTIFY_CREDENTIAL_FILE {path} is empty")
     return secret
+
+
+def _peers(env: dict[str, str]) -> tuple[tuple[str, str, str], ...]:
+    """WORKBENCH_SORTIES: other Sorties, as ``name=url`` separated by commas,
+    such as ``taichi=http://127.0.0.1:7781``. Each one's token is in
+    WORKBENCH_SORTIE_TOKEN_<NAME>, or in the file WORKBENCH_SORTIE_TOKEN_<NAME>_FILE
+    names; <NAME> is the name in capitals, with _ for -."""
+    out: list[tuple[str, str, str]] = []
+    own = env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie"
+    for item in (env.get("WORKBENCH_SORTIES") or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, sep, url = item.partition("=")
+        name, url = name.strip(), url.strip().rstrip("/")
+        if not sep or not SORTIE_NAME.fullmatch(name) or not url.startswith(("http://", "https://")):
+            raise ConfigError(f"WORKBENCH_SORTIES: {item!r} is not name=http(s)://host:port, with a lower-case name")
+        if name == own or any(p[0] == name for p in out):
+            raise ConfigError(f"WORKBENCH_SORTIES: the Sortie name {name!r} is used twice")
+        var = "WORKBENCH_SORTIE_TOKEN_" + name.upper().replace("-", "_")
+        token = env.get(var, "").strip()
+        if not token and env.get(var + "_FILE", "").strip():
+            try:
+                token = Path(env[var + "_FILE"].strip()).expanduser().read_text().strip()
+            except OSError as exc:
+                raise ConfigError(f"{var}_FILE: {exc}") from exc
+        out.append((name, url, token))
+    return tuple(out)
+
+
+def _proxies(env: dict[str, str], peers: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str], ...]:
+    """WORKBENCH_SORTIE_PROXY_<NAME>: the proxy through which the workbench
+    reaches the brokers of the runs that Sortie holds, which listen on its
+    host's loopback, such as ``socks5://127.0.0.1:7781``, a SOCKS forward in
+    the SSH connection that forwards the Sortie."""
+    out: list[tuple[str, str]] = []
+    for name, _, _ in peers:
+        var = "WORKBENCH_SORTIE_PROXY_" + name.upper().replace("-", "_")
+        url = env.get(var, "").strip()
+        if not url:
+            continue
+        if not url.startswith(("socks5://", "socks5h://", "http://")):
+            raise ConfigError(f"{var}: {url!r} is not socks5://host:port or http://host:port")
+        out.append((name, url))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -153,15 +165,17 @@ class Config:
     oidc_scopes: str = "openid profile email"
     oidc_planner_group: str = ""
     oidc_approver_group: str = ""
+    # The name of the Sortie at sortie_url, as the workbench shows its host,
+    # and the other Sorties whose workers it shows: (name, url, token).
+    sortie_name: str = "sortie"
+    peer_sorties: tuple[tuple[str, str, str], ...] = ()
+    # The proxy that reaches each other Sortie's brokers: (name, proxy url).
+    peer_proxies: tuple[tuple[str, str], ...] = ()
     # Local mode on a non-loopback address, which `workbench serve` refuses otherwise.
     allow_local_mode: bool = False
     # Where the people who use this workbench can get its source, as the
     # AGPL requires. Whoever runs a modified workbench points it at theirs.
     source_url: str = SOURCE_URL
-    # The main Sortie's name, and every other Sortie whose questions the
-    # workbench reads and answers (agent-platform/run-supervision).
-    sortie_name: str = "sortie"
-    other_sorties: tuple[SortieSource, ...] = ()
     # The operator's channel, where every open question is pushed. No kind,
     # no channel. The secret is a webhook URL, or a Telegram bot's token.
     notify_kind: str = ""
@@ -209,9 +223,6 @@ class Config:
         password_hash = env.get("WORKBENCH_PASSWORD_HASH", "").strip()
         if not issuer and not password_hash:
             raise ConfigError("WORKBENCH_PASSWORD_HASH is required without WORKBENCH_OIDC_ISSUER (local mode)")
-        sortie_name = env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie"
-        if not SORTIE_NAME.fullmatch(sortie_name):
-            raise ConfigError(f"WORKBENCH_SORTIE_NAME {sortie_name!r} must be lowercase letters, digits and dashes")
         notify_kind = env.get("WORKBENCH_NOTIFY_KIND", "").strip()
         notify_secret, notify_chat_id = "", env.get("WORKBENCH_NOTIFY_CHAT_ID", "").strip()
         public_url = env.get("WORKBENCH_PUBLIC_URL", "").strip().rstrip("/")
@@ -231,6 +242,9 @@ class Config:
             huly_project=huly_project,
             sortie_url=need("WORKBENCH_SORTIE_URL").rstrip("/"),
             sortie_token=env.get("WORKBENCH_SORTIE_TOKEN", ""),
+            sortie_name=env.get("WORKBENCH_SORTIE_NAME", "").strip() or "sortie",
+            peer_sorties=(peers := _peers(env)),
+            peer_proxies=_proxies(env, peers),
             password_hash=password_hash,
             secret_key=need("WORKBENCH_SECRET_KEY"),
             broker_command=shlex.split(env.get("WORKBENCH_BROKER_COMMAND", "acp-broker")),
@@ -255,8 +269,6 @@ class Config:
             oidc_approver_group=env.get("WORKBENCH_OIDC_APPROVER_GROUP", "").strip(),
             allow_local_mode=env.get("WORKBENCH_ALLOW_LOCAL_MODE", "") == "1",
             source_url=env.get("WORKBENCH_SOURCE_URL", "").strip() or SOURCE_URL,
-            sortie_name=sortie_name,
-            other_sorties=_sorties(env, sortie_name),
             notify_kind=notify_kind,
             notify_secret=notify_secret,
             notify_chat_id=notify_chat_id,

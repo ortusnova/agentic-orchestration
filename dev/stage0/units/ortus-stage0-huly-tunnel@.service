@@ -10,11 +10,14 @@ EnvironmentFile=@STAGE0_HOME@/tunnels/%i.env
 # A remote forward: Huly listens on p1's loopback only, and appears on the
 # homelab host's loopback only. A local forward: the homelab host's Sortie
 # appears on p1's loopback only, so the workbench reads its questions and
-# answers them. Nothing listens on the LAN, and the homelab host gets no way
-# back into p1 (spec store run-homelab-through-sortie, D10).
+# answers them. A SOCKS forward: p1's workbench reaches the brokers of the
+# agents the homelab host runs, which listen on that host's loopback; it
+# gives p1 nothing it lacks, since p1 already logs in there. Nothing listens
+# on the LAN, and the homelab host gets no way back into p1 (spec store
+# run-homelab-through-sortie, D10).
 ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-  -R 127.0.0.1:8087:127.0.0.1:8087 -L ${SORTIE_FORWARD} %i
+  -R 127.0.0.1:8087:127.0.0.1:8087 -L ${SORTIE_FORWARD} -D ${SORTIE_SOCKS} %i
 Restart=always
 RestartSec=10
 

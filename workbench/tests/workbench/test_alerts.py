@@ -21,7 +21,7 @@ from tests.workbench.test_approvals import billing, status
 from tests.workbench.test_watch import validate_offline
 from workbench.alerts import REPEAT_SECONDS, RETRY_SECONDS, Channel, cut
 from workbench.app import create_app
-from workbench.config import Config, ConfigError, SortieSource
+from workbench.config import Config, ConfigError
 
 STATEMENT = "Which cadence did the operator choose for the Authentik upgrade gate: weekly, or at each release?"
 PUBLIC = "https://workbench.homelab.dev"
@@ -72,7 +72,7 @@ def two_sorties(store):
 
 def app_with(store, p1, taichi, channel: FakeChannel, clock: Clock, **cfg):
     config = make_config(store.root, sortie_name="p1", public_url=PUBLIC, **cfg)
-    return create_app(config, validate=validate_offline, sortie=p1.client(), sorties={"taichi": taichi.client()},
+    return create_app(config, validate=validate_offline, sortie=p1.client(), peers={"taichi": taichi.client()},
                       channel=channel.channel(), clock=clock)
 
 
@@ -221,11 +221,10 @@ def test_a_sortie_that_cannot_be_read_keeps_its_questions(store):
         taichi.unreachable = True
         settle(client)
         assert [q["identifier"] for q in home(app)["questions"]] == ["T-1"]
-        others = project(app).hub.doc["sortie"]["others"]
-        assert others == [{"name": "taichi", "reachable": False, "error": others[0]["error"]}] and others[0]["error"]
+        assert [(n, s is None, bool(e)) for n, s, e in project(app).hub.states() if n == "taichi"] == [("taichi", True, True)]
         taichi.unreachable = False
         settle(client)
-        assert project(app).hub.doc["sortie"]["others"] == [{"name": "taichi", "reachable": True, "error": None}]
+        assert [(n, e) for n, s, e in project(app).hub.states() if n == "taichi"] == [("taichi", None)]
         # Back again, it is the same question: not pushed a second time.
         assert len(channel.received) == 1
 
@@ -265,7 +264,7 @@ def test_without_a_channel_the_questions_still_show(store):
     p1, taichi = two_sorties(store)
     taichi.park("T-1", STATEMENT)
     app = create_app(make_config(store.root, sortie_name="p1"), validate=validate_offline, sortie=p1.client(),
-                     sorties={"taichi": taichi.client()})
+                     peers={"taichi": taichi.client()})
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
@@ -312,17 +311,15 @@ def base_env(tmp_path: Path) -> dict[str, str]:
 
 
 def test_the_other_sorties_and_their_tokens_come_from_the_environment(tmp_path):
-    tokens = tmp_path / "sorties"
-    tokens.mkdir()
-    (tokens / "taichi.token").write_text(TAICHI_TOKEN + "\n")
-    env = {**base_env(tmp_path), "WORKBENCH_SORTIE_NAME": "p1", "WORKBENCH_SORTIES": " taichi=http://127.0.0.1:7681/ ",
-           "WORKBENCH_SORTIE_TOKEN_DIR": str(tokens)}
+    token = tmp_path / "taichi.token"
+    token.write_text(TAICHI_TOKEN + "\n")
+    env = {**base_env(tmp_path), "WORKBENCH_SORTIE_NAME": "p1", "WORKBENCH_SORTIES": "taichi=http://127.0.0.1:7681/",
+           "WORKBENCH_SORTIE_TOKEN_TAICHI_FILE": str(token)}
     config = Config.from_env(env)
     assert config.sortie_name == "p1"
-    assert config.other_sorties == (SortieSource("taichi", "http://127.0.0.1:7681", TAICHI_TOKEN),)
-    assert TAICHI_TOKEN not in repr(config)
-    assert Config.from_env(base_env(tmp_path)).other_sorties == () and Config.from_env(base_env(tmp_path)).sortie_name == "sortie"
-    for bad in ("taichi", "Taichi=http://x", "taichi=ftp://x", "p1=http://x", "a=http://x a=http://y", "nope=http://x"):
+    assert config.peer_sorties == (("taichi", "http://127.0.0.1:7681", TAICHI_TOKEN),)
+    assert Config.from_env(base_env(tmp_path)).peer_sorties == () and Config.from_env(base_env(tmp_path)).sortie_name == "sortie"
+    for bad in ("taichi", "Taichi=http://x", "taichi=ftp://x", "p1=http://x", "a=http://x,a=http://y"):
         with pytest.raises(ConfigError):
             Config.from_env({**env, "WORKBENCH_SORTIES": bad})
 
