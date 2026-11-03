@@ -117,6 +117,8 @@ uv run workbench hash-password > ~/.config/plan-workbench-password-hash   # type
 | `WORKBENCH_HULY_PROJECT` | With `WORKBENCH_STORE` | The Huly project key that store syncs into. |
 | `WORKBENCH_SORTIE_URL` | Yes | Sortie's HTTP address, for example `http://127.0.0.1:7678`. |
 | `WORKBENCH_SORTIE_TOKEN` | When Sortie has a control token | Sortie's `server.control_token`. |
+| `WORKBENCH_SORTIE_NAME` | No | The name of the host the Sortie at `WORKBENCH_SORTIE_URL` runs on, as the workers' lanes show it (default `sortie`), such as `p1`. |
+| `WORKBENCH_SORTIES` | No | Other Sorties whose workers the workbench shows, and to which it sends answers, session grants and session views of the stories they hold: `name=url`, separated by commas, such as `taichi=http://127.0.0.1:7781` for taichi's homelab Sortie through an SSH forward. Lower-case names. Each one's control token is in `WORKBENCH_SORTIE_TOKEN_<NAME>`, or in the file `WORKBENCH_SORTIE_TOKEN_<NAME>_FILE` names, `<NAME>` in capitals with `_` for `-`. The stage-0 kit sets these from `STAGE0_PEER_SORTIES` in `stage0.env` and `$STAGE0_HOME/sortie-token-<name>`. |
 | `WORKBENCH_PASSWORD_HASH` | In local mode | Output of `workbench hash-password`. Local mode is the workbench without `WORKBENCH_OIDC_ISSUER`: one shared password signs in a local identity with both roles. It is for development; see "Sign-in" below. |
 | `WORKBENCH_OIDC_ISSUER` | For team use | The OpenID Connect issuer URL. Setting it turns on sign-in through the provider and turns off the password. |
 | `WORKBENCH_OIDC_CLIENT_ID` | With an issuer | The workbench's client id at the provider. |
@@ -175,7 +177,7 @@ Open `http://127.0.0.1:8790` and sign in. The first page lists the projects.
 A project opens on its home; the **Graph** tab beside it opens the graph. Everyone signed in sees the same home. From the top:
 
 - **The timeline**: the milestones from `openspec/milestones.yaml` (format: `openspec/schemas/planning/milestones.schema.json`), the goal's tick drawn double, "we are here" at the share of the work that is done, and a red cross for each upcoming blocker that needs a person. Without the file the whole plan is one milestone. Each milestone counts its stories (done when their tracker issue is Done), and the `tasks.md` items its `tasks` setting selects; a line ending in `[metal]` is hardware work and `[operator]` is attended work or a decision, and any other line is agent work. A milestone also counts the stories its stories depend on, directly or through other stories, when no milestone includes them or only a later one does: each counts once, in the earliest milestone that waits on it, and shows under its own change. A milestone may set `done: true` when it was finished outside the tracker.
-- **Execution health**: whether the agents will stay busy (stuck, done, idle now, will idle, healthy) and why, the agent slots (Sortie's `agent.max_concurrent_agents`), and the runway of released stories not yet started. Their history covers the hours since the workbench started.
+- **Workers**, as slot lanes in time: one lane per agent slot of each worker host, each job a box from its start to its estimated end, with its story, phase, current step and time, and a line at now. Above the lanes, whether work moves or is stuck (stuck, done, idle now, will idle, healthy) and why, how many slots are busy, and how many released stories are ready to start; under each worker, what it runs next. A stuck slot reads as stuck in its own lane, with why and the action that resolves it there (see [Workers](#workers)). The count of what needs a person is the **Needs a person** section's, not the lanes'.
 - **The critical path** to the next milestone's gate.
 - **Needs a person**: first, in its own **Answer** column, each question an agent asked when it stopped (see [Answer an agent](#answer-an-agent)); then every unit of planned work that cannot run yet and needs someone, in three columns (Approve, Write a spec, Operator tasks), ranked by how soon it holds agents up. **Approve** keeps the approver role check; every other action opens the graph at the item, selected and attached to the planning chat.
 - **Milestones**: each one's stories, agent tasks and person tasks, counted apart.
@@ -236,6 +238,33 @@ Watching needs the `planner` role. An `approver` can also steer the agent with a
 When the watched run ends and Sortie starts another run of the same story, for a retry or the next stage, the pane follows it and says so. When Sortie runs nothing more for the story, the pane says that the worker ended.
 
 The workbench reads each worker's broker address and viewer token from Sortie with its Sortie token, and relays the broker under the person's session; the browser never gets the token. The routes, under `/api/projects/<slug>/workers/<identifier>/`, are `GET events` (planner), `GET messages` (planner), and `POST commands` (approver; a planner may send only `state`).
+
+### Workers
+
+The **Workers** tab (`#/p/<slug>/workers`, and `GET /api/projects/<slug>/workers`) shows each worker host of every Sortie the workbench reads (`WORKBENCH_SORTIE_URL` and `WORKBENCH_SORTIES`): its capacity and what it uses now (agent slots, CPUs, memory, disk), each job with its story, phase (build, review, fix, live proof, deploy), the step the job reports and how long it has run, what waits on the worker and why (a story waiting for a slot or a capability, a pull request waiting for a live proof, a deploy waiting for the host to drain), and each machine on it that no Sortie started, with its name and age. Below them, every open pull request of a story says what it waits on: its review, CI, a conflict, a live proof, a person, or nothing ("ready to merge"). A pull request ready to merge for 10 minutes makes its worker's verdict stuck: nothing merges it. The page, the home's lanes and each story's panel follow the graph's stream, so they change at the poll after Sortie's state does, within about 5 seconds.
+
+Every stuck or waiting lane, and every story it names, has an action:
+
+- **Answer**, on a story stopped with a question, opens its answer box in the lane. The answer goes to the Sortie that holds the park, p1's or taichi's, which runs the story again.
+- **More sessions**, on a story its session budget holds, grants it more sessions (4 by default, at most 32) through the Sortie that holds it, which runs it again with no change to its workflow: `POST /api/projects/<slug>/stories/sessions` (`{"key": "<change>/<id>", "sessions": 4}`, approver). A Sortie that has no per-issue grant answers `501 grant_unsupported`.
+- **Open**, on a job, opens the graph at the story with its agent's session in the chat pane: live while it runs, where an approver can send it a message, and its last transcript after, from the Sortie that ran it (`GET /api/v1/runs/<dispatch_id>/events`). The link names the session in the URL (`watch=<identifier>`).
+- A story's panel shows its **run state**: where it runs or why it waits, what releases it, its pull request and what that waits on, and the same action.
+
+What the workbench reads of each Sortie's `GET /api/v1/state`, and where a Sortie lacks a member the view goes without that part:
+
+| Member | What the view shows |
+| --- | --- |
+| `config.agent.max_concurrent_agents` | The slots of a Sortie that runs agents on its own host (environment kind `smolvm`). |
+| `host` | That host: `name`, `capacity` and `used` (`{"cpu", "mem_gib", "disk_gib"}`), and `unmanaged`, the machines on it no Sortie started, each `{"name", "since", "state"}`. |
+| `workers.workers[]` | Under environment kind `remote`, each worker daemon: `id`, `declaration.run_slots`, `declaration.free`, `declaration.used` and `declaration.unmanaged` as the daemon declares them ([worker daemon guide](../../worker-daemon/docs/operator-guide.md#what-the-workbench-sees-of-the-worker)), and `last_check_in`. `workers.leases[]` places each job on its worker; `workers.queue[]` gives the jobs no worker took and why (`waiting`, `job.requires.capabilities`). |
+| `running[]` | Each job: `started_at`, `rule_name`, `reaction_kind`, `stage_position`, `held` and `hold_reason`, `broker`, `pull_request`; and, from the job, `phase` and `step` (a string with `step_at`, or `{"name", "at", "phase"}`), which a worker daemon carries on its heartbeats; `worker`, the host it runs on; `estimated_end`. |
+| `parked[]`, `budget_exhausted[]` | The stories stopped for a person or a budget, each in a lane of its worker (`worker`, else the Sortie's host), with `used_sessions` and `budget_sessions`. |
+| `held[]` | A story held back for a slot (`hold.reason` `agent_slots_full`), and, in its panel, why any held story waits and what releases it (`hold.reason_text`, `hold.release_text`). |
+| `waits[]` | What else waits on a worker: `{"issue_identifier", "worker", "kind", "reason", "release", "since"}`, `kind` one of `slot`, `capability`, `live_proof`, `drain`. |
+| `pulls[]` | Each open pull request of a story: `{"issue_identifier", "number", "repository", "url", "waits_on", "reason", "since", "worker"}`, `waits_on` one of `review`, `ci`, `conflict`, `live_proof`, `person`, `none`. Without it, a running review or fix names its `pull_request` as waiting on its review or CI. |
+| `dispatch_paused` | A deploy that waits for the host to drain. |
+
+Sortie serves the session grant as `POST /api/v1/<identifier>/sessions` (`{"sessions": n, "author": "…"}`): it raises that issue's session budget by `n` and dispatches it again, and answers `409` for an issue its session budget does not hold.
 
 ### Projects from before story approval
 

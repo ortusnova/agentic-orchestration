@@ -286,6 +286,16 @@ dev/stage0/stage0.sh                          # later runs read it from stage0.e
 | Machines | 8 vCPU, 20 GiB, a 200 GiB disk at `/workspace`, nested KVM, `virtio-net`, homelab's guest kernel (`SMOLVM_LIB_DIR`), at most `STAGE0_MAX_AGENTS` (2) at once |
 | Host inputs | Five shared folders, smolvm's ceiling on taichi beside Sortie's own: read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per workspace, `~/.local/state/homelab/sortie-recorder/<issue>`, the flight recorder's folder, which Sortie keeps after the machine is gone. The vm age key, copied alone into `$STAGE0_HOME/inputs/vm-age`, reaches the machines as `HOMELAB_VM_AGE_KEY` (`pass_env`), and `after_create` writes it where sops looks |
 
+p1's workbench shows taichi's workers beside p1's, and sends the answers,
+session grants and session views of the stories taichi's Sortie holds to it
+(`agent-platform/run-supervision`): forward taichi's Sortie to p1's
+loopback (`ssh -N -L 127.0.0.1:7781:127.0.0.1:7680 taichi`, kept up by a
+unit as the Huly tunnel is), put taichi's control token in
+`$STAGE0_HOME/sortie-token-taichi` on p1 (mode 0600), and set
+`STAGE0_PEER_SORTIES=taichi=http://127.0.0.1:7781` (and `STAGE0_SORTIE_NAME=p1`
+if p1's host name is another) in p1's `stage0.env`; `run-workbench.sh` passes
+them to the workbench as `WORKBENCH_SORTIES`.
+
 Credentials: exactly two files in the stage-0 home on taichi, mode 0600,
 and no fallback. `stage0.sh` and `run-sortie.sh` refuse to start without
 them.
