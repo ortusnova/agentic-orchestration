@@ -82,7 +82,7 @@ func (j *job) heartbeats() {
 		case <-time.After(interval):
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), interval)
-		_, err := j.d.cp.Heartbeat(ctx, j.id(), j.attempt())
+		_, err := j.d.cp.Heartbeat(ctx, j.id(), j.attempt(), j.beat())
 		cancel()
 		select {
 		case <-j.done:
@@ -223,7 +223,7 @@ func (j *job) execute(dir string) (string, string) {
 	spec := machine.Spec{
 		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: j.d.cfg.Smolvm.User,
 		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
-		Labels: map[string]string{"worker-daemon.job": j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt())},
+		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt())},
 		Share:  share, Forwards: forwards,
 	}
 	m, err := j.d.backend.Create(ctx, spec)
@@ -389,7 +389,8 @@ func (j *job) agentEnv(m machine.Machine) []string {
 		env = append(env, k+"="+proxy)
 	}
 	env = append(env, "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
-		MCPURLEnv+"=http://"+m.GuestAddr(protocol.FlowMCP)+"/")
+		MCPURLEnv+"=http://"+m.GuestAddr(protocol.FlowMCP)+"/",
+		StepFileEnv+"="+machine.GuestShare+"/"+StepFile)
 	return env
 }
 

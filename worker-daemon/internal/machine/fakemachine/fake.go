@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type Backend struct {
 
 	mu       sync.Mutex
 	machines []*Machine
+	foreign  []machine.Listed
 }
 
 // Name implements [machine.Backend].
@@ -42,6 +44,35 @@ func (b *Backend) Name() string {
 
 // Available implements [machine.Backend].
 func (b *Backend) Available(context.Context) error { return nil }
+
+// AddForeign puts a machine on the host that the backend did not create,
+// as a person or another program would; List lists it.
+func (b *Backend) AddForeign(l machine.Listed) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.foreign = append(b.foreign, l)
+}
+
+// RemoveForeign takes a machine AddForeign put there off the host.
+func (b *Backend) RemoveForeign(name string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.foreign = slices.DeleteFunc(b.foreign, func(l machine.Listed) bool { return l.Name == name })
+}
+
+// List implements [machine.Lister]: every machine created and not
+// deleted, then the foreign ones.
+func (b *Backend) List(context.Context) ([]machine.Listed, error) {
+	var out []machine.Listed
+	for _, m := range b.Machines() {
+		if !m.Deleted() {
+			out = append(out, machine.Listed{Name: m.spec.Name, Labels: m.spec.Labels, State: "running"})
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append(out, b.foreign...), nil
+}
 
 // Machines returns every machine created so far.
 func (b *Backend) Machines() []*Machine {

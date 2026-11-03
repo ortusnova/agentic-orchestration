@@ -222,6 +222,32 @@ occurred, amount unknown, never a zero spend (design D14.1). Sortie
 records it as an unmeasured turn. A run that made no model request posts
 zero, `"measured": true`.
 
+### What the workbench sees of the worker
+
+The workbench shows each worker host, what runs on it and what waits on
+it (`agent-platform/run-supervision`). The daemon tells the control plane
+three things for it, in members a control plane that does not know them
+ignores, as Sortie ignores every unknown member:
+
+| Where | Member | What |
+|---|---|---|
+| check-in | `used` | `{"cpu", "mem_gib", "disk_gib"}`: what the running jobs were promised. `free` plus `used` is what the worker can give jobs. |
+| check-in | `unmanaged` | `[{"name", "since", "state"}]`: each machine on the host that no Sortie started, that is with neither the daemon's `worker-daemon.job` label nor the `sortie.managed` label of a Sortie's smolvm environment, such as a sandbox made by hand. `since` is when smolvm says it was created, else when the daemon first saw it; `state` is smolvm's (`running`, `stopped`), or absent. The daemon lists the host's machines (`smolvm machine ls --json`) at most every 30 seconds, at a check-in, and keeps the last list when one fails. |
+| heartbeat | `step`, `phase`, `step_at` | The step the job reports, the phase it names if any, and when the job wrote it. The body is `{}` until the job reports a step. |
+
+A job reports its step by writing it to the file `SORTIE_STEP_FILE`
+names, `/run/worker/step` in the machine: a line of text, the step, such
+as `seed-vm-recreate`, or a JSON object `{"step": "seed-vm-recreate",
+"phase": "live_proof"}`. The last non-empty line counts; it is kept to
+200 printable characters. A vm chain appends each step as it starts it:
+
+```sh
+[ -n "${SORTIE_STEP_FILE:-}" ] && echo "seed-vm-recreate" >> "$SORTIE_STEP_FILE"
+```
+
+The daemon reads the file on the host, in the job's `share` directory, at
+each heartbeat, and never runs anything in the machine for it.
+
 ## Run as a service
 
 systemd, as a user that may use `/dev/kvm` and smolvm:
