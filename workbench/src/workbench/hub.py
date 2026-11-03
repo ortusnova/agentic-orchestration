@@ -10,6 +10,7 @@ from typing import Any
 
 from .autosync import approved_digest
 from .fleet import build_fleet, lanes_summary, story_states
+from .leases import leases_of
 from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
@@ -61,6 +62,9 @@ class Hub:
         # The open question of each parked issue, by tracker identifier, and
         # the per-issue responses that gave their statements, by park.
         self.questions: dict[str, dict[str, Any]] = {}
+        # The supervisor's leases on stories, by identifier (leases.py): a
+        # story under one asks no person, whatever its park says.
+        self.leases: dict[str, dict[str, Any]] = {}
         self._park_details: dict[tuple[str, Any], dict[str, Any]] = {}
         self.history = History()
         # Read-only: never pull back an edited story on its own.
@@ -223,8 +227,9 @@ class Hub:
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
                               self.previews())
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
+        self.leases = leases_of(self.states())
         try:
-            self.fleet = build_fleet(self.states(), doc["nodes"], statements)
+            self.fleet = build_fleet(self.states(), doc["nodes"], statements, leases=self.leases)
             self.last_where.update(self.fleet["where"])
             held = {h["issue_identifier"]: {**h, "sortie": name} for name, s, _ in self.states() if s
                     for h in s.get("held") or [] if isinstance(h, dict) and h.get("issue_identifier")}
@@ -236,7 +241,8 @@ class Hub:
             n.update(self.fields.get(n["plan_key"], {}))
             ident = (n.get("tracker") or {}).get("identifier")
             if n.get("kind") == "story":
-                n["question"] = self.questions.get(ident) if ident else None
+                n["question"] = self.questions.get(ident) if ident and ident not in self.leases else None
+                n["lease"] = self.leases.get(ident) if ident else None
                 n["run_state"] = runs.get(ident) if ident else None
                 peer = self.workers.get(ident or "", {}).get("sortie")
                 if peer and not n.get("runtime") and n.get("tracker"):
@@ -289,12 +295,13 @@ class Hub:
                 graph=snap["graph"], nodes=doc.get("nodes") or [], fields=self.fields, planning=self.plan.planning,
                 plan_states=doc.get("plan_states"), tracker_known=self.tracker is not None, valid=snap["valid"],
                 errors=len(snap["errors"]), history=self.history,
-                questions=home_questions(self.questions, doc.get("nodes") or []),
+                questions=home_questions(self.open_questions(), doc.get("nodes") or []),
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
                     "state": self.merged_state(), "state_error": self.state_error, "sync": doc.get("sync"),
-                    "statements": {i: q["statement"] for i, q in self.questions.items() if q["statement"]},
+                    "statements": {i: q["statement"] for i, q in self.open_questions().items() if q["statement"]},
+                    "leases": self.leases,
                 },
             )
         except Exception:  # the home must never take the graph down with it
@@ -303,6 +310,11 @@ class Hub:
         home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
+
+    def open_questions(self) -> dict[str, dict[str, Any]]:
+        """The questions that wait on a person: none of a story the
+        supervisor holds, whose lease, live or expired, says what it waits on."""
+        return {i: q for i, q in self.questions.items() if i not in self.leases}
 
     def _publish(self, doc: dict[str, Any]) -> None:
         if self._loop is None:
