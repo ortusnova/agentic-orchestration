@@ -36,6 +36,22 @@ NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto
 # shellcheck disable=SC2034 # the kit's tests check WORKFLOW.md against it
 WORKBENCH_EVENTS='[session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]'
 
+# The port p1's workbench has on a worker host's loopback, through the
+# tunnel p1 opens to it (worker-host.sh); the same on every host.
+STAGE0_WORKBENCH_TUNNEL_PORT=${STAGE0_WORKBENCH_TUNNEL_PORT:-7790}
+
+# notify_token HOME HOST: mint HOST's token for the workbench's
+# notifications into HOME/notify-tokens/HOST.token, mode 0600, unless it is
+# there; no person writes it.
+notify_token() {
+  local dir=$1/notify-tokens
+  [[ $2 =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "the host name '$2' is not lower-case letters, digits and dashes" >&2; return 1; }
+  mkdir -p "$dir" && chmod 700 "$dir" || return 1
+  [[ -s $dir/$2.token ]] && return 0
+  (umask 077; od -An -N24 -tx1 /dev/urandom | tr -d ' \n' > "$dir/$2.token")
+  [[ -s $dir/$2.token ]]
+}
+
 # notify_host: this host's name, as the workbench names its Sortie
 # (run-workbench.sh) and its notifications token.
 notify_host() {
@@ -45,13 +61,14 @@ notify_host() {
 }
 
 # workbench_notify_url HOME PORT: the URL this host's Sortie posts its
-# notifications to, with the host's token in it; fails, saying why, when the
-# token is missing or others can read it.
+# notifications to, with the host's token in it: on p1 PORT is the
+# workbench's, on a worker host the tunnel's (STAGE0_WORKBENCH_TUNNEL_PORT).
+# Fails, saying why, when the token is missing or others can read it.
 workbench_notify_url() {
   local home=$1 port=$2 host token
   host=$(notify_host) || return 1
   token=$home/notify-tokens/$host.token
-  [[ -s $token ]] || { echo "$token is missing: run dev/stage0/stage0.sh, which mints it" >&2; return 1; }
+  [[ -s $token ]] || { echo "$token is missing: run dev/stage0/stage0.sh, which mints it (on a worker host, worker-host.sh add on p1 copies it)" >&2; return 1; }
   [[ $(stat -c %a "$token") == 600 ]] || { echo "$token must be mode 0600: chmod 600 $token" >&2; return 1; }
   printf 'http://127.0.0.1:%s/api/notifications/%s/%s\n' "$port" "$host" "$(cat "$token")"
 }

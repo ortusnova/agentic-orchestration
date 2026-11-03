@@ -290,13 +290,19 @@ unread until a person marks it seen, and unread again every 4 hours while
 its question stays open (`workbench/docs/operator-guide.md`, "Sortie's
 notifications"). It refuses a post with a wrong or missing token.
 
-The one Sortie is p1's (spec store `agent-platform/one-sortie`): a story
-that runs on a worker host such as taichi parks on p1's Sortie, which posts
-to the workbench on p1's loopback. A worker host runs no Sortie, so it sends
-no notification and needs no token. A Sortie on another host would post
-with its own `<host>.token`, which the workbench on p1 holds in the same
-directory, through a forward of the workbench's port in the tunnel p1 opens
-to that host.
+Every host has its own token. p1's Sortie posts to the workbench on p1's
+loopback. For each worker host, such as taichi, `worker-host.sh add` mints
+its token on p1 (`notify-tokens/taichi.token`, which the workbench takes)
+and copies it to the same place in the host's stage-0 home, and the tunnel
+p1 opens to the host also forwards p1's workbench to the host's loopback, on
+port 7790 (`STAGE0_WORKBENCH_TUNNEL_PORT`). A Sortie on the host posts there
+with its own token: `run-sortie.sh` with `STAGE0_WORKBENCH_NOTIFY_PORT=7790`
+puts `http://127.0.0.1:7790/api/notifications/taichi/<token>` in its
+environment. A worker host added before this gets the forward at p1's next
+`stage0.sh`, which says when a host still needs `worker-host.sh add` for its
+token. Since `agent-platform/one-sortie` the kit runs no Sortie on a worker
+host: a story that runs on taichi's worker parks on p1's Sortie, and its
+notification takes the first way.
 
 Any other destination is the operator's choice and one more entry in the
 same list, after the workbench's: any kind Sortie's notifications have
@@ -358,7 +364,7 @@ design D18; no worker change then). Only the control profile runs it.
 
 | Part | Where |
 | --- | --- |
-| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); nothing listens on the LAN, and the host gets no SSH access to p1 |
+| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); the same tunnel forwards p1's workbench to `http://127.0.0.1:7790` (`STAGE0_WORKBENCH_TUNNEL_PORT`), for the host's notifications, which need its token; nothing listens on the LAN, and the host gets no SSH access to p1 |
 | Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker on p1's loopback: `127.0.0.1:7700` for p1's own worker, which needs no tunnel, and one per worker host from `127.0.0.1:7701` up, and nothing else |
 | nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
 | Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port, or `LOCAL=1` for p1's own worker (`stage0.sh` writes it); `dev/stage0/worker-host.sh list` |

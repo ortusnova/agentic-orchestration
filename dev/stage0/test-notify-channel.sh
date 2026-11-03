@@ -91,7 +91,14 @@ url=$(workbench_notify_url "$tmp/tokens-home" 8793)
 [[ $url == http://127.0.0.1:8793/api/notifications/p1/host-token-0123 ]] && ok "Sortie posts to the workbench with the host's token" || fail "workbench url: $url"
 STAGE0_SORTIE_NAME='P1;x' notify_host 2>/dev/null && fail "a host name that is not a name was accepted" || ok "a host name is lower-case letters, digits and dashes"
 unset STAGE0_SORTIE_NAME
-grep -q 'secret "$STAGE0_HOME/notify-tokens/$notify_host.token"' "$KIT/stage0.sh" && ok "stage0.sh mints the host's token" || fail "stage0.sh mints no token"
+grep -q 'notify_token "$STAGE0_HOME" "$notify_host"' "$KIT/stage0.sh" && ok "stage0.sh mints the host's token" || fail "stage0.sh mints no token"
+notify_token "$tmp/mint" p1 && t1=$(cat "$tmp/mint/notify-tokens/p1.token") && notify_token "$tmp/mint" p1
+[[ ${#t1} == 48 && $(cat "$tmp/mint/notify-tokens/p1.token") == "$t1" && $(stat -c %a "$tmp/mint/notify-tokens/p1.token") == 600 ]] \
+  && ok "a host's token is minted once, mode 0600" || fail "minted: $(ls -l "$tmp/mint/notify-tokens")"
+notify_token "$tmp/mint" 'Bad;name' 2>/dev/null && fail "a token for a host that is not a name was minted" || ok "a token is minted for a host name only"
+# A Sortie on a worker host reaches p1's workbench through the tunnel.
+url=$(STAGE0_SORTIE_NAME=p1 workbench_notify_url "$tmp/tokens-home" "$STAGE0_WORKBENCH_TUNNEL_PORT")
+[[ $url == http://127.0.0.1:7790/api/notifications/p1/host-token-0123 ]] && ok "a worker host posts through the tunnel's port" || fail "tunnel url: $url"
 
 # run-sortie.sh and run-workbench.sh: a stub kit, Sortie and workbench that
 # print what they were handed. Both scripts put $STAGE0_HOME/bin first on PATH.
