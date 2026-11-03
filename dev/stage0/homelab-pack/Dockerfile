@@ -13,8 +13,8 @@ RUN /opt/homelab-sandbox/install-tools.sh \
 # machine runs its commands as root unless it is created with `--user builder`
 # (measured on smolvm 1.32.4). With that, every command runs as builder, with
 # HOME=/home/builder, and /workspace, the machine's own disk (mode 1777), takes
-# Sortie's seeding as builder. WORKFLOW-homelab.md sets `user: builder`
-# (Sortie's environment.smolvm.user; design D12, amended 2026-10-31).
+# the worker daemon's seeding as builder. homelab-inputs.sh sets `user: builder`
+# (the daemon's smolvm.images; design D12, amended 2026-10-31).
 COPY harness/ /opt/stage0-harness/
 RUN /opt/stage0-harness/install-harness.sh builder /home/builder
 WORKDIR /workspace

@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from .alerts import Alerts
 from .autosync import SyncLoop, sync_project
 from .config import Config
 from .delivery import DeliveryWatch, GitHubClient, GitHubError
@@ -35,7 +36,8 @@ class ProjectRuntime:
 
     def __init__(self, project: Project, store: Path, config: Config, sortie: SortieClient,
                  sessions: SessionManager, validate=None, registry: Registry | None = None, broker_transport=None,
-                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None):
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
+                 alerts: Alerts | None = None):
         self.project = project
         self.store = store
         self.config = config
@@ -47,7 +49,8 @@ class ProjectRuntime:
         own = sortie.bind(project.huly_project, config.sortie_name)
         self.hub = Hub(self.plan, own, records=self.records, pulls=self.deliveries.pulls,
                        peers=[p.bind(project.huly_project, name) for name, p in (peers or {}).items()],
-                       previews=lambda: read_previews(config.previews_file))
+                       previews=lambda: read_previews(config.previews_file),
+                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None)
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
@@ -207,10 +210,12 @@ class ProjectManager:
 
     def __init__(self, config: Config, registry: Registry, sortie: SortieClient,
                  session_factory: SessionFactory | None = None, validate=None, broker_transport=None,
-                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None):
+                 github: GitHubClient | None = None, peers: dict[str, SortieClient] | None = None,
+                 alerts: Alerts | None = None):
         self.config = config
         self.github = github
         self.peers = peers or {}
+        self.alerts = alerts
         self.broker_transport = broker_transport
         self.registry = registry
         self.sortie = sortie
@@ -257,7 +262,7 @@ class ProjectManager:
         store = project.store(self.config.home)
         sessions = self.session_factory(project, store, self.runtime_dir(project))
         rt = ProjectRuntime(project, store, self.config, self.sortie, sessions, self.validate, self.registry,
-                            broker_transport=self.broker_transport, github=self.github, peers=self.peers)
+                            broker_transport=self.broker_transport, github=self.github, peers=self.peers, alerts=self.alerts)
         self.runtimes[project.slug] = rt
         await rt.start()
         return rt

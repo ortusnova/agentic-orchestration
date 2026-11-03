@@ -16,9 +16,9 @@
 #                            (the workflow's command source); this start
 #                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
-# The homelab profile reads exactly $STAGE0_HOME/github-token and
-# $STAGE0_HOME/claude-oauth-token, and falls back to neither gh nor a login.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
+#   SORTIE_NOTIFY_SECRET     $STAGE0_HOME/notify-credential, mode 0600, when
+#                            stage0.env names the operator's channel
 # Git reaches GitHub over HTTPS with that same token, through a credential
 # helper in a kit-owned global config (GIT_CONFIG_GLOBAL): no SSH agent and
 # no change to the operator's git settings.
@@ -27,10 +27,6 @@ set -euo pipefail
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
-STAGE0_PROFILE=${STAGE0_PROFILE:-control}
-# Values stage0.sh derives for the homelab profile (homelab-profile.sh).
-# shellcheck source=/dev/null
-[[ -s $STAGE0_HOME/profile.env ]] && . "$STAGE0_HOME/profile.env"
 die() { printf 'run-sortie.sh: %s\n' "$*" >&2; exit 1; }
 
 export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
@@ -40,30 +36,24 @@ STAGE0_HULY_TOKEN=$(python3 "$STAGE0_KIT_ROOT/dev/huly_project.py" "$STAGE0_HULY
 export STAGE0_GITHUB_TOKEN
 if [[ -s $STAGE0_HOME/github-token ]]; then
   STAGE0_GITHUB_TOKEN=$(cat "$STAGE0_HOME/github-token")
-elif [[ $STAGE0_PROFILE == homelab ]]; then
-  die "$STAGE0_HOME/github-token is missing; the homelab profile uses no other GitHub token"
 else
   STAGE0_GITHUB_TOKEN=$(gh auth token) || die "gh has no token: run gh auth login"
 fi
 export STAGE0_SORTIE_TOKEN
 STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
+# The operator's channel (notify-channel.sh): its webhook URL or bot token,
+# from the file only the operator writes, for the workflow's notifications.
+if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
+  # shellcheck source=notify-channel.sh
+  . "$(dirname "$0")/notify-channel.sh"
+  notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
+  export SORTIE_NOTIFY_SECRET
+  SORTIE_NOTIFY_SECRET=$(cat "$STAGE0_HOME/notify-credential")
+fi
 
 export CLAUDE_CODE_OAUTH_TOKEN
-token_args=()
-[[ $STAGE0_PROFILE == homelab ]] && token_args=(--setup-token-only)
-CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py" "${token_args[@]}") \
+CLAUDE_CODE_OAUTH_TOKEN=$("$(dirname "$0")/anthropic-token.py") \
   || die "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token"
-# homelab's guest kernel: smolvm boots machines on the libkrunfw in this folder.
-if [[ -n ${STAGE0_SMOLVM_LIB_DIR:-} ]]; then export SMOLVM_LIB_DIR=$STAGE0_SMOLVM_LIB_DIR; fi
-# homelab's vm age key, a test fixture (design D3): the workflow's pass_env
-# hands it to every guest command, and after_create writes it where sops
-# looks. An environment value, not a mount, to stay under smolvm's
-# shared-folder ceiling (homelab-profile.sh).
-if [[ $STAGE0_PROFILE == homelab ]]; then
-  [[ -s $STAGE0_HOME/inputs/vm-age/keys.txt ]] || die "$STAGE0_HOME/inputs/vm-age/keys.txt is missing: run stage0.sh"
-  HOMELAB_VM_AGE_KEY=$(cat "$STAGE0_HOME/inputs/vm-age/keys.txt")
-  export HOMELAB_VM_AGE_KEY
-fi
 export IS_SANDBOX=1
 unset ANTHROPIC_API_KEY OPENROUTER_API_KEY
 

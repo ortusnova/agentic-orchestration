@@ -29,9 +29,10 @@ else
   WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-workbench.sh: gh has no token: run gh auth login" >&2; exit 1; }
 fi
 # The other Sorties whose workers the workbench shows (agent-platform/run-supervision):
-# each one huly-tunnel.sh reached, as $STAGE0_HOME/sorties/<name>.env (its
-# address on this host's loopback, and the SOCKS forward that reaches its
-# agents' brokers on its host's loopback) and <name>.token (its control token).
+# each one as $STAGE0_HOME/sorties/<name>.env (its address on this host's
+# loopback, and the SOCKS forward that reaches its agents' brokers on its
+# host's loopback) and <name>.token (its control token). With one Sortie on
+# p1 there is none: stage0.sh deletes those the retired huly-tunnel.sh left.
 export WORKBENCH_SORTIE_NAME=${STAGE0_SORTIE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
 peers=()
 for f in "$STAGE0_HOME"/sorties/*.env; do
@@ -47,6 +48,14 @@ for f in "$STAGE0_HOME"/sorties/*.env; do
 done
 WORKBENCH_SORTIES=$(IFS=,; echo "${peers[*]}")
 export WORKBENCH_SORTIES
+# The operator's channel (notify-channel.sh): the workbench pushes each open
+# question there with a link to the home on STAGE0_WORKBENCH_PUBLIC_URL, and
+# again every 4 hours while it stays open. No kind, no channel.
+notify=()
+if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
+  notify=(WORKBENCH_NOTIFY_KIND="$STAGE0_NOTIFY_KIND" WORKBENCH_NOTIFY_CHAT_ID="${STAGE0_NOTIFY_CHAT_ID:-}"
+    WORKBENCH_NOTIFY_CREDENTIAL_FILE="$STAGE0_HOME/notify-credential")
+fi
 WB=$STAGE0_KIT_ROOT/workbench
 home=$STAGE0_HOME/home sessions=$STAGE0_HOME/sessions port=$STAGE0_WORKBENCH_PORT
 mode=(WORKBENCH_PREVIEWS="$STAGE0_HOME/previews.json")
@@ -61,6 +70,7 @@ fi
 cd "$WB"
 exec env WORKBENCH_HOME="$home" WORKBENCH_STORE="$STAGE0_STORE" WORKBENCH_HULY_PROJECT="$STAGE0_HULY_PROJECT" \
   WORKBENCH_SORTIE_URL="http://127.0.0.1:$STAGE0_SORTIE_PORT" WORKBENCH_SORTIE_TOKEN="$(cat "$STAGE0_HOME/sortie-token")" \
+  WORKBENCH_PUBLIC_URL="${STAGE0_WORKBENCH_PUBLIC_URL:-http://127.0.0.1:$STAGE0_WORKBENCH_PORT}" "${notify[@]}" \
   WORKBENCH_PASSWORD_HASH="$(cat "$STAGE0_HOME/workbench-password-hash")" \
   WORKBENCH_SECRET_KEY="$(cat "$STAGE0_HOME/workbench-secret")" \
   WORKBENCH_RUNTIME_DIR="$sessions" WORKBENCH_FRONTEND_DIR="$WB/frontend/dist" \
