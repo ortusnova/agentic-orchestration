@@ -79,7 +79,7 @@ the start instead of being ignored.
 | `control_plane.tls.cert_file`, `key_file` | no | | The worker's client certificate and key (PEM), once the control plane issues one. Both or neither; they need an `https` URL. The key is the one secret the worker keeps. |
 | `control_plane.tls.ca_file` | no | system roots | The CA that signs the control plane's (and the flows') server certificates. |
 | `control_plane.tls.server_name` | no | the URL's host | The name to verify the server certificate against. |
-| `run_slots` | no | `1` | How many jobs run at once. |
+| `run_slots` | no | from the host | How many jobs run at once. Unset or `0`: as many `smallest_job`s as the host's CPUs and memory hold above `reserve`, at least one. See [Run slots](#run-slots). |
 | `reserve.mem_gib` | yes | | Memory, in GiB, the host keeps for itself. `free.mem_gib` is what the host has available less this, less what running jobs were promised. |
 | `reserve.cpu` | no | `0` | CPUs the host keeps for itself. |
 | `floor.disk_gib` | yes | | Disk, in GiB, kept free on `disk_path`'s file system. `free.disk_gib` is what is available there less this, less running jobs' disks. |
@@ -110,6 +110,19 @@ holds `smallest_job`. When an offered job's `requires` exceeds what is free
 (the control plane counted with an older check-in), the daemon does not
 start it: it reports the attempt `failed`, machine `deleted`, with the
 reason, and Sortie retries it.
+
+### Run slots
+
+Without `run_slots`, each check-in declares
+`floor(min((CPUs - reserve.cpu) / smallest_job.cpu, (MemTotal - reserve.mem_gib) / smallest_job.mem_gib))`
+slots, at least one, from the host as it is then: a host that gains or
+loses CPUs or memory declares its new slots at its next check-in, with no
+change to this file. A dimension whose `smallest_job` figure is `0` does
+not bound it; with neither, the worker runs one job. A slot only lets a
+job be offered: each job still needs its own `requires` free, and free
+memory is the host's `MemAvailable` (macOS: `vm_stat`) now, so memory
+that anything else on the host takes, such as a model server or a
+sandbox, is not offered to a job.
 
 ### Host inputs of an image
 

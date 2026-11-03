@@ -7,7 +7,8 @@
 // to the service that serves it, and admits a flow request only when
 // Sortie's token introspection says its job token is live and granted for
 // that flow. The egress flow is the CONNECT proxy on the same port; its
-// service is nono's proxy, which holds the credentials.
+// service is nono's proxy, which holds the credentials. A live-proof job
+// that runs gets a second nono's, of the live-proof profile, instead.
 //
 // Pomerium and the CA in control-plane-images replace it later.
 package main
@@ -77,6 +78,21 @@ type Config struct {
 	Egress string `json:"egress"`
 	// EgressPassFile holds the credential nono's proxy takes.
 	EgressPassFile string `json:"egress_pass_file"`
+	// LiveProof, when set, is the egress of the live-proof profile: the
+	// jobs its file names reach the hosts of the second nono's profile.
+	LiveProof *LiveProof `json:"live_proof,omitempty"`
+}
+
+// LiveProof is the egress of live-proof jobs (agent-platform/run-supervision,
+// "A live criterion a story's machine cannot run becomes a live-proof job").
+type LiveProof struct {
+	// Egress is the host:port of the nono proxy that runs the live-proof
+	// profile, on loopback. It takes the same credential as Egress.
+	Egress string `json:"egress"`
+	// JobsFile lists the job of each live proof that runs, one issue
+	// identifier per line, as stage0-live-proofs writes it. A missing file
+	// lists none.
+	JobsFile string `json:"jobs_file"`
 }
 
 // LoadConfig reads and checks a configuration file.
@@ -117,6 +133,14 @@ func (c Config) Validate() error {
 			return fmt.Errorf("workers %s and %s share port %d; each tunnel needs its own", other, w.Name, w.Port)
 		}
 		ports[w.Port] = w.Name
+	}
+	if lp := c.LiveProof; lp != nil {
+		if lp.Egress == "" || lp.Egress == c.Egress {
+			return errors.New("live_proof.egress: want the live-proof nono's address, apart from egress")
+		}
+		if lp.JobsFile == "" {
+			return errors.New("live_proof.jobs_file is missing")
+		}
 	}
 	return nil
 }
@@ -258,7 +282,11 @@ func (e *Edge) Handler(worker string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		g, ok := e.admit(r.Context(), bearer(r.Header.Get("Authorization")), flow)
+		g, ok, err := e.admit(r.Context(), bearer(r.Header.Get("Authorization")), flow)
+		if err != nil {
+			unavailable(w)
+			return
+		}
 		if !ok {
 			e.log.Info("flow refused", slog.String("worker", worker), slog.String("flow", flow), slog.String("path", r.URL.Path))
 			w.Header().Set("WWW-Authenticate", `Bearer realm="sortie-job"`)
@@ -281,20 +309,30 @@ func isClean(p string) bool {
 	return c == p
 }
 
-// admit asks Sortie what token grants, and admits it only for flow.
-func (e *Edge) admit(ctx context.Context, token, flow string) (Grant, bool) {
+// admit asks Sortie what token grants, and admits it only for flow. An
+// error means Sortie could not answer, as while it restarts: nothing is
+// admitted, but the token is not refused either.
+func (e *Edge) admit(ctx context.Context, token, flow string) (Grant, bool, error) {
 	if token == "" {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
 	g, err := e.introspect(ctx, token)
 	if err != nil {
 		e.log.Warn("introspection failed", slog.String("flow", flow), slog.String("error", err.Error()))
-		return Grant{}, false
+		return Grant{}, false, err
 	}
 	if g == nil || g.Flow != flow {
-		return Grant{}, false
+		return Grant{}, false, nil
 	}
-	return *g, true
+	return *g, true, nil
+}
+
+// unavailable answers a request whose token Sortie could not check. It is
+// 503, which a worker retries while keeping its machine; a 401 would tell
+// it the control plane no longer knows the job.
+func unavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	http.Error(w, "Sortie cannot check the job token now; try again", http.StatusServiceUnavailable)
 }
 
 // introspect returns the grant of a live token, nil for any other.
@@ -361,7 +399,11 @@ func proxyToken(r *http.Request) string {
 // here, with the job and attempt the token belongs to.
 func (e *Edge) serveEgress(w http.ResponseWriter, r *http.Request, worker string) {
 	host := r.Host
-	g, ok := e.admit(r.Context(), proxyToken(r), egressFlow)
+	g, ok, err := e.admit(r.Context(), proxyToken(r), egressFlow)
+	if err != nil {
+		unavailable(w)
+		return
+	}
 	if !ok {
 		e.log.Info("flow refused", slog.String("worker", worker), slog.String("flow", egressFlow), slog.String("host", host))
 		w.Header().Set("Proxy-Authenticate", `Bearer realm="sortie-job"`)
@@ -369,7 +411,12 @@ func (e *Edge) serveEgress(w http.ResponseWriter, r *http.Request, worker string
 		return
 	}
 	attrs := []any{slog.String("worker", worker), slog.String("job", g.Job), slog.Uint64("attempt", g.Attempt), slog.String("host", host)}
-	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", e.cfg.Egress)
+	egress := e.cfg.Egress
+	if e.liveProof(g.Job) {
+		egress = e.cfg.LiveProof.Egress
+		attrs = append(attrs, slog.String("profile", "live-proof"))
+	}
+	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", egress)
 	if err != nil {
 		e.log.Warn("egress unreachable", append(attrs, slog.String("error", err.Error()))...)
 		http.Error(w, "egress is unreachable", http.StatusBadGateway)
@@ -414,6 +461,28 @@ func (e *Edge) serveEgress(w http.ResponseWriter, r *http.Request, worker string
 		return
 	}
 	pipe(client, buf.Reader, upstream, br)
+}
+
+// liveProof reports whether job is a live proof that runs: the live-proof
+// jobs file names it. The file is read on each CONNECT, so a live proof
+// gets its egress from its first request and loses it once it ends.
+func (e *Edge) liveProof(job string) bool {
+	if e.cfg.LiveProof == nil || job == "" {
+		return false
+	}
+	b, err := os.ReadFile(e.cfg.LiveProof.JobsFile) // #nosec G304 -- the configuration names the file
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			e.log.Warn("live-proof jobs unreadable", slog.String("error", err.Error()))
+		}
+		return false
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if strings.TrimSpace(line) == job {
+			return true
+		}
+	}
+	return false
 }
 
 // pipe copies both ways until either side ends, then closes both.

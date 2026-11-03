@@ -271,6 +271,8 @@ type setup struct {
 	images map[string]any
 	// nested, when set, is the configuration's smolvm.nested.
 	nested any
+	// autoSlots leaves run_slots out, so the slots follow the host.
+	autoSlots bool
 }
 
 func defaults() setup {
@@ -313,6 +315,9 @@ func newHarness(t *testing.T, s setup) *harness {
 		"state_dir":     state,
 		"smolvm":        map[string]any{"packs": map[string]string{testImage: pack}, "images": s.images, "nested": s.nested},
 		"log_level":     "debug",
+	}
+	if s.autoSlots {
+		delete(doc, "run_slots")
 	}
 	if !s.noUsage {
 		doc["usage_commands"] = map[string][]string{"*": usage}

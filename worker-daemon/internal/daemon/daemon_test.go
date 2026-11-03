@@ -305,6 +305,29 @@ func TestMemoryBelowTheReserve(t *testing.T) {
 	}
 }
 
+// Scenario: the slots follow the host. Without run_slots the daemon
+// declares the slots the host's CPUs and memory hold, from the snapshot
+// of each check-in, so a host that loses memory declares fewer at its
+// next check-in; free memory is still the host's MemAvailable.
+func TestSlotsFollowTheHost(t *testing.T) {
+	s := defaults()
+	s.autoSlots = true
+	s.reserveMem = 8
+	s.smallest = config.Size{CPU: 4, MemGiB: 8, DiskGiB: 20}
+	s.host.CPUs, s.host.MemTotalGiB, s.host.MemAvailableGiB = 32, 64, 30
+	h := newHarness(t, s)
+	h.waitFor("a check-in", 5*time.Second, func() bool { _, ok := h.fake.Declaration("taichi"); return ok })
+	d, _ := h.fake.Declaration("taichi")
+	if d.RunSlots != 7 || d.Free.MemGiB != 22 {
+		t.Errorf("run_slots %d, free.mem_gib %g; want 7 slots and MemAvailable less the reserve, 22", d.RunSlots, d.Free.MemGiB)
+	}
+	less := s.host
+	less.MemTotalGiB = 40
+	if got := h.d.Declaration(less).RunSlots; got != 4 {
+		t.Errorf("with 40 GiB the daemon declares %d slots, want 4", got)
+	}
+}
+
 func TestFreeNeverNegative(t *testing.T) {
 	s := defaults()
 	s.host.MemAvailableGiB = 10

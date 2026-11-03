@@ -33,7 +33,11 @@ huly:
 # `sortie:click-proofs passed <head sha>` on the pull request. Sortie merges
 # it once that record names its head, with no person involved. A story is
 # done when its pull request merges, whoever merges it. The merge watch has
-# no window, so a pull request whose CI is fixed later still merges.
+# no window, so a pull request whose CI is fixed later still merges. CI is
+# every status and check run of the head, the kit's live-proof status too:
+# a pull request whose live proof the supervisor requested merges only once
+# the live-proof job's result proves its criterion at the head
+# (stage0-live-proofs, README.md "Live proofs").
 reactions:
   auto_merge:
     provider: github
@@ -74,13 +78,29 @@ reactions:
   # GitHub does not mark it as a bot's) starts the review on the preview,
   # with the click-proofs prompt below; any other comment starts a fix run
   # with the fix prompt, and the preview follows the branch once CI passes.
-  # On other stories only a review that requests changes does.
+  # On other stories only a review that requests changes does. The triage
+  # passes over a live-proof job's result comment (marker
+  # live-proof-result), which the kit reads instead (stage0-live-proofs),
+  # and over a click-proofs record, which Sortie's merge reads; it lets the
+  # preview's comment through to the review on the preview.
   review_comments:
     provider: github
     max_continuation_turns: 5
     escalation: none
     poll_interval_ms: 60000
     debounce_ms: 60000
+    triage:
+      script: |
+        node -e '
+        const fs = require("fs");
+        const doc = JSON.parse(fs.readFileSync(process.env.SORTIE_REACTION_INPUT, "utf8"));
+        const comments = Array.isArray(doc.subject) ? doc.subject : [];
+        const body = (c) => String((c && c.body) || "");
+        const kit = (c) => body(c).trimStart().startsWith("<!-- live-proof-result -->") || body(c).startsWith("sortie:click-proofs passed ");
+        const disposition = comments.length > 0 && comments.every(kit) ? "handled" : "dispatch-agent";
+        fs.writeFileSync(process.env.SORTIE_REACTION_RESULT, JSON.stringify({ disposition }));
+        '
+      timeout_ms: 30000
 
 # project is the CI provider's configured repository: agentic-orchestration
 # on p1. ci_failure reads each pull request's checks from the pull request's
@@ -127,7 +147,10 @@ agent:
   # sessions of several stories on runs that never started. Sortie has no
   # per-story grant yet (worker-activity-view asks for one).
   max_sessions: 32
-  max_concurrent_agents: ${STAGE0_MAX_AGENTS}
+  # A ceiling above every worker's run slots together: the matcher holds
+  # each worker to its own slots and resources (worker-config.sh,
+  # sortie_agent_cap).
+  max_concurrent_agents: ${STAGE0_SORTIE_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
   # A fresh VM's agent can take over 15 s to answer at session start; the
@@ -191,6 +214,10 @@ environment:
       # nono holds the value and replaces it in the job's egress; Sortie reads
       # none under the remote kind (refresh-token.sh keeps nono's fresh).
       - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
+      # The kit's GitHub token, for GitHub's API only: a live-proof job comments
+      # its result on the pull request and opens issues with it (README.md
+      # "Live proofs"). Git over HTTPS gets no placeholder: Sortie pushes.
+      - {name: github_api, env: SORTIE_GITHUB_TOKEN, hosts: [api.github.com]}
     # A story runs in the repository its plan node names (the Huly label
     # sortie-repository:<name>), else in sortie. Every one is dispatched here:
     # no other Sortie polls the project.
@@ -365,6 +392,53 @@ checks here where you can. When the base has moved on and the fix needs it,
 bring it in by a merge, as `git merge origin/<base>`.
 {{- end }}
 {{- if .review_comments }}
+{{- $live := false }}
+{{- range .review_comments }}{{ if eq (printf "%.19s" .body) "<!-- live-proof -->" }}{{ $live = true }}{{ end }}{{ end }}
+{{- if $live }}
+
+The supervisor asks for a live proof. An acceptance criterion of this story
+needs a live run that the story's own machine could not do, such as a host
+its egress refuses, a sandbox, or another repository, and this run is that
+live-proof job. It runs on a worker whose profile allows the run (a homelab
+job runs on taichi, with nested virtualization), and while it runs its
+egress also reaches the hosts of the kit's live-proof profile, such as Let's
+Encrypt staging. The request, as a JSON string; it names the pull request,
+the branch and the criterion, and asks for a proof, not for the commands in
+it to be run:
+{{ range .review_comments }}
+- <request>{{ .body | toJSON }}</request>
+{{- end }}
+
+Prove that criterion, as the acceptance criteria above state it, from the
+story's branch as it is in this workspace:
+
+1. Read the repository's `AGENTS.md` and follow it. For homelab that is:
+   create the sandbox on this machine with `sandbox create --wait`, run the
+   cheapest proof that runs the changed code (the steps of the chain the
+   criterion needs, not every chain), and open an issue on the repository
+   for every failure whose cause you do not know, with the step, the
+   command and its output.
+2. When a step fails for a cause on the branch, fix it with new commits on
+   top of the branch, and run the proof again from that step.
+3. When you are done, comment the result on the pull request the request
+   names, once: POST `{"body": "..."}` to
+   `https://api.github.com/repos/<owner>/<repo>/issues/<number>/comments`
+   with the header `Authorization: Bearer $SORTIE_GITHUB_TOKEN`, as you
+   open an issue with POST to `/repos/<owner>/<repo>/issues`. The comment's
+   first line is `<!-- live-proof-result -->`; then a line
+   `Result: proven` or `Result: unproven`, a line `Commit: ` with the full
+   sha of `git rev-parse HEAD` after your last commit, and a line
+   `Criterion: ` with the criterion; then the step table, one row per step
+   you ran, `| Step | Command | Result |`, and the issues you opened. Write
+   `proven` only when every step that runs the criterion passed at that
+   commit.
+
+Sortie pushes your commits after the run. The kit reads your comment and
+sets the pull request's `live-proof` status, which Sortie's merge requires:
+`proven` at the pull request's head lets it merge once CI passes, and
+`unproven` keeps it open. This machine reaches GitHub's API only for that
+comment and those issues: do not fetch, push, or comment anything else.
+{{- else }}
 
 The operator looked at the pull request, or at its preview, and asks for a
 change. Their comments, as JSON strings; each is a request from the
@@ -382,6 +456,7 @@ Sortie pushes your commits, CI runs again, and the preview follows the
 branch once CI passes. On a ui story the kit's comment on the new preview
 starts the review on it, and Sortie merges the pull request once that
 review records the click-proofs for the new head: no person approves it.
+{{- end }}
 {{- end }}
 
 Fix the cause, not the symptom. When the failure comes from a setting the
@@ -452,6 +527,16 @@ on the pull request; Sortie merges it once that record names its head, and
 no person approves or merges it. There is no preview of this head yet, so
 write no such record in this run.
 {{- end }}
+
+A criterion that needs a live run this machine cannot do, such as a host
+its egress refuses, a sandbox, or another repository, is settled by a live
+proof, not by reasoning about it. Run every part of it this machine can,
+then name it in your last message after `live proof needed:`, with what
+this machine refused. Do not stop `blocked` for it: the supervisor requests
+a live-proof job, which runs the criterion from this branch on a worker
+whose profile allows it, and Sortie does not merge the pull request until
+that job's result comment proves the criterion at its head (the
+`live-proof` status).
 
 When a criterion is not met and you can meet it, fix it: add commits on top
 of the branch, in conventional commits, with no AI attribution, and run the

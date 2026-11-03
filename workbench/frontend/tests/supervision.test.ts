@@ -188,7 +188,97 @@ describe("Scenario: The home page's top row", () => {
     const box = $("[data-worker='taichi'] [data-job='ONS-34']")!;
     expect(box.textContent).toContain("live proof · seed-vm-recreate · 25 min");
     expect(box.style.left).not.toBe("");
-    expect(parseFloat(box.style.width)).toBeGreaterThan(5);
+    expect(parseFloat(box.style.width.replace(/^calc\(/, ""))).toBeGreaterThan(5);
+  });
+});
+
+describe("Scenario: The lanes in time", () => {
+  /** p1's three slots: slot 1 ran ONS-90 and runs ONS-34, with ONS-70 next; slot 2 ran ONS-91 and
+   * failed ONS-92, and is free with ONS-71 next; slot 3 is free, with two jobs past the axis. ONS-84
+   * waits for a capability no worker has, as the backend serves it (tests/workbench/test_timeline.py). */
+  function timed(): Fleet {
+    const run34 = job("ONS-34", "homelab/vm-chain", { sortie: "p1", worker: "p1", phase: "build", phase_text: "build", step: null,
+      started_at: NOW - 600, elapsed: 600, ends_at: NOW + 900, estimated: false });
+    const past = (identifier: string, key: string, from: number, to: number, status = "succeeded") =>
+      ({ ...ref(identifier, key), started_at: NOW + from, ended_at: NOW + to, status, rule: "build", phase: "build" as const, phase_text: "build", error: null });
+    const next = (identifier: string, key: string, from: number, len: number) =>
+      ({ ...ref(identifier, key), starts_at: NOW + from, ends_at: NOW + from + len, estimate: len, basis: "the median of 3 succeeded build runs", rule: "build", since: NOW - 60 });
+    const p1 = worker("p1", { sortie: "p1", remote: true, slots: 3, busy: 1, verdict: "moving", jobs: [run34],
+      lanes: [
+        { slot: 1, job: run34, stuck: null, extra: false, past: [past("ONS-90", "homelab/ran-a", -1700, -900)], next: [next("ONS-70", "agentic/ready", 900, 1000)] },
+        { slot: 2, job: null, stuck: null, extra: false, past: [past("ONS-91", "homelab/ran-b", -1500, -700), past("ONS-92", "homelab/ran-c", -600, -100, "failed")],
+          next: [next("ONS-71", "agentic/queued", 0, 1000)] },
+        { slot: 3, job: null, stuck: null, extra: false, past: [], next: [next("ONS-80", "agentic/q1", 3700, 600), next("ONS-81", "agentic/q2", 4300, 600)] },
+      ] });
+    return { generated_at: NOW, sorties: [{ name: "p1", reachable: true, error: null }], workers: [p1], pulls: [] };
+  }
+  function timedDoc(): MergedGraph {
+    const f = timed();
+    const home = { ...homeDoc(f), questions: [], lanes: { verdict: "healthy", reasons: [], busy: 1, slots: 3, runway: 2, generated_at: NOW, workers: f.workers,
+      waiting: [{ ...ref("ONS-84", "homelab/nested"), sortie: "p1", kind: "capability", reason: "worker p1: no nested virtualization",
+        release: "a worker checks in that has nested", since: NOW - 50 }], unattributed: 2 } };
+    return graph([synced("homelab"), synced("homelab/question")], [], { home, fleet: f });
+  }
+  const left = (el: HTMLElement) => parseFloat(el.style.left);
+  const right = (el: HTMLElement) => left(el) + parseFloat(el.style.width.replace(/^calc\(/, ""));
+
+  it("puts now at one third of an axis from 30 minutes back to an hour ahead", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: timedDoc() } });
+    await settle();
+    expect($$(".axis .tick").map((t) => t.textContent)).toEqual(["−30 min", "−15", "NOW", "+15", "+30", "+45", "+1 h"]);
+    expect(parseFloat($(".axis .tick.n")!.style.left)).toBeCloseTo(100 / 3, 5);
+    for (const now of $$("[data-worker='p1'] .lt .now")) expect(parseFloat(now.style.left)).toBeCloseTo(100 / 3, 5);
+  });
+
+  it("fills the bar left of now with the runs each slot ran", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: timedDoc() } });
+    await settle();
+    expect($$("[data-lane='2'] [data-past]").map((b) => b.dataset.past)).toEqual(["ONS-91", "ONS-92"]);
+    for (const b of $$("[data-past]")) expect(right(b)).toBeLessThanOrEqual(100 / 3);
+    const ran = $("[data-past='ONS-90']")!;
+    expect(left(ran)).toBeCloseTo((100 / 90) * (30 - 1700 / 60), 3);
+    expect(ran.classList.contains("ran")).toBe(true);
+    expect($("[data-past='ONS-92']")!.classList.contains("failed")).toBe(true);
+    expect(text("[data-past='ONS-90'] .tip")).toContain("ran 13 min");
+    expect(text("[data-unattributed]")).toContain("2 runs of the last hour ended on no worker");
+  });
+
+  it("draws the running job's elapsed time solid and its estimated rest hatched, across now", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: timedDoc() } });
+    await settle();
+    const box = $("[data-job='ONS-34']")!;
+    expect(left(box)).toBeLessThan(100 / 3);
+    expect(right(box)).toBeGreaterThan(100 / 3);
+    // 10 minutes run of 25: the solid share is 40 percent.
+    expect(box.style.getPropertyValue("--split")).toBe("40%");
+    expect(text("[data-worker='p1'] [data-lane='1'] .ll")).toContain("Build · working");
+    expect(text("[data-worker='p1'] [data-lane='1'] .ll")).toContain("~15 min left");
+    expect(text("[data-job='ONS-34'] .tip")).toContain("median of past runs");
+  });
+
+  it("fills the bar right of now with the queued jobs where the forecast places them", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: timedDoc() } });
+    await settle();
+    const after = $("[data-lane='1'] [data-next-job='ONS-70']")!;
+    expect(after.classList.contains("next")).toBe(true);
+    expect(left(after)).toBeCloseTo((100 / 90) * (30 + 15), 3);
+    const now = $("[data-lane='2'] [data-next-job='ONS-71']")!;
+    expect(left(now)).toBeCloseTo(100 / 3, 3);
+    expect(text("[data-lane='2'] .ll")).toContain("next: queued, now");
+    expect(text("[data-next-job='ONS-70'] .tip")).toContain("starts in about 15 min · takes about 17 min");
+    expect(text("[data-next-job='ONS-70'] .tip")).toContain("the median of 3 succeeded build runs");
+    // Past the axis's hour: counted, not drawn.
+    expect($$("[data-lane='3'] [data-next-job]")).toHaveLength(0);
+    expect(text("[data-lane='3'] .more")).toBe("+ 2 more");
+  });
+
+  it("shows a job no worker can take as waiting, with why, on no lane", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: timedDoc() } });
+    await settle();
+    expect($("[data-next-job='ONS-84']")).toBeNull();
+    const li = $("[data-waiting-for='ONS-84']")!;
+    expect(li.classList.contains("unowned")).toBe(true);
+    expect(li.textContent).toContain("worker p1: no nested virtualization; a worker checks in that has nested");
   });
 });
 
@@ -393,5 +483,59 @@ describe("the lanes' geometry and words", () => {
   });
   it("says a duration in words", () => {
     expect([duration(40), duration(1500), duration(7200), duration(null)]).toEqual(["40 s", "25 min", "2.0 h", "—"]);
+  });
+});
+
+describe("Scenario: Sortie's agent cap is reached", () => {
+  /** p1's one Sortie, cap 3: three jobs on p1, taichi's two lanes free, two stories waiting for a slot,
+   * as the backend serves it (tests/workbench/test_agent_cap.py). */
+  function capped(cap: number): Fleet {
+    const jobs = ["ONS-34", "ONS-52", "ONS-48"].map((id, i) => job(id, `homelab/j${i}`, { sortie: "p1", worker: "p1", slot: i + 1 }));
+    const waits: Wait[] = ["ONS-70", "ONS-71"].map((id) => ({ ...ref(id, `agentic/${id}`), sortie: "p1", kind: "slot",
+      reason: `No free agent slot: 3 of ${cap} running`, release: "Released when a running session ends.", since: NOW - 30 }));
+    const full = cap === 3;
+    const taichiReason = full
+      ? { code: "cap_full", text: "2 stories wait for a slot: Sortie runs 3 agents, its cap of 3 at once (agent.max_concurrent_agents)", identifier: null, key: null, action: null }
+      : { code: "slot_idle", text: "2 stories wait for a slot while 2 slots are free", identifier: "ONS-70", key: "agentic/ONS-70", action: "story" as const };
+    return {
+      generated_at: NOW,
+      sorties: [{ name: "p1", reachable: true, error: null, cap: { limit: cap, running: 3 } }],
+      workers: [
+        worker("p1", { sortie: "p1", remote: true, slots: 3, busy: 3, verdict: "moving", jobs, waits, next: waits,
+          reasons: [{ code: "moving", text: "3 jobs running in 3 slots, 2 items waiting", identifier: null, key: null, action: null }],
+          lanes: jobs.map((j, i) => ({ slot: i + 1, job: j, stuck: null, extra: false })) }),
+        worker("taichi", { sortie: "p1", remote: true, verdict: full ? "idle" : "stuck", waits, next: waits, capped: full, reasons: [taichiReason] }),
+      ],
+      pulls: [],
+    };
+  }
+  function doc(cap: number): MergedGraph {
+    const f = capped(cap);
+    const full = cap === 3;
+    const reasons = full
+      ? [{ code: "cap_full", text: "p1: 2 stories wait for a slot: Sortie runs 3 agents, its cap of 3 at once (agent.max_concurrent_agents)", identifier: null, key: null, action: null }]
+      : [{ code: "slot_idle", text: "taichi 2 stories wait for a slot while 2 slots are free", identifier: "ONS-70", key: "agentic/ONS-70", action: "story" as const }];
+    const home = { ...homeDoc(f), questions: [], lanes: { verdict: full ? "full" : "stuck", reasons, busy: 3, slots: 5, cap, runway: 2, generated_at: NOW, workers: f.workers } };
+    return graph([synced("homelab"), synced("homelab/question")], [], { home, fleet: f });
+  }
+
+  it("reads full, not stuck, with the cap as the reason", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: doc(3) } });
+    await settle();
+    expect($("[data-verdict]")!.dataset.verdict).toBe("full");
+    expect(text("[data-verdict] .big")).toBe("Full");
+    expect($("[data-verdict]")!.classList.contains("alert")).toBe(false);
+    expect(text("[data-summary]")).toBe("3 of 5 slots busy · Sortie cap 3 · 2 stories ready");
+    expect(text("[data-verdict] .reasons")).toContain("its cap of 3 at once");
+    expect($("[data-worker='taichi']")!.dataset.workerVerdict).toBe("idle");
+  });
+
+  it("reads stuck when a slot under the cap is free and work waits", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: doc(16) } });
+    await settle();
+    expect(text("[data-verdict] .big")).toBe("Stuck");
+    expect($("[data-verdict]")!.classList.contains("alert")).toBe(true);
+    expect(text("[data-summary]")).toBe("3 of 5 slots busy · 2 stories ready");
+    expect(text("[data-verdict] .reasons")).toContain("2 slots are free");
   });
 });

@@ -1,14 +1,18 @@
 <script lang="ts">
   import {
-    ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, missingText, WORKER_VERDICT_TEXT,
-    type Lanes, type Missing, type Reason, type Stuck, type Worker,
+    ACTION_TEXT, boxGeometry, capacityText, clockText, duration, LANE_FROM, LANE_TICKS, LANE_TO, lanePct, laneText, laneWindow,
+    leaseText, minutes, missingText, WORKER_VERDICT_TEXT,
+    type Job, type Lanes, type Missing, type Projected, type Reason, type Stuck, type Worker,
   } from "../lib/fleet";
   import { VERDICT_TEXT, waitWhat, type Health, type HomeQuestion } from "../lib/home";
   import { graphHref, watchHref, workersHref } from "../lib/router";
   import QuestionBox from "./QuestionBox.svelte";
 
-  /** The workers as slot lanes in time, one lane per agent slot, each job a
-   * box from its start to its estimated end; above them, whether work moves
+  /** The workers as slot lanes in time, one lane per agent slot, on an axis
+   * from 30 minutes back to an hour ahead, now at one third: left of now the
+   * runs each slot ran, at now the running job, its elapsed time solid and
+   * its estimated rest hatched, and right of now the jobs that wait for a
+   * slot where the forecast places them. Above them, whether work moves
    * or is stuck and why. They take the place of the Execution, Agent slots,
    * Runway and Needs a person tiles; the count of what needs a person stays
    * with the Needs a person section below. */
@@ -35,10 +39,25 @@
     return [...by.entries()];
   });
   const now = $derived(lanes?.generated_at ?? Date.now() / 1000);
-  const win = $derived(laneWindow(workers, now));
-  const ticks = $derived(hourTicks(win, now));
-  const nowAt = $derived(boxGeometry(now, now, win).left);
-  const tone = $derived(!verdict ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
+  const win = $derived(laneWindow(now));
+  const nowAt = lanePct(0, 0);
+  const waiting = $derived(lanes?.waiting ?? []);
+  const geo = (from: number, to: number) => boxGeometry(from, to, win);
+  const upper = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+  const overdue = (j: Job) => j.ends_at <= now;
+  const leftText = (j: Job) => (overdue(j) ? "overdue" : `~${minutes(j.ends_at - now)} left`);
+  // The elapsed share of a job's box, solid; the rest is its estimate, hatched.
+  const split = (j: Job) => {
+    const g = geo(j.started_at, Math.max(j.ends_at, now));
+    const n = lanePct(now, now) - g.left;
+    return g.width > 0 ? Math.max(0, Math.min(100, Math.round((n / g.width) * 100))) : 100;
+  };
+  const shown = (ns: Projected[] | undefined) => (ns ?? []).filter((x) => x.starts_at < win.end);
+  const hidden = (ns: Projected[] | undefined) => (ns ?? []).length - shown(ns).length;
+  const laterOf = (w: Worker) => w.waits.filter((x) => x.kind === "live_proof" && x.identifier);
+  // Waiting on the supervisor asks nothing of the operator: no alarm colour.
+  // Full is Sortie's cap at work, every agent it allows busy: no alarm either.
+  const tone = $derived(!verdict || verdict === "waiting" ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
   const word = (v: string | null) => (!v ? "No verdict" : (VERDICT_TEXT as Record<string, string>)[v] ?? v);
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
   // What the released stories wait on while slots are free, and who acts on each.
@@ -117,7 +136,7 @@
       <h2 id="lanes-h">Workers<span><a href={workersHref(slug)}>all workers</a></span></h2>
       <p class="big">{word(verdict)}</p>
       <p class="sum" data-summary>
-        {#if lanes}{`${lanes.busy}${lanes.slots != null ? ` of ${lanes.slots}` : ""} slots busy${lanes.runway != null ? ` · ${lanes.runway} ${lanes.runway === 1 ? "story" : "stories"} ready` : ""}`}
+        {#if lanes}{`${lanes.busy}${lanes.slots != null ? ` of ${lanes.slots}` : ""} slots busy${lanes.cap != null && (lanes.slots == null || lanes.cap < lanes.slots) ? ` · Sortie cap ${lanes.cap}` : ""}${lanes.runway != null ? ` · ${lanes.runway} ${lanes.runway === 1 ? "story" : "stories"} ready` : ""}`}
         {:else if health?.slots != null}{health.busy} of {health.slots} slots busy{/if}
       </p>
     </div>
@@ -144,56 +163,138 @@
 
   {#if workers.length}
     <div class="axis" aria-hidden="true">
-      <span class="who"></span>
-      <div class="ticks">{#each ticks as t (t.at)}<span style:left="{t.left}%">{t.label}</span>{/each}</div>
+      {#each LANE_TICKS as t (t.at)}
+        <span class="tick" class:n={t.at === 0} class:first={t.at === LANE_FROM} class:end={t.at === LANE_TO} style:left="{lanePct(now + t.at, now)}%">{t.label}</span>
+      {/each}
     </div>
     {#each workers as w (w.sortie + "/" + w.name)}
       <div class="worker" data-worker={w.name} data-worker-verdict={w.verdict}>
         <div class="wh">
-          <b>{w.name}</b>
+          <h3>{w.name}</h3>
+          <span class="busy"><b>{w.busy}</b> of {w.slots} slots busy</span>
           <span class="chip {w.verdict}">{WORKER_VERDICT_TEXT[w.verdict]}</span>
-          <span class="cap">{capacityText(w).join(" · ")}</span>
+          <span class="host">{capacityText(w).slice(1).join(" · ")}</span>
         </div>
         {#each w.lanes as lane (lane.slot)}
           {@const s = lane.stuck}
           {@const j = lane.job}
+          {@const nexts = shown(lane.next)}
           <div class="lane" data-lane={lane.slot} data-busy={!!j} data-stuck={!!s} aria-label={laneText(lane)}>
-            <span class="who">slot {lane.slot}</span>
-            <div class="track">
-              <i class="now" style:left="{nowAt}%" aria-hidden="true"></i>
+            <div class="ll">
+              <div class="no">Slot {lane.slot}</div>
               {#if j}
-                {@const g = boxGeometry(j.started_at, j.ends_at, win)}
-                <div class="box {j.phase}" class:held={!!j.hold} data-job={j.identifier} style:left="{g.left}%" style:width="{g.width}%"
-                  title="{j.label}: {j.phase_text}{j.step ? ` at ${j.step}` : ''}, {duration(j.elapsed)}{j.estimated ? ', end estimated' : ''}">
-                  <b>{j.label}</b><span class="mono" data-step>{j.phase_text}{j.step ? ` · ${j.step}` : ""} · {duration(j.elapsed)}</span>
-                </div>
+                <div class="st" class:stalled={!!j.hold || overdue(j)} class:working={!j.hold && !overdue(j)}>{upper(j.phase_text)} · {j.hold ? "held" : overdue(j) ? "overdue" : "working"}</div>
+                <div class="jt"><span class="id">{j.identifier}</span> <b>{j.label}</b></div>
+                <div class="jm"><b>{duration(j.elapsed)}</b> · <span class:alarm={overdue(j)}>{leftText(j)}</span>
+                  {#if j.key && j.identifier && !(s && s.action === "open")}<a class="btn ink sm" data-act="open" href={watchHref(slug, j.key, j.identifier)}>{ACTION_TEXT.open}</a>{/if}</div>
               {:else if s}
-                {@const g = boxGeometry(s.since ?? now, now, win)}
-                <div class="box stuck" data-stuck-box={s.identifier} style:left="{g.left}%" style:width="{Math.max(g.width, 12)}%"><b>{s.label}</b><span class="mono">stuck</span></div>
+                <div class="st stalled">Stuck</div>
+                <p class="alarm">{s.label}</p>
+              {:else}
+                <div class="st free">Free</div>
+                {#if nexts[0]}<p>next: {nexts[0].label}{nexts[0].starts_at > now + 30 ? ` in ~${minutes(nexts[0].starts_at - now)}` : ", now"}</p>{/if}
               {/if}
+            </div>
+            <div class="lt">
+              <i class="now" style:left="{nowAt}%" aria-hidden="true"></i>
+              {#each lane.past ?? [] as r (r.identifier + ":" + r.started_at)}
+                {@const g = geo(r.started_at, r.ended_at)}
+                <a class="job ran {r.status ?? ''}" class:cut={r.started_at < win.start} data-past={r.identifier} href={r.key ? storyHref(r.key) : undefined}
+                  style:left="{g.left}%" style:width="calc({g.width}% - 2px)">
+                  <span class="h"><span class="id">{r.identifier}</span><b>{r.label}</b></span>
+                  <span class="f"><span>{r.status ?? "ended"}</span><span>{duration(r.ended_at - r.started_at)}</span></span>
+                  <span class="tip" role="tooltip"><b>{r.identifier} {r.title}</b><span>{upper(r.phase_text)}{r.rule ? ` · rule ${r.rule}` : ""} · {r.status ?? "ended"}</span>
+                    <span>ran {duration(r.ended_at - r.started_at)}, {clockText(r.started_at, now)} to {clockText(r.ended_at, now)} · ended {duration(now - r.ended_at)} ago</span>
+                    {#if r.error}<span class="mute">{r.error}</span>{/if}</span>
+                </a>
+              {/each}
+              {#if j}
+                {@const g = geo(j.started_at, Math.max(j.ends_at, now))}
+                <svelte:element this={j.key && j.identifier ? "a" : "div"} class="job" class:stalled={!!j.hold || overdue(j)} class:cut={j.started_at < win.start}
+                  role={j.key && j.identifier ? undefined : "group"}
+                  href={j.key && j.identifier ? watchHref(slug, j.key, j.identifier) : undefined} data-job={j.identifier}
+                  style:left="{g.left}%" style:width="calc({g.width}% - 2px)" style:--split="{split(j)}%">
+                  <span class="h"><span class="id">{j.identifier}</span><b>{j.label}</b></span>
+                  <span class="f"><span class="mono" data-step>{j.phase_text}{j.step ? ` · ${j.step}` : ""} · {duration(j.elapsed)}</span><span class:alarm={overdue(j)}>{leftText(j)}</span></span>
+                  <span class="tip" role="tooltip"><b>{j.identifier} {j.title}</b>
+                    <span>{upper(j.phase_text)}{j.step ? ` · ${j.step}` : ""}{j.stage ? ` · rule ${j.stage}` : ""}</span>
+                    <span><b>{duration(j.elapsed)}</b> running, since {clockText(j.started_at, now)}</span>
+                    <span class:alarm={overdue(j)}>{overdue(j) ? `overdue: estimated to end at ${clockText(j.ends_at, now)}` : `${leftText(j)}, to about ${clockText(j.ends_at, now)}`} · {j.estimated ? "a default for its phase" : "median of past runs"}</span>
+                    {#if j.hold}<span class="alarm">{j.hold.reason}</span>{/if}
+                    {#if j.status_text}<span class="mute">{j.status_text}</span>{/if}</span>
+                </svelte:element>
+              {:else if s}
+                {@const g = geo(s.since ?? now - 300, now)}
+                <div class="job stalled" class:cut={(s.since ?? now) < win.start} data-stuck-box={s.identifier} style:left="{g.left}%" style:width="calc({g.width}% - 2px)">
+                  <span class="h"><span class="id">{s.identifier}</span><b>{s.label}</b></span><span class="f"><span class="alarm">stuck</span>{#if s.since}<span>{duration(now - s.since)}</span>{/if}</span>
+                </div>
+              {/if}
+              {#each nexts as x (x.identifier)}
+                {@const g = geo(x.starts_at, x.ends_at)}
+                <a class="job next" data-next-job={x.identifier} href={x.key ? storyHref(x.key) : undefined} style:left="{g.left}%" style:width="calc({g.width}% - 2px)">
+                  <span class="h"><span class="id">{x.identifier}</span><b>{x.label}</b></span>
+                  <span class="f">next · ~{minutes(x.estimate)}</span>
+                  <span class="tip" role="tooltip"><b>{x.identifier} {x.title}</b><span>Next on this slot, as the forecast places it{x.rule ? ` · rule ${x.rule}` : ""}</span>
+                    <span>{x.starts_at > now + 30 ? `starts in about ${minutes(x.starts_at - now)}` : "starts as soon as it is dispatched"} · takes about {minutes(x.estimate)}</span>
+                    <span class="mute">{x.basis}; the forecast flows again as slots open</span></span>
+                </a>
+              {/each}
+              {#if hidden(lane.next)}<span class="more">+ {hidden(lane.next)} more</span>{/if}
             </div>
           </div>
           {#if s}
             <div class="why" data-why={s.kind}>
               <p><b>Stuck:</b> {s.label} {s.reason}</p>
               {@render act(s, true)}
-              {#if j && j.key && j.identifier && s.action !== "open"}<a class="btn ink" data-act="open" href={watchHref(slug, j.key, j.identifier)}>{ACTION_TEXT.open}</a>{/if}
             </div>
             {@render resolve(s.key)}
-          {:else if j && j.key && j.identifier}
-            <div class="why run"><a class="btn ink sm" data-act="open" href={watchHref(slug, j.key, j.identifier)}>{ACTION_TEXT.open}</a></div>
           {/if}
         {/each}
         {#each w.stuck.filter((x) => x.slot == null) as s (s.identifier)}
           <div class="why" data-why={s.kind}><p><b>Also stuck:</b> {s.label} {s.reason}</p>{@render act(s, true)}</div>
           {@render resolve(s.key)}
         {/each}
-        <p class="next" data-next>
-          <b>Next:</b>
-          {#each w.next as x, i (`${x.identifier}:${x.kind}:${i}`)}{i ? "; " : " "}{#if x.key}<a href={storyHref(x.key)}>{x.label}</a>{:else}{x.label}{/if} ({x.reason}){:else} nothing waits on {w.name}{/each}
-        </p>
+        {#each w.waits.filter((x) => x.kind === "supervisor") as x (x.identifier)}
+          <div class="sup" data-wait-supervisor={x.identifier}>
+            <p>{#if x.key}<a href={storyHref(x.key)}>{x.label}</a>{:else}{x.label}{/if} {x.reason}</p>
+            {#if x.lease}<p class="lease" data-lease>{leaseText(x.lease, now)}</p>{/if}
+          </div>
+        {/each}
+        {#if laterOf(w).length || w.later || w.past_hidden}
+          <div class="later" data-next>
+            <h4>Then on {w.name}</h4>
+            <ul>
+              {#each laterOf(w) as x, i (`${x.identifier}:${i}`)}
+                <li><i></i>{#if x.key}<a href={storyHref(x.key)}><b>{x.label}</b></a>{:else}<b>{x.label}</b>{/if} <small>({x.reason})</small></li>
+              {/each}
+              {#if w.later}<li><i></i><b>+ {w.later} more</b><small>the forecast places them more than 6 hours ahead</small></li>{/if}
+              {#if w.past_hidden}<li><i></i><b>{w.past_hidden} earlier {w.past_hidden === 1 ? "run" : "runs"}</b><small>ran at once with more than its slots</small></li>{/if}
+            </ul>
+          </div>
+        {/if}
       </div>
     {/each}
+    {#if waiting.length}
+      <div class="later nowhere" data-waiting>
+        <h4>Waiting for a worker</h4>
+        <ul>
+          {#each waiting as x (x.identifier)}
+            <li class={x.kind === "capability" ? "unowned" : "held"} data-waiting-for={x.identifier}><i></i>{#if x.key}<a href={storyHref(x.key)}><b>{x.label}</b></a>{:else}<b>{x.label}</b>{/if}
+              <small>{x.reason}{x.release ? `; ${x.release}` : ""}</small></li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+    {#if lanes?.unattributed}
+      <p class="cap unattributed" data-unattributed>{lanes.unattributed} {lanes.unattributed === 1 ? "run" : "runs"} of the last hour ended on no worker the workbench saw running it; Sortie's run history does not record the worker.</p>
+    {/if}
+    <div class="legend" aria-hidden="true">
+      <span><i class="sw ran"></i>ran</span>
+      <span><i class="sw so-far"></i>run so far</span>
+      <span><i class="sw rest"></i>estimated rest</span>
+      <span><i class="sw next"></i>next on this slot (forecast)</span>
+      <span><i class="sw stalled"></i>stuck or overdue</span>
+    </div>
   {/if}
 </section>
 
@@ -222,39 +323,94 @@
   .ok-note { margin-top: 8px; font-size: 12.5px; color: var(--done); }
   .missing { margin-top: 8px; font-size: 12px; color: var(--amber-ink); }
 
-  .axis, .lane { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; }
-  .axis { margin-top: 14px; height: 16px; }
-  .ticks { position: relative; height: 16px; font: 500 10.5px var(--font-mono); color: var(--mute); }
-  .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
-  .worker { margin-top: 10px; padding: 10px 0 8px; border-top: 1px solid var(--hair); }
-  .wh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
-  .wh b { font-size: 14px; }
+  /* The prototype's lanes (.impeccable/mocks/execution/lanes.html): a label column, then the axis. */
+  .lanes-home { --label: 250px; }
+  .axis { position: relative; height: 40px; margin: 14px 0 0 var(--label); border-bottom: 1px solid var(--ink-rule); }
+  .tick { position: absolute; bottom: 5px; transform: translateX(-50%); white-space: nowrap; font: italic 400 15px var(--font-serif); color: var(--mute); }
+  .tick.first { transform: none; }
+  .tick.end { transform: translateX(-100%); }
+  .tick.n { bottom: 8px; padding: 2px 8px; border-radius: var(--r-tag); background: var(--ink-rule); color: #fff; font: 700 10px var(--font-sans); letter-spacing: 0.05em; }
+  .worker { margin-top: 18px; }
+  .wh { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 6px 0 8px; border-bottom: 1px solid var(--line); }
+  .wh h3 { width: calc(var(--label) - 14px); font: 700 24px/1.1 var(--font-sans); letter-spacing: -0.02em; }
+  .wh .busy { font-size: 15px; }
+  .wh .busy b { font-size: 20px; }
+  .wh .host { color: var(--mute); font: 500 11px var(--font-mono); }
   .chip { padding: 1px 8px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 11px; font-weight: 700; color: var(--mute); }
   .chip.stuck { border-color: #e9b8b3; background: #fbeceb; color: #8f241d; }
   .chip.moving { border-color: #bcd6c6; background: var(--done-tint); color: var(--done); }
   .chip.draining { border-color: #ecd9a8; background: var(--amber-tint); color: var(--amber-ink); }
-  .who { font: 500 11px var(--font-mono); color: var(--mute); }
-  .lane { min-height: 34px; }
-  .track { position: relative; height: 30px; border: 1.5px dashed var(--slate); border-radius: 5px; background: #fff; overflow: hidden; }
-  .lane[data-busy="true"] .track, .lane[data-stuck="true"] .track { border-style: solid; border-color: var(--line); }
-  .now { position: absolute; top: 0; bottom: 0; width: 1.5px; background: var(--amber); }
-  .box { position: absolute; top: 2px; bottom: 2px; display: flex; align-items: center; gap: 8px; padding: 0 8px; border-radius: 4px; background: var(--ink); color: #fff; overflow: hidden; white-space: nowrap; font-size: 12px; }
-  .box .mono { font: 500 10.5px var(--font-mono); color: #d1d1d6; overflow: hidden; text-overflow: ellipsis; }
-  .box.review { background: #3c4a63; }
-  .box.fix { background: #6b4a1e; }
-  .box.live_proof { background: #1f5a42; }
-  .box.deploy { background: #4b3a6b; }
-  .box.stuck, .box.held { background: #fbeceb; color: #8f241d; border: 1.5px solid var(--alert); }
-  .box.stuck .mono, .box.held .mono { color: #8f241d; }
-  .why { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 2px 0 6px 72px; font-size: 12.5px; color: #6f1c16; }
-  .why.run { justify-content: flex-end; margin-top: -2px; }
+  .lane { display: grid; grid-template-columns: var(--label) 1fr; min-height: 96px; border-bottom: 1px solid var(--hair); }
+  .ll { min-width: 0; padding: 12px 14px 10px 0; }
+  .ll .no { font: 700 11px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .ll .st { margin-top: 2px; font-weight: 600; }
+  .st.working { color: var(--amber-ink); }
+  .st.stalled { color: var(--alert); }
+  .st.free { color: var(--slate-ink); font: italic 400 17px var(--font-serif); }
+  .ll p { margin-top: 2px; color: var(--mute); overflow-wrap: anywhere; }
+  .ll p.alarm { color: var(--alert); font-weight: 600; }
+  .jt { margin-top: 4px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .jt b { font-weight: 600; }
+  .jm { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; color: var(--mute); font-variant-numeric: tabular-nums; }
+  .jm b { color: var(--ink); }
+  .jm .btn { margin-left: 8px; }
+  .alarm { color: var(--alert) !important; }
+  .id { font: 500 11px var(--font-mono); color: var(--mute); }
+  .lt { position: relative; min-height: 96px; }
+  .now { position: absolute; top: 0; bottom: 0; width: 1.5px; background: var(--ink-rule); z-index: 2; pointer-events: none; }
+  .job { position: absolute; z-index: 3; top: 18px; height: 60px; min-width: 6px; padding: 7px 10px; display: flex; flex-direction: column; justify-content: space-between;
+    border: 1.5px solid var(--amber); border-radius: var(--r-card); color: var(--ink); text-align: left; text-decoration: none; font-size: 13px;
+    background: linear-gradient(to right, var(--amber-tint) 0 var(--split, 100%), transparent var(--split, 100%)), repeating-linear-gradient(135deg, #fff 0 6px, rgba(201, 138, 26, 0.18) 6px 7px);
+    transition: box-shadow 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  a.job:hover { box-shadow: var(--shadow-lift); }
+  .job:hover, .job:focus-visible { z-index: 6; }
+  .job .h, .job .f { display: flex; gap: 6px; align-items: baseline; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .job .h b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .job .f { gap: 12px; color: var(--mute); font-variant-numeric: tabular-nums; }
+  .job .f .mono { overflow: hidden; text-overflow: ellipsis; }
+  .job.stalled { border-color: var(--alert); background: #fff; }
+  .job.next { border: 1.5px dashed var(--slate); background: #fff; color: var(--mute); }
+  .job.ran { border-color: var(--slate); background: var(--strip); color: var(--slate-ink); }
+  .job.ran.failed, .job.ran.cancelled { border-color: #e9b8b3; }
+  .job.cut { border-left-style: dashed; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .more { position: absolute; right: 6px; top: 36px; color: var(--mute); font-weight: 600; }
+  .tip { display: none; position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 7; min-width: 280px; max-width: 380px; padding: 10px 12px; flex-direction: column; gap: 3px;
+    border-radius: var(--r-button); background: var(--ink); color: #fff; white-space: normal; font-weight: 400; box-shadow: 0 10px 24px -12px rgba(20, 22, 26, 0.5); pointer-events: none; }
+  .tip b { font-weight: 600; }
+  .tip span { color: #d6d6da; }
+  .tip .mute { color: var(--ink-mute); }
+  .tip .alarm { color: #f08a80 !important; }
+  .job:hover .tip, .job:focus-visible .tip { display: flex; }
+  .why { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 6px 0 6px var(--label); font-size: 12.5px; color: #6f1c16; }
   .why p { min-width: 0; overflow-wrap: anywhere; }
-  .resolve { margin: 0 0 8px 72px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+  .later { display: grid; grid-template-columns: var(--label) 1fr; padding: 8px 0 4px; }
+  .later h4 { padding-top: 3px; font: 700 11px var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .later ul { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .later li { display: flex; gap: 6px; align-items: baseline; }
+  .later li i { width: 7px; height: 7px; border-radius: 50%; background: var(--slate); display: inline-block; flex: none; }
+  .later li a { color: inherit; }
+  .later li small { color: var(--mute); }
+  .later li.unowned { color: var(--alert); }
+  .later li.unowned i { background: var(--alert); }
+  .later li.held { color: var(--alert); }
+  .later li.held i { background: none; border: 1.5px solid var(--alert); }
+  .nowhere { margin-top: 14px; border-top: 1px solid var(--line); }
+  .unattributed { margin: 8px 0 0 var(--label); }
+  .legend { margin: 18px 0 0 var(--label); color: var(--mute); display: flex; gap: 22px; flex-wrap: wrap; font-size: 12.5px; }
+  .sw { display: inline-block; width: 22px; height: 10px; margin-right: 6px; border-radius: var(--r-swatch); vertical-align: -1px; }
+  .sw.ran { border: 1.5px solid var(--slate); background: var(--strip); }
+  .sw.so-far { border: 1.5px solid var(--amber); background: var(--amber-tint); }
+  .sw.rest { border: 1.5px dashed var(--amber); background: repeating-linear-gradient(135deg, #fff 0 4px, rgba(201, 138, 26, 0.3) 4px 5px); }
+  .sw.next { border: 1.5px dashed var(--slate); }
+  .sw.stalled { border: 1.5px solid var(--alert); }
+  .resolve { margin: 0 0 8px var(--label); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
   .grant { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
   .grant input { width: 64px; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r-button); }
   .err { margin-top: 6px; color: var(--alert); font-size: 12px; }
-  .next { margin: 4px 0 0 72px; font-size: 12.5px; color: var(--ink); }
-  .next a { color: inherit; }
+  .sup { margin: 2px 0 6px var(--label); padding: 6px 10px; border-left: 3px solid var(--slate); background: var(--panel); font-size: 12.5px; color: var(--ink); }
+  .sup p { overflow-wrap: anywhere; }
+  .sup a { color: inherit; font-weight: 600; }
+  .sup .lease { color: var(--mute); font-size: 12px; }
   .cap { font-size: 11.5px; color: var(--mute); }
   .btn { flex: none; display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; white-space: nowrap; }
   .btn.sm { height: 22px; }
@@ -263,6 +419,7 @@
   .btn:disabled { opacity: 0.45; cursor: default; }
   @media (max-width: 760px) {
     .head { grid-template-columns: 1fr; }
-    .why, .resolve, .next { margin-left: 0; }
+    .lanes-home { --label: 120px; }
+    .why, .resolve, .sup { margin-left: 0; }
   }
 </style>

@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -171,13 +173,21 @@ func TestFlowRequestsTheEdgeRefuses(t *testing.T) {
 		t.Errorf("Sortie's worker API was reached: %q", h.sortie.paths)
 	}
 
-	// While Sortie cannot answer, nothing is admitted.
+	// While Sortie cannot answer, as while it restarts, nothing is
+	// admitted, and the answer is 503, not 401: the worker dials again
+	// and keeps its machine, where a 401 would tell it the job is gone.
 	tok := h.sortie.mint("stdio")
 	h.sortie.Close()
 	req, _ := http.NewRequest(http.MethodGet, "/stdio/x", nil)
 	req.Header.Set("Authorization", "Bearer "+tok)
-	if status, _ := h.do("taichi", req); status != http.StatusUnauthorized {
-		t.Errorf("with Sortie down: %d, want 401", status)
+	if status, _ := h.do("taichi", req); status != http.StatusServiceUnavailable {
+		t.Errorf("with Sortie down: %d, want 503", status)
+	}
+	if h.services["stdio"].hits() != 0 {
+		t.Error("the stdio service was reached with Sortie down")
+	}
+	if status := h.connect("taichi", "api.anthropic.com:443", h.sortie.mint("egress")); status != http.StatusServiceUnavailable {
+		t.Errorf("egress with Sortie down: %d, want 503", status)
 	}
 }
 
@@ -266,5 +276,61 @@ func TestConfigValidate(t *testing.T) {
 	}
 	if err := (Config{Workers: []Worker{{"taichi", 7701}, {"mac.lan", 7702}}}).Validate(); err != nil {
 		t.Errorf("two workers: %v", err)
+	}
+}
+
+// agent-platform/run-supervision#A live criterion a story's machine cannot
+// run becomes a live-proof job, scenario A vm chain the story's machine
+// cannot run: the story's own job is refused Let's Encrypt staging by the
+// kit's egress, and once stage0-live-proofs names its live proof as running,
+// the same job's CONNECT goes to the live-proof nono, which allows it.
+func TestALiveProofJobGetsTheLiveProofEgress(t *testing.T) {
+	const staging = "acme-staging-v02.api.letsencrypt.org:443"
+	ca := newTestCA(t)
+	nono := startFakeNono(t, ca, http.NotFoundHandler())
+	live := startFakeNono(t, ca, http.NotFoundHandler())
+	live.pass = nono.pass
+	live.allowed[staging] = true
+	h := newHarness(t, nono.addr, nono.pass)
+	jobs := filepath.Join(t.TempDir(), "active")
+	h.edge.cfg.LiveProof = &LiveProof{Egress: live.addr, JobsFile: jobs}
+
+	if status := h.connect("taichi", staging, h.sortie.mint("egress")); status != http.StatusForbidden {
+		t.Fatalf("the story's job reached Let's Encrypt staging: %d, want the kit's 403", status)
+	}
+	if err := os.WriteFile(jobs, []byte("ONS-12\nONS-7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := h.connect("taichi", staging, h.sortie.mint("egress")); status != http.StatusOK {
+		t.Fatalf("the live-proof job's CONNECT answered %d, want 200 through the live-proof nono", status)
+	}
+	if nono.connectCount() != 1 || live.connectCount() != 1 {
+		t.Errorf("connects: kit %d, live-proof %d; want 1 each", nono.connectCount(), live.connectCount())
+	}
+	if !strings.Contains(h.log.String(), `msg="egress tunnel" worker=taichi job=ONS-7 attempt=1 host=`+staging+` profile=live-proof`) {
+		t.Errorf("the live-proof tunnel is not logged with its profile:\n%s", h.log)
+	}
+
+	// The live proof ends: its job, on any worker, is back on the kit's egress.
+	if err := os.WriteFile(jobs, []byte("ONS-12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := h.connect("mac", staging, h.sortie.mint("egress")); status != http.StatusForbidden {
+		t.Fatalf("after its live proof the job's CONNECT answered %d, want the kit's 403", status)
+	}
+}
+
+func TestLiveProofConfigValidate(t *testing.T) {
+	for name, lp := range map[string]*LiveProof{
+		"no egress":        {JobsFile: "/x/active"},
+		"the kit's egress": {Egress: "127.0.0.1:7690", JobsFile: "/x/active"},
+		"no jobs file":     {Egress: "127.0.0.1:7691"},
+	} {
+		if err := (Config{Egress: "127.0.0.1:7690", LiveProof: lp}).Validate(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if err := (Config{Egress: "127.0.0.1:7690", LiveProof: &LiveProof{Egress: "127.0.0.1:7691", JobsFile: "/x/active"}}).Validate(); err != nil {
+		t.Errorf("a live-proof egress: %v", err)
 	}
 }

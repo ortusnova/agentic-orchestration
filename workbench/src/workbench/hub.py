@@ -10,12 +10,14 @@ from typing import Any, Awaitable, Callable
 
 from .autosync import approved_digest
 from .fleet import build_fleet, lanes_summary, merge_waits, run_phases, story_states
+from .leases import leases_of
 from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
+from .timeline import RunHistory, RunWorkers
 from .workers import worker_fields
 
 log = logging.getLogger(__name__)
@@ -26,7 +28,8 @@ _UNSET = object()
 class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
                  peers: list[ProjectSortie] | None = None, previews=None,
-                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None):
+                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
+                 history: RunHistory | None = None):
         self.plan = plan
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
@@ -38,6 +41,9 @@ class Hub:
         self.alerts = alerts
         # What each worker does and what waits on it (agent-platform/run-supervision).
         self.fleet: dict[str, Any] = {"workers": [], "pulls": [], "sorties": [], "where": {}}
+        # Each Sortie's recent runs, the worker each ran on, and its rules'
+        # medians: the lanes' past and their forecast (timeline.py).
+        self.run_history = history or RunHistory(RunWorkers())
         # The Sortie that last ran, parked or held each issue, by identifier.
         self.last_where: dict[str, str] = {}
         # Called, from any thread, when the approved part of the graph changes.
@@ -66,6 +72,9 @@ class Hub:
         # The open question of each parked issue, by tracker identifier, and
         # the per-issue responses that gave their statements, by park.
         self.questions: dict[str, dict[str, Any]] = {}
+        # The supervisor's leases on stories, by identifier (leases.py): a
+        # story under one asks no person, whatever its park says.
+        self.leases: dict[str, dict[str, Any]] = {}
         self._park_details: dict[tuple[str, str, Any], dict[str, Any]] = {}
         self.history = History()
         # Read-only: never pull back an edited story on its own.
@@ -140,6 +149,7 @@ class Hub:
             self.questions = await self._questions(self._peer_pairs())
             return self._peer_fields()
         self.agent_state, self.state_error = state, None
+        await self._runs(self.sortie, state)
         self.questions = await self._questions([(self.sortie, state)] + self._peer_pairs())
         fields = worker_fields(state) if any(n.get("runtime") for n in graph.get("nodes") or []) else {}
         return {**self._peer_fields(), **fields}
@@ -160,6 +170,17 @@ class Hub:
             except SortieError as exc:
                 log.warning("sortie %s state unavailable: %s", peer.name, exc)
                 self.peer_states[peer.name] = (None, exc.message)
+            else:
+                await self._runs(peer, self.peer_states[peer.name][0])
+
+    async def _runs(self, sortie: ProjectSortie, state: dict[str, Any] | None) -> None:
+        """Note the worker of each run the state lists, and read the Sortie's
+        recent runs when due: the lanes' past and forecast."""
+        self.run_history.workers.observe(sortie.name, state)
+        try:
+            await self.run_history.refresh(sortie.name, sortie)
+        except Exception:  # the run history must never stop the poll
+            log.exception("could not read %s's run history", sortie.name)
 
     def _peer_pairs(self) -> list[tuple[ProjectSortie, dict[str, Any]]]:
         return [(p, s) for p in self.peers if (s := self.peer_states.get(p.name, (None, None))[0]) is not None]
@@ -184,13 +205,17 @@ class Hub:
             return None
         out: dict[str, Any] = {k: list(self.agent_state.get(k) or []) for k in ("running", "retrying", "budget_exhausted", "parked")}
         cap = ((self.agent_state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+        workers = list(((self.agent_state.get("workers") or {}).get("workers")) or [])
         for _, s in self._peer_pairs():
             for k in out:
                 out[k] += list(s.get(k) or [])
+            workers += list(((s.get("workers") or {}).get("workers")) or [])
             more = ((s.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
             if isinstance(cap, int) and isinstance(more, int):
                 cap += more
         out["config"] = {"agent": {"max_concurrent_agents": cap} if isinstance(cap, int) else {}}
+        if workers:
+            out["workers"] = {"workers": workers}
         return out
 
     async def _questions(self, states: list[tuple[ProjectSortie, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
@@ -263,8 +288,10 @@ class Hub:
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
                               self.previews(), run_phases(states), merge_waits(states))
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
+        self.leases = leases_of(self.states())
         try:
-            self.fleet = build_fleet(self.states(), doc["nodes"], statements)
+            self.fleet = build_fleet(self.states(), doc["nodes"], statements, leases=self.leases,
+                                     history=self.run_history)
             self.last_where.update(self.fleet["where"])
             held = {h["issue_identifier"]: {**h, "sortie": name} for name, s, _ in self.states() if s
                     for h in s.get("held") or [] if isinstance(h, dict) and h.get("issue_identifier")}
@@ -276,7 +303,8 @@ class Hub:
             n.update(self.fields.get(n["plan_key"], {}))
             ident = (n.get("tracker") or {}).get("identifier")
             if n.get("kind") == "story":
-                n["question"] = self.questions.get(ident) if ident else None
+                n["question"] = self.questions.get(ident) if ident and ident not in self.leases else None
+                n["lease"] = self.leases.get(ident) if ident else None
                 n["run_state"] = runs.get(ident) if ident else None
                 peer = self.workers.get(ident or "", {}).get("sortie")
                 if peer and not n.get("runtime") and n.get("tracker"):
@@ -329,12 +357,13 @@ class Hub:
                 graph=snap["graph"], nodes=doc.get("nodes") or [], fields=self.fields, planning=self.plan.planning,
                 plan_states=doc.get("plan_states"), tracker_known=self.tracker is not None, valid=snap["valid"],
                 errors=len(snap["errors"]), history=self.history,
-                questions=home_questions(self.questions, doc.get("nodes") or []),
+                questions=home_questions(self.open_questions(), doc.get("nodes") or []),
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
                     "state": self.merged_state(), "state_error": self.state_error, "sync": doc.get("sync"),
-                    "statements": {i: q["statement"] for i, q in self.questions.items() if q["statement"]},
+                    "statements": {i: q["statement"] for i, q in self.open_questions().items() if q["statement"]},
+                    "leases": self.leases,
                 },
             )
         except Exception:  # the home must never take the graph down with it
@@ -343,6 +372,11 @@ class Hub:
         home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
+
+    def open_questions(self) -> dict[str, dict[str, Any]]:
+        """The questions that wait on a person: none of a story the
+        supervisor holds, whose lease, live or expired, says what it waits on."""
+        return {i: q for i, q in self.questions.items() if i not in self.leases}
 
     def _publish(self, doc: dict[str, Any]) -> None:
         if self._loop is None:

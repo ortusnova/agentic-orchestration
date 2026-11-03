@@ -1,15 +1,17 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import { graphHref } from "../lib/router";
-  import { plainTask, REASON_TEXT, slackText, slackWidth, type Column, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import { plainTask, REASON_TEXT, slackText, slackWidth, type Column, type ExpiredHold, type HomeQuestion, type NotReadyItem } from "../lib/home";
   import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, questions = [], slug, marks, onapprove, onanswer, onreplace,
+    items, questions = [], expiredHolds = [], slug, marks, onapprove, onanswer, onreplace,
   }: {
     items: NotReadyItem[];
     /** The open questions of parked stories, ranked first. */
     questions?: HomeQuestion[];
+    /** The stories whose supervisor lease ran out, ranked after the questions. */
+    expiredHolds?: ExpiredHold[];
     slug: string;
     marks: Set<string>;
     /** Approve stories; resolves to an error message, or null. */
@@ -68,7 +70,7 @@
 
 <section class="needs" aria-labelledby="needs-h">
   <div class="head">
-    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {questions.length + person.length} by urgency</span></h2>
+    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {questions.length + expiredHolds.length + person.length} by urgency</span></h2>
     <p class="legend">
       <span>The bar is the time before an item holds agents up, in stories until estimates exist. Shorter is more urgent.</span>
       <span class="key"><i class="u-now"></i>blocking now</span>
@@ -79,7 +81,7 @@
   <div class="cols">
     <div class="col" data-column="answer">
       <div class="ch"><h3>Answer</h3><span>{questions.length} · {questions.length === 1 ? "an agent waits" : "agents wait"}</span></div>
-      {#if !questions.length}
+      {#if !questions.length && !expiredHolds.length}
         <p class="none">No agent waits on an answer.</p>
       {/if}
       <ol>
@@ -91,6 +93,16 @@
               <span class="note">{[q.identifier, q.title].join(" · ")}</span>
               <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)}
                 replacedBy={q.replaced_by ?? null} onreplace={onreplace && q.replaced_by ? () => onreplace(q.replaced_by!.key) : undefined} />
+            </div>
+          </li>
+        {/each}
+        {#each expiredHolds as h (h.key)}
+          <li class="item q hot" class:moved={marks.has(h.key)} data-rank={h.rank} data-key={h.key} data-expired-hold={h.identifier}>
+            <span class="rk" aria-label="Rank {h.rank}">{h.rank}</span>
+            <div class="body">
+              <a class="name" href={graphHref(slug, { epic: h.change, selected: h.key })} title="{h.key}: {h.title}">{h.label}</a>
+              <span class="note">{[h.identifier, h.title].join(" · ")}</span>
+              <p class="expired" data-expired-text>{h.text.charAt(0).toUpperCase() + h.text.slice(1)}. Release the hold in Sortie, or ask the supervisor to renew it.</p>
             </div>
           </li>
         {/each}
@@ -169,6 +181,7 @@
   }
   .name:hover { text-decoration: underline; text-underline-offset: 3px; }
   .note { font-size: 11.5px; color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .expired { margin-top: 4px; font-size: 12.5px; color: #6f1c16; overflow-wrap: anywhere; }
   .slack { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; }
   .sbar { position: relative; flex: none; width: 96px; height: 8px; border-radius: 4px; background: var(--strip); overflow: hidden; }
   .sbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }

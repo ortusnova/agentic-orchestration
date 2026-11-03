@@ -13,6 +13,7 @@ package orchestrator
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -209,8 +210,13 @@ func TestStage0_ThePreviewCommentStartsTheReviewOnThePreview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review_comments: %v", err)
 	}
-	if reviewCfg.Triage.Enabled() {
-		t.Error("review_comments has a triage: the kit's preview comment must reach the agent")
+	if !reviewCfg.Triage.Enabled() {
+		t.Error("review_comments has no triage: a live-proof job's result would start a fix run")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Log("no node on PATH: the triage of the preview comment is not run")
+	} else if got := runTriage(t, []map[string]any{{"id": "issuecomment-9", "reviewer": "brian", "body": previewComment(uiHeadSHA)}}); got != "dispatch-agent" {
+		t.Errorf("triage of the preview comment = %q, want dispatch-agent: it must reach the agent", got)
 	}
 
 	// The review's passing exit starts the watch on the pull request.
@@ -221,6 +227,8 @@ func TestStage0_ThePreviewCommentStartsTheReviewOnThePreview(t *testing.T) {
 		t.Fatalf("no review watch after the ui story's review; reactions = %v", f.state.PendingReactions)
 	}
 
+	// The triage runs in the machine; here the comment goes to the agent.
+	reviewCfg.Triage = config.ReactionTriageConfig{}
 	state := stateWithReviewReaction(t, "UI-1", 80)
 	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
 	forge := &commentForge{conversation: []domain.ReviewComment{{
@@ -284,6 +292,8 @@ func TestStage0_AnOperatorCommentStartsAFixRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review_comments: %v", err)
 	}
+	// The triage runs in the machine; here the comment goes to Sortie.
+	reviewCfg.Triage = config.ReactionTriageConfig{}
 	state := stateWithReviewReaction(t, "UI-1", 80)
 	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
 	forge := &commentForge{conversation: []domain.ReviewComment{{
@@ -325,6 +335,8 @@ func TestStage0_TheClickProofsRecordStartsNoRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review_comments: %v", err)
 	}
+	// The triage runs in the machine; here the comment goes to Sortie.
+	reviewCfg.Triage = config.ReactionTriageConfig{}
 	state := stateWithReviewReaction(t, "UI-1", 80)
 	state.PendingReactions[ReactionKey("UI-1", ReactionKindReview)].RuleName = w.review.Name
 	forge := &commentForge{conversation: []domain.ReviewComment{{

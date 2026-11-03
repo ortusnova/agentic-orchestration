@@ -18,6 +18,7 @@ import networkx as nx
 from planlib import milestones as ms
 
 from .delivery import pull_url
+from .leases import expired_text, holder
 from .questions import statement_of
 
 # Slack, in stories, up to which an item is "soon" rather than "later".
@@ -57,10 +58,14 @@ def tracker_states(nodes: Iterable[dict[str, Any]], plan_states: dict[str, str] 
 
 
 def held_runs(state: dict[str, Any], key_of: dict[str, str],
-              statements: dict[str, str] | None = None) -> list[dict[str, Any]]:
+              statements: dict[str, str] | None = None,
+              leases: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Runs that wait on a permission, a budget or a person. A parked story
     carries the agent's question: ``statements`` holds the whole ones, by
-    tracker identifier, where the state may shorten them."""
+    tracker identifier, where the state may shorten them. A story under a
+    live lease of the supervisor waits on the supervisor and is none of
+    them; one whose lease expired waits on a person again, for that."""
+    leases = leases or {}
     out = []
     for r in state.get("running") or []:
         if r.get("held"):
@@ -71,9 +76,15 @@ def held_runs(state: dict[str, Any], key_of: dict[str, str],
                     "reason": _words(r.get("reason") or "budget exhausted"), "holder": None})
     for r in state.get("parked") or []:
         ident = r["issue_identifier"]
+        if ident in leases:
+            continue
         out.append({"identifier": ident, "key": key_of.get(ident),
                     "reason": _words(r.get("reason") or "waiting on a person"), "holder": None,
                     "question": (statements or {}).get(ident) or statement_of(r)})
+    for ident, lease in leases.items():
+        if lease["expired"] and ident in key_of:
+            out.append({"identifier": ident, "key": key_of.get(ident), "reason": expired_text(lease),
+                        "holder": holder(lease), "expired": True})
     return out
 
 
@@ -82,9 +93,18 @@ def _words(code: str) -> str:
 
 
 def slots_of(state: dict[str, Any] | None) -> int | None:
+    """The agents that can run at once: Sortie's cap, and under the remote
+    kind no more than its workers' run slots together, since the cap is
+    only a ceiling above them."""
     agent = ((state or {}).get("config") or {}).get("agent") or {}
     cap = agent.get("max_concurrent_agents")
-    return cap if isinstance(cap, int) and cap > 0 else None
+    cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
+    workers = ((state or {}).get("workers") or {}).get("workers")
+    declared = [((w.get("declaration") or {}).get("run_slots")) for w in workers or [] if isinstance(w, dict)]
+    run_slots = sum(n for n in declared if isinstance(n, int) and not isinstance(n, bool) and n > 0)
+    if run_slots:
+        return min(cap, run_slots) if cap is not None else run_slots
+    return cap
 
 
 # What a released story can wait on while no agent works on it, in the order
@@ -97,6 +117,7 @@ WAIT_KINDS = {
     "question": ("question", "questions", "a person", "answers it"),
     "budget": ("held budget", "held budgets", "the operator", "raises the budget"),
     "hold": ("held run", "held runs", "a person", "answers its request"),
+    "supervisor": ("supervisor hold", "supervisor holds", "the supervisor", "proves it and releases it"),
 }
 
 
@@ -110,12 +131,16 @@ def _number(identifier: str) -> int:
 
 
 def _waits_on(node: dict[str, Any], state: dict[str, Any] | None, statements: dict[str, str],
-              plan_states: dict[str, str] | None) -> tuple[str, dict[str, Any] | None, str | None] | None:
+              plan_states: dict[str, str] | None,
+              leases: dict[str, dict[str, Any]] | None = None) -> tuple[str, dict[str, Any] | None, str | None] | None:
     """What one released story waits on while no agent works on it, as
     (kind, pull request, reason); None when it waits for a slot or an agent
     works on it."""
     t = node.get("tracker") or {}
     ident = t.get("identifier") or ""
+    lease = (leases or {}).get(ident)
+    if lease and not lease["expired"]:
+        return "supervisor", None, lease.get("reason")
     rt = node.get("runtime") or {}
     running = _by_ident((state or {}).get("running")).get(ident)
     budget = _by_ident((state or {}).get("budget_exhausted")).get(ident)
@@ -140,7 +165,8 @@ def _waits_on(node: dict[str, Any], state: dict[str, Any] | None, statements: di
 
 
 def waits_of(nodes: list[dict[str, Any]], plan_states: dict[str, str] | None, settled: set[str],
-             state: dict[str, Any] | None, statements: dict[str, str] | None = None) -> list[dict[str, Any]]:
+             state: dict[str, Any] | None, statements: dict[str, str] | None = None,
+             leases: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """What the stories released to Sortie and not yet ``settled`` wait on,
     each thing once with the stories that wait on it and who acts on it.
     Stories that share a pull request wait on it together. A story is
@@ -156,7 +182,7 @@ def waits_of(nodes: list[dict[str, Any]], plan_states: dict[str, str] | None, se
                                 n["plan_key"]))
     waits: dict[tuple[str, str], dict[str, Any]] = {}
     for n in stories:
-        found = _waits_on(n, state, statements, plan_states)
+        found = _waits_on(n, state, statements, plan_states, leases)
         if found is None:
             continue
         kind, pr, reason = found
@@ -208,21 +234,26 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
                      state: dict[str, Any] | None, state_error: str | None, sync: dict[str, Any] | None,
                      runway: int, remaining: int, key_of: dict[str, str],
                      statements: dict[str, str] | None = None,
-                     waits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     waits: list[dict[str, Any]] | None = None,
+                     leases: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """The verdict on whether the agents will stay busy, with its reasons.
 
     The first that applies wins: stuck, done, idle now, will idle, healthy.
     ``runway`` counts released, unstarted stories; ``remaining`` the planned
     stories not yet done; ``waits`` what the released stories wait on. Free
     slots with nothing ready while stories wait are stuck, not idle: someone
-    other than an agent has to act."""
+    other than an agent has to act. Stories the supervisor holds under a
+    live lease wait on the supervisor: they make no reason to be stuck, and
+    with nothing else to do the verdict is waiting."""
     waits = waits or []
+    on_people = [w for w in waits if w["kind"] != "supervisor"]
+    on_supervisor = [w for w in waits if w["kind"] == "supervisor"]
     reasons: list[dict[str, Any]] = []
     slots = slots_of(state) if state is not None else None
     running = [{"identifier": r["issue_identifier"], "key": key_of.get(r["issue_identifier"])}
                for r in (state or {}).get("running") or []]
     busy = len(running) if state is not None else None
-    held = held_runs(state, key_of, statements) if state is not None else []
+    held = held_runs(state, key_of, statements, leases) if state is not None else []
 
     if not reachable:
         reasons.append({"code": "sortie_unreachable", "text": f"Sortie is unreachable: {sortie_error}" if sortie_error else "Sortie is unreachable"})
@@ -233,7 +264,9 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
         reasons.append({"code": "sync_failed", "text": f"The last sync failed: {message}"})
     for h in held:
         who = h["key"] or h["identifier"]
-        if "question" not in h:
+        if h.get("expired"):
+            reasons.append({"code": "hold_expired", "text": f"{who}: {h['reason']}", "key": h["key"]})
+        elif "question" not in h:
             reasons.append({"code": "held", "text": f"{who} is held: {h['reason']}", "key": h["key"]})
         elif h["question"]:
             reasons.append({"code": "question", "text": f"{who} asks: {h['question']}", "key": h["key"]})
@@ -243,9 +276,9 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
     out = {"verdict": None, "reasons": reasons, "slots": slots, "busy": busy,
            "free": max(0, slots - busy) if slots is not None and busy is not None else None,
            "running": running, "held": held, "runway": runway if reachable else None, "waits": waits}
-    if reachable and out["free"] and runway == 0 and waits:
-        first = next((i for i, r in enumerate(reasons) if r["code"] in ("held", "question")), len(reasons))
-        reasons.insert(first, {"code": "waiting", "text": waiting_text(waits), "key": None})
+    if reachable and out["free"] and runway == 0 and on_people:
+        first = next((i for i, r in enumerate(reasons) if r["code"] in ("held", "question", "hold_expired")), len(reasons))
+        reasons.insert(first, {"code": "waiting", "text": waiting_text(on_people), "key": None})
     if reasons:
         return {**out, "verdict": "stuck"}
     if not dispatched:
@@ -253,6 +286,9 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
                                     "text": f"Sortie runs agents for its configured project only, not {project}"}]}
     if remaining == 0 and not busy:
         return {**out, "verdict": "done", "reasons": [{"code": "done", "text": "Every planned story is done"}]}
+    if out["free"] and runway == 0 and on_supervisor:
+        return {**out, "verdict": "waiting", "reasons": [{"code": "supervisor", "key": None,
+                                                          "text": f"{waiting_text(on_supervisor)}: the supervisor proves them"}]}
     if slots is None:
         return {**out, "reasons": [{"code": "no_slots", "text": "Sortie does not report its agent concurrency cap"}]}
     free = out["free"]
@@ -589,7 +625,8 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
                  and n["plan_key"] not in running_keys and n["plan_key"] not in done)
     remaining = sum(1 for n in stories if n["plan_key"] not in done and n["plan_key"] not in dropped)
 
-    waits = waits_of(nodes, plan_states, done | dropped, health_inputs.get("state"), health_inputs.get("statements"))
+    waits = waits_of(nodes, plan_states, done | dropped, health_inputs.get("state"), health_inputs.get("statements"),
+                     health_inputs.get("leases"))
     health = execution_health(runway=runway, remaining=remaining, key_of=key_of, waits=waits, **health_inputs)
     if history is not None:
         history.add(health["busy"], health["runway"])
@@ -602,10 +639,11 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "story_progress": "live" if health_inputs["reachable"] else ("last_known" if tracker_known else "unknown"),
         "health": health,
         "questions": questions,
+        "expired_holds": (expired_holds := _expired_holds(nodes, health_inputs.get("leases"))),
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],
-                "needs_person": _needs([], questions), "timeline": None}
+                "needs_person": _needs([], questions, expired_holds), "timeline": None}
 
     out = ms.progress(planning.get("milestones") or [], graph, planning.get("tasks") or {}, done, dropped, estimates)
     # A milestone declared done was finished by hand: its stories are not
@@ -615,7 +653,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
                       free=health["free"] or 0, runway=runway, estimates=estimates)
     for i in items:
         if i["rank"] is not None:
-            i["rank"] += len(questions)
+            i["rank"] += len(questions) + len(expired_holds)
     line = timeline(out["milestones"], out["goal"], items, estimates, done)
     by_key = {n["plan_key"]: n for n in nodes}
     reason_of = {i["key"]: i["reason"] for i in items if i["kind"] == "story"}
@@ -641,19 +679,42 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     return {
         **base,
         "milestones": milestones, "goal": out["goal"], "next": out["next"], "critical_path": path,
-        "not_ready": items, "needs_person": _needs(items, questions), "timeline": line,
+        "not_ready": items, "needs_person": _needs(items, questions, expired_holds), "timeline": line,
     }
 
 
-def _needs(items: list[dict[str, Any]], questions: list[dict[str, Any]]) -> dict[str, Any]:
+def _expired_holds(nodes: list[dict[str, Any]], leases: dict[str, dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """The stories whose supervisor lease expired with no renewal, oldest
+    first: nobody is known to take care of them, so they need a person.
+    Each ranks after the questions."""
+    by_ident = {n["tracker"]["identifier"]: n for n in nodes if n.get("kind") == "story" and n.get("tracker")}
+    out = []
+    for ident, lease in (leases or {}).items():
+        n = by_ident.get(ident)
+        if n is None or not lease["expired"]:
+            continue
+        key = n["plan_key"]
+        out.append({"key": key, "label": key.split("/", 1)[-1], "change": n.get("change") or key.split("/", 1)[0],
+                    "identifier": ident, "title": n.get("title") or key, "text": expired_text(lease), "lease": lease})
+    out.sort(key=lambda h: (h["lease"]["expired_at"] or 0.0, h["key"]))
+    return out
+
+
+def _needs(items: list[dict[str, Any]], questions: list[dict[str, Any]],
+           expired_holds: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     person = [i for i in items if i["column"] is not None]
     approve = [i for i in person if i["column"] == "approve"]
+    expired_holds = expired_holds or []
+    for rank, h in enumerate(expired_holds, len(questions) + 1):
+        h["rank"] = rank
     return {
-        "total": len(questions) + len(person),
+        "total": len(questions) + len(expired_holds) + len(person),
         "questions": len(questions),
+        "expired_holds": len(expired_holds),
         "approve": len(approve),
         "approve_stories": sum(len(i.get("stories") or [i["key"]]) for i in approve),
         "spec": sum(1 for i in person if i["column"] == "spec"),
         "operator": sum(1 for i in person if i["column"] == "operator"),
-        "nearest": questions[0]["key"] if questions else (person[0]["key"] if person else None),
+        "nearest": (questions[0]["key"] if questions else expired_holds[0]["key"] if expired_holds
+                    else person[0]["key"] if person else None),
     }

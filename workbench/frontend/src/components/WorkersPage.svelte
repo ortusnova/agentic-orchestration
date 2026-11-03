@@ -143,7 +143,7 @@
   .chip.draining { border-color: #ecd9a8; background: var(--amber-tint); color: var(--amber-ink); }
   .use { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; list-style: none; font-size: 12.5px; font-variant-numeric: tabular-nums; }
   .reasons { margin-top: 6px; list-style: none; font-size: 13px; color: var(--ink); }
-  .reasons li[data-reason]:not([data-reason="moving"]):not([data-reason="idle"]) { color: #8f241d; }
+  .reasons li[data-reason]:not([data-reason="moving"]):not([data-reason="idle"]):not([data-reason="cap_full"]) { color: #8f241d; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 6px 8px; border-bottom: 1px solid var(--hair); text-align: left; vertical-align: baseline; }
   thead th { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mute); border-bottom-color: var(--line); }

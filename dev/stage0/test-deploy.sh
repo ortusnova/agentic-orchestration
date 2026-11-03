@@ -2,9 +2,9 @@
 # Checks deploy.sh and dev-host-apply.sh against a throwaway kit repository
 # and Sortie checkout, with uv, npm, npx and systemctl stubbed and Sortie
 # stubbed behind curl: what each kind of merge does to the live kit, that a
-# change waiting for no running agent drains Sortie (pauses its dispatch,
-# applies once the runs going finish, and resumes), and that both run under
-# stage0.sh's lock.
+# deploy never drains (spec store agent-platform/run-supervision: it
+# restarts Sortie at once, pauses no dispatch and waits for no run), and
+# that both run under stage0.sh's lock.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -19,11 +19,16 @@ for tool in uv npm systemctl; do printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n
 # shellcheck disable=SC2016 # expanded by the stub, not here
 printf '#!/bin/sh\necho "npx $*" >> "%s/calls"\n[ -z "$FAIL_BUILD" ]\n' "$tmp" > "$tmp/bin/npx"
 # A stubbed Sortie, as curl: its state is files in $SORTIE_STUB (running,
-# queued and max, counts; paused while dispatch is paused). Like Sortie, it
-# dispatches queued stories into free slots whenever it is asked anything,
-# unless paused. no-pause makes it an older Sortie, without the pause;
-# finish-on-poll ends one run at each state request. The pause and resume
-# need the control token, and are logged to log.
+# queued and max, counts; paused while dispatch is paused, as an earlier kit
+# could leave it). Like Sortie, it dispatches queued stories into free slots
+# whenever it is asked anything, unless paused. Every request is logged to
+# requests, and a pause or resume, which needs the control token, to log.
+# lost, a count, is the runs whose worker stopped while Sortie restarted:
+# once their leases expire (the next request), Sortie puts them back in the
+# queue as retries, logged to retries, and dispatches them like any story.
+# stage0.sh's stub logs each restart of Sortie to restarts; as Sortie
+# re-adopts the runs its workers hold, a restart leaves the running runs
+# running.
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 s=$SORTIE_STUB method=GET url='' auth=''
@@ -46,12 +51,14 @@ dispatch() {
 }
 case "$method $path" in
   "GET /api/v1/state")
-    if [[ -e $s/finish-on-poll ]] && (( $(n running) > 0 )); then echo $(( $(n running) - 1 )) > "$s/running"; fi
+    if [[ -e $s/lost ]]; then
+      echo $(( $(n running) - $(n lost) )) > "$s/running"; echo $(( $(n queued) + $(n lost) )) > "$s/queued"
+      echo "$(n lost)" >> "$s/retries"; rm -f "$s/lost"
+    fi
     dispatch
     paused=false; [[ -e $s/paused ]] && paused=true
     printf '{"running": [%s], "dispatch_paused": %s}\n' "$(seq -s, 1 "$(n running)")" "$paused" ;;
   "POST /api/v1/dispatch/pause"|"POST /api/v1/dispatch/resume")
-    [[ -e $s/no-pause ]] && exit 22
     [[ $auth == "Authorization: Bearer control" ]] || exit 22
     echo "${path##*/}" >> "$s/log"
     if [[ $path == */pause ]]; then touch "$s/paused"; else rm -f "$s/paused"; dispatch; fi
@@ -71,6 +78,15 @@ stub() { echo "running $(cat "$SORTIE_STUB/running"), queued $(cat "$SORTIE_STUB
 want() { # want NAME STUB_STATE
   if [[ $(stub) == "$2" ]]; then echo "ok: $1"; else echo "FAIL: $1: Sortie $(stub), want $2"; failed=1; fi
 }
+# never_drained NAME: deploy asked Sortie for no pause and no state, and Sortie never paused.
+never_drained() {
+  if [[ ! -s $SORTIE_STUB/log && ! -e $SORTIE_STUB/paused ]] && ! grep -q 'state\|pause' "$SORTIE_STUB/requests" 2> /dev/null; then echo "ok: $1"
+  else echo "FAIL: $1: Sortie asked $(tr '\n' ';' < "$SORTIE_STUB/requests" 2> /dev/null)"; failed=1; fi
+}
+restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
+  local got; got=$(wc -l < "$SORTIE_STUB/restarts" 2> /dev/null || echo 0)
+  if (( got == $2 )); then echo "ok: $1"; else echo "FAIL: $1: Sortie restarted $got time(s), want $2"; failed=1; fi
+}
 
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
@@ -79,10 +95,17 @@ setup() {
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
   mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon"
-  # Like the real one, --update-sortie moves the Sortie checkout to plan-bench.
-  # shellcheck disable=SC2016 # expanded by the stub, not here
-  printf '#!/bin/sh\nprintf stage0.sh >> "%s/calls"; for a; do printf " %%s" "$a" >> "%s/calls"; done; echo >> "%s/calls"\necho "$STAGE0_PROFILE" > "%s/profile"\n[ "$1" != --update-sortie ] || git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench\n[ -z "$FAIL_STAGE0" ]\n' \
-    "$tmp" "$tmp" "$tmp" "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
+  # Like the real one, it restarts Sortie on p1, and --update-sortie moves
+  # the Sortie checkout to plan-bench.
+  cat > "$tmp/up/dev/stage0/stage0.sh" <<EOF
+#!/bin/sh
+printf stage0.sh >> "$tmp/calls"; for a; do printf " %s" "\$a" >> "$tmp/calls"; done; echo >> "$tmp/calls"
+echo "\$STAGE0_PROFILE" > "$tmp/profile"
+. "\$STAGE0_HOME/stage0.env"
+[ "\$1" != --update-sortie ] || git -C "\$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench
+[ -z "\$FAIL_STAGE0" ] || exit 1
+[ "\$STAGE0_PROFILE" = worker ] || echo restart >> "\$SORTIE_STUB/restarts"
+EOF
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
@@ -108,21 +131,11 @@ setup; run; check "nothing merged" main ""
 setup; merge docs/x; run; check "a docs change moves the kit, builds nothing" main ""
 setup; merge workbench/app; run
 check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
-setup; merge dev/stage0/units; sortie 1; run; check "a kit change waits while an agent runs" main~1 ""
-setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh when idle" main "stage0.sh;"
-# A workbench change never waits for a drain: restarting it stops no agent.
-setup; rm -f "$STAGE0_HOME/deploy-workbench.at"; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
+setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh" main "stage0.sh;"
+setup; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
 g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
-check "busy: a kit and workbench merge rebuilds the workbench at once" main~1 "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
-if cmp -s "$STAGE0_LIVE_KIT/workbench/app" "$tmp/up/workbench/app"; then echo "ok: busy: the workbench files are the merged ones"; else echo "FAIL: busy: workbench/ not moved"; failed=1; fi
-rm -f "$tmp/calls"; run; check "busy: and only once per commit" main~1 ""
-finish 1; run; check "busy: the kit change applies once the run finishes" main "stage0.sh;"
-# Two workbench merges during one drain: the later full apply still moves the kit.
-setup; rm -f "$STAGE0_HOME/deploy-workbench.at"; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
-g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
-# The run ends, then another merge changes the same workbench file before the next pass.
-finish 1; merge workbench/app; rm -f "$tmp/calls"; run; check "busy: then the full apply moves the whole kit" main "stage0.sh;"
-if [[ -z $(g -C "$STAGE0_LIVE_KIT" status --porcelain) ]]; then echo "ok: busy: and leaves the live kit clean"; else echo "FAIL: busy: live kit not clean: $(g -C "$STAGE0_LIVE_KIT" status --porcelain)"; failed=1; fi
+check "a kit and workbench merge runs stage0.sh, which builds the workbench too" main "stage0.sh;"
+if [[ -z $(g -C "$STAGE0_LIVE_KIT" status --porcelain) ]]; then echo "ok: and leaves the live kit clean"; else echo "FAIL: live kit not clean: $(g -C "$STAGE0_LIVE_KIT" status --porcelain)"; failed=1; fi
 # stage0.sh runs with the PATH the last stage0.sh recorded, not the unit's.
 setup; mkdir -p "$tmp/tools"; echo "$tmp/tools:$PATH" > "$STAGE0_HOME/path"
 # shellcheck disable=SC2016 # the stub expands $PATH, not this script
@@ -136,10 +149,9 @@ setup; merge workbench/app; FAIL_BUILD=1 run; check "a failed build puts the pre
 rm -f "$tmp/calls"; FAIL_BUILD=1 run; check "and does not try that commit again" main~1 ""
 merge workbench/app; run; check "until another one merges" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
 
-# Sortie follows plan-bench, when no agent runs.
-setup; smerge; sortie 1; run; check "a plan-bench merge waits while an agent runs" main ""
-if sortie_at plan-bench~1; then echo "ok: and Sortie stays where it is"; else echo "FAIL: Sortie moved while busy"; failed=1; fi
-finish 1; run; check "a plan-bench merge runs stage0.sh --update-sortie when idle" main "stage0.sh --update-sortie;"
+# Sortie follows plan-bench.
+setup; smerge; run; check "a plan-bench merge runs stage0.sh --update-sortie" main "stage0.sh --update-sortie;"
+if sortie_at plan-bench; then echo "ok: and moves Sortie to plan-bench"; else echo "FAIL: Sortie not on plan-bench"; failed=1; fi
 setup; merge dev/stage0/units; smerge; run; check "a kit and a plan-bench merge run stage0.sh once" main "stage0.sh --update-sortie;"
 setup; smerge; FAIL_STAGE0=1 run; check "a failed update runs once" main "stage0.sh --update-sortie;"
 if sortie_at plan-bench~1; then echo "ok: and puts Sortie back"; else echo "FAIL: Sortie not put back"; failed=1; fi
@@ -148,37 +160,57 @@ smerge; run; check "until another one merges" main "stage0.sh --update-sortie;"
 setup; echo 2 > "$tmp/sortie/go"; g -C "$tmp/sortie" commit -qam try; smerge; run
 check "a Sortie checkout not behind plan-bench stays where it is" main ""
 
-# A pending deploy drains its host (agent-platform/run-supervision): a busy
-# p1, 2 stories running and 9 waiting, 2 at a time.
+# A deploy during a long run (agent-platform/run-supervision): ONS-104's
+# agent is in the middle of a turn, 2 stories wait, 3 slots. The kit merge
+# restarts Sortie at once; the run goes on, and no story waits for the deploy.
+setup; sortie 1 2 3; merge dev/stage0/units; run
+check "a long run: a kit merge runs stage0.sh at once" main "stage0.sh;"
+restarts "a long run: which restarts Sortie" 1
+never_drained "a long run: deploy pauses no dispatch and waits for no run"
+finish 0; want "a long run: the run goes on and the 2 waiting are dispatched" "running 3, queued 0, dispatching"
+setup; sortie 1 2 3; smerge; run
+check "a long run: a plan-bench merge applies at once too" main "stage0.sh --update-sortie;"
+restarts "a long run: and restarts Sortie" 1
+never_drained "a long run: with no drain"
+finish 0; want "a long run: and the run goes on" "running 3, queued 0, dispatching"
+# A busy p1, 2 stories running and 9 waiting, 2 at a time: a kit merge
+# neither waits for the 2 nor holds back the 9.
 setup; sortie 2 9 2; merge dev/stage0/units; run
-check "busy p1: the kit change waits for the 2 runs" main~1 ""
-want "busy p1: Sortie dispatches no new run" "running 2, queued 9, paused"
-finish 1; want "busy p1: a run ends, and none takes its slot" "running 1, queued 9, paused"
-run; check "busy p1: the change still waits for the last run" main~1 ""
-finish 1; run; check "busy p1: the change applies once the 2 finish" main "stage0.sh;"
-want "busy p1: then Sortie dispatches the 9" "running 2, queued 7, dispatching"
-if [[ ! -e $STAGE0_HOME/dispatch.paused && $(tr '\n' ' ' < "$SORTIE_STUB/log") == "pause pause pause resume " ]]; then echo "ok: busy p1: each wait pauses, the apply resumes"
-else echo "FAIL: busy p1: Sortie calls '$(tr '\n' ' ' < "$SORTIE_STUB/log")'"; failed=1; fi
-setup; sortie 1 4 1; smerge; run; finish 1; want "a plan-bench merge pauses dispatch too" "running 0, queued 4, paused"
-run; check "and applies when the run finishes" main "stage0.sh --update-sortie;"
-want "and dispatches again" "running 1, queued 3, dispatching"
-setup; sortie 1 4 1; smerge; run; finish 1; FAIL_STAGE0=1 run
-check "a failed apply after a drain" main "stage0.sh --update-sortie;"
-want "dispatches again on the previous commit" "running 1, queued 3, dispatching"
-setup; sortie 1 4 1; touch "$SORTIE_STUB/no-pause"; merge dev/stage0/units; run; finish 1
-want "an older Sortie without the pause keeps dispatching" "running 1, queued 3, dispatching"
-run; check "and the change waits until it happens to run nothing" main~1 ""
-if grep -q 'Sortie did not pause dispatch' "$tmp/err"; then echo "ok: and deploy says so"; else echo "FAIL: no word of the missing pause: $(cat "$tmp/err")"; failed=1; fi
-setup; sortie 1 4 1; echo wrong > "$STAGE0_HOME/sortie-token"; merge dev/stage0/units; run
-want "a pause without the control token is refused" "running 1, queued 4, dispatching"
-echo control > "$STAGE0_HOME/sortie-token"
+check "busy p1: a kit merge applies at once" main "stage0.sh;"
+never_drained "busy p1: with no drain"
+want "busy p1: both runs go on" "running 2, queued 9, dispatching"
+finish 1; want "busy p1: a run ends and the next is dispatched" "running 2, queued 8, dispatching"
+# A worker gone during the restart (agent-platform/run-supervision): of 2
+# runs, one's worker stops while the deploy restarts Sortie. Its lease
+# expires and it is retried at once, as for any lost lease: no pause holds
+# the retry back; the other run goes on.
+setup; sortie 2 0 2; merge dev/stage0/units; run; echo 1 > "$SORTIE_STUB/lost"
+check "a worker gone: the kit merge applies at once" main "stage0.sh;"
+never_drained "a worker gone: with no drain"
+finish 0
+if [[ $(cat "$SORTIE_STUB/retries" 2> /dev/null) == 1 ]]; then echo "ok: a worker gone: its run is retried"; else echo "FAIL: a worker gone: retries '$(cat "$SORTIE_STUB/retries" 2> /dev/null)'"; failed=1; fi
+want "a worker gone: and dispatched again beside the run that went on" "running 2, queued 0, dispatching"
+setup; sortie 1 4 1; merge dev/stage0/units; FAIL_STAGE0=1 run
+check "a failed apply during a run goes back" main~1 "stage0.sh;"
+never_drained "and drains nothing either"
+# An earlier kit paused dispatch while a change waited for a drain: the
+# first deploy of this kit dispatches again.
 setup; sortie 0 4 1; echo "deploy of kit 0" > "$STAGE0_HOME/dispatch.paused"; touch "$SORTIE_STUB/paused"; run
-want "a pause the kit left with nothing pending is resumed" "running 1, queued 3, dispatching"
-# A worker host: it waits while its daemon runs a job, and builds no Sortie.
-# Its stage0.env is taichi's after the move from the retired homelab profile:
-# it still names a Sortie checkout and port and p1's Huly through a tunnel,
-# and a pause that Sortie left is still recorded. No Sortie runs there, so
-# deploy asks none anything, and follows no plan-bench merge.
+want "a pause an earlier kit left is resumed" "running 1, queued 3, dispatching"
+if [[ ! -e $STAGE0_HOME/dispatch.paused && $(cat "$SORTIE_STUB/log") == resume ]]; then echo "ok: and forgotten"; else echo "FAIL: left pause: $(cat "$SORTIE_STUB/log" 2> /dev/null)"; failed=1; fi
+rm -f "$SORTIE_STUB/log"; run; never_drained "and asked of Sortie only once"
+setup; sortie 0 4 1; echo "deploy of kit 0" > "$STAGE0_HOME/dispatch.paused"; touch "$SORTIE_STUB/paused"; merge dev/stage0/units; run
+want "a pause an earlier kit left is resumed after the apply too" "running 1, queued 3, dispatching"
+setup; sortie 0 4 1; echo "deploy of kit 0" > "$STAGE0_HOME/dispatch.paused"; touch "$SORTIE_STUB/paused"; echo wrong > "$STAGE0_HOME/sortie-token"; run
+if [[ -e $STAGE0_HOME/dispatch.paused ]] && grep -q 'did not resume' "$tmp/err"; then echo "ok: a refused resume is kept for the next minute"; else echo "FAIL: refused resume: $(cat "$tmp/err")"; failed=1; fi
+echo control > "$STAGE0_HOME/sortie-token"
+
+# A worker host: a kit change applies at once while its daemon runs a job,
+# and it builds no Sortie. Its stage0.env is taichi's after the move from
+# the retired homelab profile: it still names a Sortie checkout and port and
+# p1's Huly through a tunnel, and a pause that Sortie left is still
+# recorded. No Sortie runs there, so deploy asks none anything, and follows
+# no plan-bench merge.
 cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
 printf 'STAGE0_PROFILE=worker\nSTAGE0_SORTIE_SRC=%s\nSTAGE0_SORTIE_PORT=1\nSTAGE0_HULY_URL=http://127.0.0.1:8087\n' "$tmp/sortie" > "$STAGE0_HOME/stage0.env"
 no_sortie_asked() { # no_sortie_asked NAME
@@ -188,8 +220,9 @@ profile_was() { # profile_was NAME PROFILE: the profile the last stage0.sh ran w
   if [[ $(cat "$tmp/profile" 2> /dev/null) == "$2" ]]; then echo "ok: $1"; else echo "FAIL: $1: stage0.sh ran with STAGE0_PROFILE='$(cat "$tmp/profile" 2> /dev/null)', want $2"; failed=1; fi
 }
 setup; merge dev/stage0/units; mkdir -p "$STAGE0_HOME/worker/jobs/ONS-9-1"; run
-check "on a worker host a kit change waits while a job runs" main~1 ""
-rmdir "$STAGE0_HOME/worker/jobs/ONS-9-1"; run; check "and runs stage0.sh once none does" main "stage0.sh;"
+check "on a worker host a kit change runs stage0.sh at once while a job runs" main "stage0.sh;"
+if [[ -d $STAGE0_HOME/worker/jobs/ONS-9-1 ]]; then echo "ok: and leaves the job alone"; else echo "FAIL: the job is gone"; failed=1; fi
+rmdir "$STAGE0_HOME/worker/jobs/ONS-9-1"
 profile_was "and stage0.sh runs the worker profile" worker
 no_sortie_asked "and deploy asks no Sortie"
 setup; merge worker-daemon/x; run; check "a worker-daemon change runs stage0.sh" main "stage0.sh;"
@@ -215,44 +248,39 @@ else echo "FAIL: stage0.sh with the lock held: exit $rc, $(cat "$tmp/out")"; fai
 exec 8>&-
 run; check "and runs once the lock is free" main "stage0.sh;"
 
-# The dev-host apply after a smolvm bump drains the host the same way, then
-# runs stage0.sh so the pack and Sortie follow the new smolvm.
+# The dev-host apply after a smolvm bump applies at once too, whatever runs,
+# then runs stage0.sh so the pack and Sortie follow the new smolvm.
 mkdir -p "$tmp/dkit"
-cp "$KIT/dev-host-apply.sh" "$KIT/drain.sh" "$KIT/worker-config.sh" "$tmp/dkit/"
+cp "$KIT/dev-host-apply.sh" "$tmp/dkit/"
 # shellcheck disable=SC2016 # expanded by the stub, not here
 printf '#!/bin/sh\necho stage0.sh >> "%s/calls"\n[ -z "$FAIL_STAGE0" ]\n' "$tmp" > "$tmp/dkit/stage0.sh"
 chmod +x "$tmp/dkit/stage0.sh"
 # shellcheck disable=SC2016 # expanded by the apply, not here
-apply=(sh -c 'echo "apply: running $(cat "$SORTIE_STUB/running"), $([ -e "$SORTIE_STUB/paused" ] && echo paused)" >> "$0/calls"' "$tmp")
-apply() { rm -f "$tmp/calls"; rc=0; STAGE0_DRAIN_POLL=0 "$tmp/dkit/dev-host-apply.sh" "$@" > /dev/null 2> "$tmp/err" || rc=$?; }
+apply=(sh -c 'echo "apply: running $(cat "$SORTIE_STUB/running"), $([ -e "$SORTIE_STUB/paused" ] && echo paused || echo dispatching)" >> "$0/calls"' "$tmp")
+apply() { rm -f "$tmp/calls"; rc=0; "$tmp/dkit/dev-host-apply.sh" "$@" > /dev/null 2> "$tmp/err" || rc=$?; }
 calls() { if [[ -f $tmp/calls ]]; then tr '\n' ';' < "$tmp/calls"; fi; }
 applied() { # applied NAME WANT_RC WANT_CALLS
   if [[ $rc == "$2" && $(calls) == "$3" ]]; then echo "ok: $1"; else echo "FAIL: $1: exit $rc, calls '$(calls)', want $2 and '$3': $(cat "$tmp/err")"; failed=1; fi
 }
-sortie 2 9 2; touch "$SORTIE_STUB/finish-on-poll"; apply "${apply[@]}"
-applied "a smolvm bump on busy p1 applies once its 2 runs finish, dispatch paused" 0 "apply: running 0, paused;stage0.sh;"
-rm "$SORTIE_STUB/finish-on-poll"; finish 0
-want "and then Sortie dispatches the 9" "running 2, queued 7, dispatching"
-sortie 1 4 1; touch "$SORTIE_STUB/finish-on-poll"; apply false
+sortie 2 9 2; apply "${apply[@]}"
+applied "a smolvm bump on busy p1 applies at once, with its 2 runs going" 0 "apply: running 2, dispatching;stage0.sh;"
+never_drained "and pauses no dispatch nor waits for a run"
+sortie 1 4 1; apply false
 applied "a failed apply stops before stage0.sh" 1 ""
-rm "$SORTIE_STUB/finish-on-poll"; finish 0
-want "and dispatches again" "running 1, queued 3, dispatching"
+never_drained "and drains nothing"
 sortie 0; FAIL_STAGE0=1 apply true; applied "a failed stage0.sh after the apply fails it" 1 "stage0.sh;"
-want "and dispatches again" "running 0, queued 0, dispatching"
 sortie 0; apply; applied "the control profile has no default apply" 1 ""
-# A worker host (taichi): no Sortie to pause. The apply waits for the worker
-# daemon's jobs, with the daemon stopped, and is make dev-host by default.
+# A worker host (taichi): the apply is make dev-host by default, and runs at
+# once while the worker daemon runs a job, the daemon left up.
 mkdir -p "$tmp/homelab"; printf 'dev-host:\n\techo make dev-host >> %s/calls\n' "$tmp" > "$tmp/homelab/Makefile"
 cp "$STAGE0_HOME/stage0.env" "$tmp/env"
 printf 'STAGE0_PROFILE=worker\nSTAGE0_HOMELAB_SRC=%s\n' "$tmp/homelab" > "$STAGE0_HOME/stage0.env"
-sortie 0; apply; applied "a worker host's apply is make dev-host in its homelab checkout" 0 "systemctl --user stop ortus-stage0-worker.service;make dev-host;stage0.sh;systemctl --user start ortus-stage0-worker.service;"
+sortie 0; apply; applied "a worker host's apply is make dev-host in its homelab checkout" 0 "make dev-host;stage0.sh;"
+no_sortie_asked "and asks no Sortie"
 mkdir -p "$STAGE0_HOME/worker/jobs/ONS-9-1"
-rm -f "$tmp/calls"; rc=0; STAGE0_DRAIN_POLL=0.2 timeout 1 "$tmp/dkit/dev-host-apply.sh" > /dev/null 2> "$tmp/err" || rc=$?
-if (( rc == 124 )) && grep -q "waiting for the worker daemon's 1 job" "$tmp/err" && ! grep -q 'stop ortus-stage0-worker' "$tmp/calls" 2> /dev/null; then
-  echo "ok: on a worker host the apply waits while a job runs, the daemon still up"
-else echo "FAIL: a worker host with a job: exit $rc, calls '$(calls)', $(cat "$tmp/err")"; failed=1; fi
+apply; applied "on a worker host the apply runs at once while a job runs, the daemon left up" 0 "make dev-host;stage0.sh;"
 rm -rf "$STAGE0_HOME/worker/jobs/ONS-9-1"
-apply false; applied "a failed apply on a worker host starts its daemon again" 1 "systemctl --user stop ortus-stage0-worker.service;systemctl --user start ortus-stage0-worker.service;"
+apply false; applied "a failed apply on a worker host stops before stage0.sh" 1 ""
 printf 'STAGE0_PROFILE=worker\n' > "$STAGE0_HOME/stage0.env"
 apply; applied "a worker host without homelab has no default apply" 1 ""
 cp "$tmp/env" "$STAGE0_HOME/stage0.env"
@@ -261,5 +289,8 @@ rc=0; timeout 3 "$tmp/dkit/dev-host-apply.sh" true 2> "$tmp/err" || rc=$?
 if (( rc == 124 )) && grep -q 'waiting for a stage0.sh or a deploy' "$tmp/err"; then echo "ok: the dev-host apply waits for stage0.sh's lock"
 else echo "FAIL: the dev-host apply with the lock held: exit $rc, $(cat "$tmp/err")"; failed=1; fi
 exec 8>&-
+
+if grep -rqs 'drain.sh\|dispatch_pause\|dispatch/pause' "$KIT/deploy.sh" "$KIT/dev-host-apply.sh"; then echo "FAIL: the kit still drains"; failed=1
+else echo "ok: neither deploy.sh nor the dev-host apply drains"; fi
 
 exit $failed

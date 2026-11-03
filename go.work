@@ -3,6 +3,7 @@ go 1.27.3
 use (
 	./acp-broker
 	./dev/stage0/edge
+	./dev/stage0/live-proofs
 	./smol-builder
 	./worker-daemon
 )
