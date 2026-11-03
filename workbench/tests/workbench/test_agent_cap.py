@@ -127,6 +127,32 @@ def test_a_queued_job_runs_on_no_worker_s_lane():
     assert states["ONS-70"]["status"] == "waiting" and states["ONS-70"]["kind"] == "slot"
 
 
+def test_sortie_s_queued_job_is_only_a_wait():
+    # sortie#50: Sortie lists a job queued for a slot only in waits[],
+    # with the matcher's reasons, not in running[] (live, 2026-11-03 16:27Z:
+    # ONS-101, ONS-105 and ONS-109 read as p1 lanes, busy 6 of 3).
+    state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=())
+    state["running"] += [{"issue_identifier": i, "worker": "taichi", "started_at": iso(NOW - 60), "step": "build"}
+                         for i in ("ONS-61", "ONS-50")]
+    reason = "worker p1: all 3 run slots in use, 0 of 8 GiB memory free; worker taichi: all 2 run slots in use"
+    state["waits"] = [{"issue_identifier": i, "kind": "slot", "reason": reason, "release": "a worker that can run it frees a slot",
+                       "since": iso(NOW - 30)} for i in ("ONS-68", "ONS-70")]
+    state["waits"].append({"issue_identifier": "ONS-71", "worker": "taichi", "kind": "slot", "since": iso(NOW - 30),
+                           "reason": "worker p1: no nested virtualization; worker taichi: all 2 run slots in use",
+                           "release": "worker taichi frees a slot"})
+    fleet, summary = lanes_of(state)
+    p1, t = worker(fleet, "p1"), worker(fleet, "taichi")
+    assert (p1["busy"], len(p1["lanes"]), t["busy"], len(t["lanes"])) == (3, 3, 2, 2)
+    lanes = {(x.get("job") or {}).get("identifier") for w in (p1, t) for x in w["lanes"]}
+    assert lanes == {"ONS-34", "ONS-52", "ONS-48", "ONS-61", "ONS-50"}, lanes
+    assert [x["reason"] for x in p1["waits"] if x["identifier"] == "ONS-68"] == [reason]
+    assert sorted(x["identifier"] for x in t["waits"]) == ["ONS-68", "ONS-70", "ONS-71"]
+    states = story_states(fleet)
+    for i in ("ONS-68", "ONS-70", "ONS-71"):
+        assert states[i]["status"] == "waiting" and states[i]["kind"] == "slot", (i, states[i])
+    assert summary["busy"] == 5
+
+
 def test_the_health_counts_the_workers_slots_under_a_higher_cap():
     state = remote_state(16, ["ONS-34", "ONS-52", "ONS-48"], waiting=())
     assert slots_of(state) == 5
