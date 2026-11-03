@@ -402,8 +402,12 @@ its source, `edge.json` or unit; the worker daemon for its binary,
 -buildvcs=false`, so the same code builds the same bytes and a test or
 a document under `worker-daemon/` restarts nothing; a daemon an earlier
 kit started from the source being built keeps running, and its record
-moves to the binary). A change to one of those ends the jobs that unit
-carries, and Sortie retries them. A credential `gh auth token` gives nono
+moves to the binary). A change to nono's or the edge's ends the jobs
+that unit carries, and Sortie retries them. A restart of the worker
+daemon ends none: the unit stops the daemon only (`KillMode=process`),
+which leaves its jobs' machines running, and its next start adopts them
+and Sortie keeps their runs (worker-daemon's operator guide, "A restart
+of the daemon ends no job either"). A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
 
