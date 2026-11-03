@@ -122,6 +122,9 @@ printf '#!/bin/sh\necho "sortie=$WORKBENCH_SORTIE_URL project=$WORKBENCH_HULY_PR
 out=$("$KIT/run-previews.sh")
 want="sortie=http://127.0.0.1:7680 project=ONS token=sortie-token-value github=github-token-value preview-sync --repo ortusnova/agentic-orchestration --record $STAGE0_HOME/previews.json --deploy $KIT/preview.sh --live-url https://workbench.example.net --first-port 8800"
 check "run-previews.sh runs preview-sync with the kit's settings" '[[ $out == "$want" ]]'
+sed -i '/^STAGE0_AO_REPO_PROJECT=/d' "$STAGE0_HOME/stage0.env"
+out=$("$KIT/run-previews.sh" 2> "$tmp/err") || true
+check "run-previews.sh gives a stage0.env without STAGE0_AO_REPO_PROJECT its default" '[[ $out == "$want" ]]'
 check "the previews' timer runs run-previews.sh" 'grep -qx "ExecStart=@KIT@/run-previews.sh" "$KIT/units/ortus-stage0-previews.service" && grep -q ortus-stage0-previews.timer "$KIT/stage0.sh"'
 
 exit "$failed"
