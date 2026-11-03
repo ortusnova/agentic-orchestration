@@ -1,8 +1,8 @@
 // The stage-0 kit's ui stories (agent-platform/run-supervision#A UI story
 // is built before it is approved, and its merge is the approval), checked
 // against Sortie itself as stage0_review_test.go checks the review gate:
-// a sortie-review:ui story goes through the review and is never
-// auto-merged; on p1 the operator's comment on its pull request starts a
+// a sortie-review:ui story goes through the review and is not auto-merged
+// without its click-proofs on the preview; on p1 the operator's comment on its pull request starts a
 // fix run with the kit's fix prompt, and the kit's own preview comment does
 // not; the operator's merge makes it Done.
 
@@ -28,7 +28,9 @@ const previewMarker = "<!-- workbench-preview -->"
 
 // Scenario: A UI story from spec to merge. It is built by a rule that is
 // not the review, its chain ends in the review, and after a passing review
-// with clean, green CI Sortie still does not merge it.
+// with clean, green CI Sortie still does not merge it while its pull
+// request records no click-proofs on its preview: the watch waits for them,
+// or for the operator's merge.
 func TestStage0_AUIStoryIsReviewedAndNeverAutoMerged(t *testing.T) {
 	for _, name := range stage0Workflows {
 		cfg := loadStage0(t, name)
@@ -78,15 +80,17 @@ func TestStage0_AUIStoryIsReviewedAndNeverAutoMerged(t *testing.T) {
 		params.AutoMergeConfig = amCfg
 		params.NowFunc = func() time.Time { return time.Now().Add(time.Hour) }
 		params.ReviewGate = planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel, review.Stage}})
+		// The pull request's conversation holds no click-proofs record.
+		params.ClickProofs = planClickProofs(cfg, &commentForge{})
 		reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
 		state.TrackerOpsWg.Wait()
 		if merged {
-			t.Errorf("%s: Sortie merged a ui story", name)
+			t.Errorf("%s: Sortie merged a ui story with no click-proofs on its preview", name)
 		}
-		if _, kept := state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]; kept {
-			t.Errorf("%s: auto-merge kept its watch on a ui story, want it dropped: the operator merges", name)
+		if _, kept := state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]; !kept {
+			t.Errorf("%s: auto-merge dropped its watch on a ui story, want it waiting for the click-proofs or the operator's merge", name)
 		}
-		for _, rule := range []string{review.Name, "build", "claude-label", "claude-title"} {
+		for _, rule := range []string{"build", "claude-label", "claude-title"} {
 			gate := planReviewGate(cfg, &labelTracker{labels: []string{config.ReviewUILabel}})
 			if ok, _, err := gate(context.Background(), &PendingReaction{IssueID: "u", RuleName: rule}); ok || err != nil {
 				t.Errorf("%s: gate after %s = %v, %v, want refused", name, rule, ok, err)
