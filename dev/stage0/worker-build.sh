@@ -20,6 +20,15 @@ build_worker_daemon() {
 }
 
 restart_worker() {
+  local rec=$STAGE0_HOME/started/ortus-stage0-worker.service.sum
+  # An earlier kit recorded the daemon's source in place of its binary. A
+  # daemon that runs from the very source this kit builds runs what is
+  # built now: its record moves to the binary, and its jobs keep running.
+  if [[ -s $rec ]] && systemctl --user is-active -q ortus-stage0-worker.service \
+    && [[ $(cat "$rec") == "$(inputs_sum "$ROOT/worker-daemon" "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service")" ]]; then
+    inputs_sum "$STAGE0_HOME/bin/worker-daemon" "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service" > "$rec"
+    echo "ortus-stage0-worker.service runs the source this kit built: its record now names the binary" >&2
+  fi
   restart_changed ortus-stage0-worker.service "$STAGE0_HOME/bin/worker-daemon" \
     "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service"
 }

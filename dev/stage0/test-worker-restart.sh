@@ -71,6 +71,17 @@ echo unit2 > "$UNITS/ortus-stage0-worker.service"
 deploy
 [[ $(calls) == "restart ortus-stage0-worker.service;" ]] && ok "a unit change restarts it" || fail "unit: $(calls)"
 
+# An earlier kit recorded the daemon's source: a daemon running that very
+# source is adopted with its jobs, and one started from other source is
+# restarted.
+rec=$STAGE0_HOME/started/ortus-stage0-worker.service.sum
+inputs_sum "$ROOT/worker-daemon" "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service" > "$rec"
+deploy; [[ -z $(calls) ]] && ok "a daemon an earlier kit started from this source keeps running" || fail "migrate: $(calls)"
+deploy; [[ -z $(calls) ]] && ok "and its record then names the binary" || fail "migrated: $(calls)"
+echo "an older source" > "$rec"
+deploy
+[[ $(calls) == "restart ortus-stage0-worker.service;" ]] && ok "one started from other source restarts" || fail "old source: $(calls)"
+
 # stage0.sh builds the daemon and decides its restart only through
 # worker-build.sh.
 if grep -nE 'go build .*worker-daemon' "$KIT/stage0.sh"; then
