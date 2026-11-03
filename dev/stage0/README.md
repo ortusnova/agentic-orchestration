@@ -21,6 +21,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
+dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-front.sh              # check Pomerium's and the egress gate's units on p1, with stubs
 dev/stage0/test-worker-host.sh        # check a worker host's certificate, its issue and its revocation
@@ -398,8 +399,12 @@ profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
 live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the egress
 gate for its source, its script, `stage0.env`, the control token or unit;
 Pomerium for its image, its configuration (a new worker list), its
-certificate, its script or unit; the worker daemon for its source,
-`worker.json` or unit. A change to one of those ends the jobs that unit
+certificate, its script or unit; the worker daemon for its binary,
+`worker.json` or unit (`worker-build.sh` builds it with `-trimpath
+-buildvcs=false`, so the same code builds the same bytes and a test or
+a document under `worker-daemon/` restarts nothing; a daemon an earlier
+kit started from the source being built keeps running, and its record
+moves to the binary). A change to one of those ends the jobs that unit
 carries, and Sortie retries them. A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.

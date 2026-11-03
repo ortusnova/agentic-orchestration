@@ -239,12 +239,9 @@ migrate_max_agents "$ENV_FILE"
 . "$KIT/unit-restart.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 # The worker daemon's machines carry the runs: it restarts only when its
-# source, its configuration or its unit changed (unit-restart.sh). Its
-# source, not its binary, which Go stamps with the kit's commit.
-restart_worker() {
-  restart_changed ortus-stage0-worker.service "$ROOT/worker-daemon" \
-    "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service"
-}
+# binary, its configuration or its unit changed (worker-build.sh).
+# shellcheck source=worker-build.sh
+. "$KIT/worker-build.sh"
 
 # The pack is built again when its inputs change (the kit's pack/,
 # smol-builder's source, which embeds its layers, and smolvm), so a merged
@@ -279,7 +276,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     [[ -s $f ]] || die "$f is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
   done
   say "Building worker-daemon and smol-builder into $STAGE0_HOME/bin"
-  (cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
+  build_worker_daemon
   (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
   export PATH=$STAGE0_HOME/bin:$PATH
   build_pack
@@ -354,7 +351,7 @@ say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-
 (cd "$STAGE0_SORTIE_SRC" && GOWORK=off go build -o "$STAGE0_HOME/bin/sortie" ./cmd/sortie)
 (cd "$ROOT/acp-broker" && go build -o "$STAGE0_HOME/bin/acp-broker" ./cmd/acp-broker)
 (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
-(cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
+build_worker_daemon
 export PATH=$STAGE0_HOME/bin:$PATH
 # shellcheck source=nono-version.sh
 . "$KIT/nono-version.sh"
