@@ -22,6 +22,7 @@ from .scaffold import (UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgra
                        upgrade_schemas)
 from .sessions import SessionManager, runtime_base
 from .sortie import SortieClient, SortieError
+from .timeline import RunHistory, RunWorkers
 from .workers import WorkerRelay
 
 log = logging.getLogger(__name__)
@@ -50,7 +51,8 @@ class ProjectRuntime:
         self.hub = Hub(self.plan, own, records=self.records, pulls=self.deliveries.pulls,
                        peers=[p.bind(project.huly_project, name) for name, p in (peers or {}).items()],
                        previews=lambda: read_previews(config.previews_file),
-                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None)
+                       alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None,
+                       history=RunHistory(RunWorkers(config.home / "run-workers" / f"{project.slug}.json")))
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
