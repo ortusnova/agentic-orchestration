@@ -104,7 +104,7 @@
       </section>
     {/if}
 
-    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} />
+    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} expiredHolds={home.expired_holds ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} />
 
     <section class="progress" aria-labelledby="ms-h">
       <h2 id="ms-h">Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2>

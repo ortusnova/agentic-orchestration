@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, missingText, WORKER_VERDICT_TEXT,
+    ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, leaseText, missingText, WORKER_VERDICT_TEXT,
     type Lanes, type Missing, type Reason, type Stuck, type Worker,
   } from "../lib/fleet";
   import { VERDICT_TEXT, waitWhat, type Health, type HomeQuestion } from "../lib/home";
@@ -38,7 +38,8 @@
   const win = $derived(laneWindow(workers, now));
   const ticks = $derived(hourTicks(win, now));
   const nowAt = $derived(boxGeometry(now, now, win).left);
-  const tone = $derived(!verdict ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
+  // Waiting on the supervisor asks nothing of the operator: no alarm colour.
+  const tone = $derived(!verdict || verdict === "waiting" ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
   const word = (v: string | null) => (!v ? "No verdict" : (VERDICT_TEXT as Record<string, string>)[v] ?? v);
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
   // What the released stories wait on while slots are free, and who acts on each.
@@ -188,6 +189,12 @@
           <div class="why" data-why={s.kind}><p><b>Also stuck:</b> {s.label} {s.reason}</p>{@render act(s, true)}</div>
           {@render resolve(s.key)}
         {/each}
+        {#each w.waits.filter((x) => x.kind === "supervisor") as x (x.identifier)}
+          <div class="sup" data-wait-supervisor={x.identifier}>
+            <p>{#if x.key}<a href={storyHref(x.key)}>{x.label}</a>{:else}{x.label}{/if} {x.reason}</p>
+            {#if x.lease}<p class="lease" data-lease>{leaseText(x.lease, now)}</p>{/if}
+          </div>
+        {/each}
         <p class="next" data-next>
           <b>Next:</b>
           {#each w.next as x, i (`${x.identifier}:${x.kind}:${i}`)}{i ? "; " : " "}{#if x.key}<a href={storyHref(x.key)}>{x.label}</a>{:else}{x.label}{/if} ({x.reason}){:else} nothing waits on {w.name}{/each}
@@ -254,6 +261,10 @@
   .grant input { width: 64px; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r-button); }
   .err { margin-top: 6px; color: var(--alert); font-size: 12px; }
   .next { margin: 4px 0 0 72px; font-size: 12.5px; color: var(--ink); }
+  .sup { margin: 2px 0 6px 72px; padding: 6px 10px; border-left: 3px solid var(--slate); background: var(--panel); font-size: 12.5px; color: var(--ink); }
+  .sup p { overflow-wrap: anywhere; }
+  .sup a { color: inherit; font-weight: 600; }
+  .sup .lease { color: var(--mute); font-size: 12px; }
   .next a { color: inherit; }
   .cap { font-size: 11.5px; color: var(--mute); }
   .btn { flex: none; display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; white-space: nowrap; }
@@ -263,6 +274,6 @@
   .btn:disabled { opacity: 0.45; cursor: default; }
   @media (max-width: 760px) {
     .head { grid-template-columns: 1fr; }
-    .why, .resolve, .next { margin-left: 0; }
+    .why, .resolve, .next, .sup { margin-left: 0; }
   }
 </style>
