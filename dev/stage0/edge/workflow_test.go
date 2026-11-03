@@ -100,8 +100,8 @@ func TestRequirementsNameWhatAJobNeeds(t *testing.T) {
 	lines := workflowFrontMatter(t)
 	_, entries := repositories(t, lines)
 	homelab := entries["homelab"]
-	if !slices.Contains(homelab, "requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 200}") {
-		t.Errorf("homelab's requirements are not nested, 8 CPUs, 20 GiB and 200 GiB: %q", homelab)
+	if !slices.Contains(homelab, "requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 60}") {
+		t.Errorf("homelab's requirements are not nested, 8 CPUs, 20 GiB and 60 GiB: %q", homelab)
 	}
 	if !slices.Contains(homelab, "image: homelab.smolmachine") {
 		t.Errorf("homelab's jobs do not run the homelab pack: %q", homelab)

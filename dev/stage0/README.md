@@ -157,7 +157,7 @@ by the same Sortie, like any other.
   | --- | --- | --- | --- | --- |
   | `sortie` | `STAGE0_REPO_*` | yes | `stage0.smolmachine` | 4 CPUs, 8 GiB, 20 GiB of disk |
   | `agentic-orchestration` | `STAGE0_AO_REPO_*` | no | `stage0.smolmachine` | 4 CPUs, 8 GiB, 20 GiB of disk |
-  | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | `homelab.smolmachine` | `nested`, 8 CPUs, 20 GiB, 200 GiB of disk |
+  | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | `homelab.smolmachine` | `nested`, 8 CPUs, 20 GiB, 60 GiB of disk |
 
   A worker declares `nested` only when it has homelab's inputs, so any
   worker may take a sortie story and any worker with homelab's dev host a
@@ -444,7 +444,7 @@ machines (spec store `run-homelab-through-sortie`, design D5-D12):
 | --- | --- |
 | homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master` |
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The daemon runs its commands as `builder` (`smolvm.images`); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. While no job runs, the packs it replaced are deleted |
-| Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 200 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
+| Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 60 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
 | Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone. Five, beside the daemon's share: smolvm's ceiling on taichi |
 | vm key | copied alone into `$STAGE0_HOME/inputs/vm-age`; reaches every command in the machine as `HOMELAB_VM_AGE_KEY` (`env_files`), never logged |
 | Setup | what the homelab workflow's hooks did, before the agent starts: the vm key where sops looks, `guest-start.sh` (the flight recorder, and swap at `/storage/swapfile`), and `scripts/vmhost/prepare.sh` |
