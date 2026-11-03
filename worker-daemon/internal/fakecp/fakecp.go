@@ -77,6 +77,9 @@ type Fake struct {
 	workers  map[string]protocol.Declaration
 	answer   map[string]int // job key → status the heartbeat answers
 	attempts map[string]*attemptData
+	// down answers every request 502, as a proxy in front of a Sortie
+	// that is restarting does.
+	down bool
 }
 
 // attemptData is what the worker sent on an attempt's flows.
@@ -85,8 +88,12 @@ type attemptData struct {
 	exit           *int
 	streamOpened   bool
 	streamEnded    bool
-	result         *Result
-	usage          []protocol.Usage
+	// stream is the open stdio stream; breaks counts the streams the
+	// fake broke, as a Sortie that restarts breaks them.
+	stream *stdio.Conn
+	breaks int
+	result *Result
+	usage  []protocol.Usage
 }
 
 // Result is what the worker returned on the bundles flow.
@@ -168,6 +175,48 @@ func (f *Fake) Offer(j Job) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pending = append(f.pending, j)
+}
+
+// Restart breaks the attempt's open stdio stream as a Sortie that stops
+// breaks it, without the C frame, and answers every request 502 until
+// [Fake.Up]; the next stream is then accepted, and its input closed
+// after StdioInput whatever KeepInputOpen says. The lease and the tokens
+// stay, as a restarted Sortie restores them.
+func (f *Fake) Restart(job string, attempt int) {
+	f.mu.Lock()
+	a := f.data(key(job, attempt))
+	c := a.stream
+	a.stream, a.streamOpened = nil, false
+	a.breaks++
+	f.down = true
+	f.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// Up ends a [Fake.Restart]: requests are served again, and each lease
+// lasts LeaseMS from now, as a restarted Sortie restores it.
+func (f *Fake) Up() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = false
+	for _, l := range f.leases {
+		if !l.ended && !l.lost {
+			l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
+		}
+	}
+}
+
+// Streams counts the stdio streams the attempt opened.
+func (f *Fake) Streams(job string, attempt int) int {
+	n := 0
+	for _, e := range f.Events() {
+		if e.Kind == "stdio" && e.Job == job && e.Attempt == attempt && e.Status == http.StatusSwitchingProtocols {
+			n++
+		}
+	}
+	return n
 }
 
 // AnswerHeartbeat makes every later heartbeat for the attempt answer
@@ -267,6 +316,14 @@ func problem(w http.ResponseWriter, code int, kind, msg string) {
 
 // ServeHTTP routes the worker API, the flows, and the egress proxy.
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	down := f.down
+	f.mu.Unlock()
+	if down {
+		http.Error(w, "the control plane is restarting", http.StatusBadGateway)
+		f.record(Event{Kind: "down", Status: http.StatusBadGateway})
+		return
+	}
 	if r.Method == http.MethodConnect || r.URL.IsAbs() {
 		f.egress(w, r)
 		return
@@ -731,6 +788,8 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 	f.mu.Lock()
 	j := f.jobs[k]
 	a.streamOpened = true
+	a.stream = c
+	keepOpen := j.KeepInputOpen && a.breaks == 0
 	f.mu.Unlock()
 	f.record(Event{Kind: "stdio", Job: job, Attempt: attempt, Status: 101})
 	go func() {
@@ -739,7 +798,7 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 				return
 			}
 		}
-		if !j.KeepInputOpen {
+		if !keepOpen {
 			_ = c.WriteFrame(stdio.StdinClosed, nil)
 		}
 	}()

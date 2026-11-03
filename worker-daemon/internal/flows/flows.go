@@ -104,9 +104,21 @@ func (j *Job) request(ctx context.Context, flow, method, path string, body io.Re
 	return resp, nil
 }
 
+// StatusError is a flow request the control plane answered with a
+// status that is not a success.
+type StatusError struct {
+	Flow, Path string
+	Status     int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("flows: %s %s: HTTP %d: %s", e.Flow, e.Path, e.Status, e.Body)
+}
+
 func statusError(flow, path string, resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("flows: %s %s: HTTP %d: %s", flow, path, resp.StatusCode, bytes.TrimSpace(b))
+	return &StatusError{Flow: flow, Path: path, Status: resp.StatusCode, Body: string(bytes.TrimSpace(b))}
 }
 
 // FetchSeed writes the workspace seed at seedPath on the bundles flow

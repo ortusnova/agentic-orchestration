@@ -37,6 +37,7 @@ while (( $# )); do
   shift
 done
 path=/${url#http://*/}
+echo "$method $path" >> "$s/requests"
 n() { cat "$s/$1" 2> /dev/null || echo 0; }
 dispatch() {
   local r q m; r=$(n running) q=$(n queued) m=$(n max)
@@ -73,15 +74,15 @@ want() { # want NAME STUB_STATE
 
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
-    "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused"
+    "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile"
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
   mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon"
   # Like the real one, --update-sortie moves the Sortie checkout to plan-bench.
   # shellcheck disable=SC2016 # expanded by the stub, not here
-  printf '#!/bin/sh\nprintf stage0.sh >> "%s/calls"; for a; do printf " %%s" "$a" >> "%s/calls"; done; echo >> "%s/calls"\n[ "$1" != --update-sortie ] || git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench\n[ -z "$FAIL_STAGE0" ]\n' \
-    "$tmp" "$tmp" "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
+  printf '#!/bin/sh\nprintf stage0.sh >> "%s/calls"; for a; do printf " %%s" "$a" >> "%s/calls"; done; echo >> "%s/calls"\necho "$STAGE0_PROFILE" > "%s/profile"\n[ "$1" != --update-sortie ] || git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench\n[ -z "$FAIL_STAGE0" ]\n' \
+    "$tmp" "$tmp" "$tmp" "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
@@ -174,13 +175,35 @@ echo control > "$STAGE0_HOME/sortie-token"
 setup; sortie 0 4 1; echo "deploy of kit 0" > "$STAGE0_HOME/dispatch.paused"; touch "$SORTIE_STUB/paused"; run
 want "a pause the kit left with nothing pending is resumed" "running 1, queued 3, dispatching"
 # A worker host: it waits while its daemon runs a job, and builds no Sortie.
+# Its stage0.env is taichi's after the move from the retired homelab profile:
+# it still names a Sortie checkout and port and p1's Huly through a tunnel,
+# and a pause that Sortie left is still recorded. No Sortie runs there, so
+# deploy asks none anything, and follows no plan-bench merge.
 cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
-printf 'STAGE0_PROFILE=worker\nSTAGE0_SORTIE_SRC=%s\n' "$tmp/sortie" > "$STAGE0_HOME/stage0.env"
+printf 'STAGE0_PROFILE=worker\nSTAGE0_SORTIE_SRC=%s\nSTAGE0_SORTIE_PORT=1\nSTAGE0_HULY_URL=http://127.0.0.1:8087\n' "$tmp/sortie" > "$STAGE0_HOME/stage0.env"
+no_sortie_asked() { # no_sortie_asked NAME
+  if [[ ! -s $SORTIE_STUB/requests ]]; then echo "ok: $1"; else echo "FAIL: $1: asked Sortie $(tr '\n' ';' < "$SORTIE_STUB/requests")"; failed=1; fi
+}
+profile_was() { # profile_was NAME PROFILE: the profile the last stage0.sh ran with
+  if [[ $(cat "$tmp/profile" 2> /dev/null) == "$2" ]]; then echo "ok: $1"; else echo "FAIL: $1: stage0.sh ran with STAGE0_PROFILE='$(cat "$tmp/profile" 2> /dev/null)', want $2"; failed=1; fi
+}
 setup; merge dev/stage0/units; mkdir -p "$STAGE0_HOME/worker/jobs/ONS-9-1"; run
 check "on a worker host a kit change waits while a job runs" main~1 ""
 rmdir "$STAGE0_HOME/worker/jobs/ONS-9-1"; run; check "and runs stage0.sh once none does" main "stage0.sh;"
+profile_was "and stage0.sh runs the worker profile" worker
+no_sortie_asked "and deploy asks no Sortie"
 setup; merge worker-daemon/x; run; check "a worker-daemon change runs stage0.sh" main "stage0.sh;"
-setup; smerge; run; check "a worker host follows no plan-bench merge" main ""
+profile_was "with the worker profile" worker
+setup; smerge; echo "deploy of Sortie 0" > "$STAGE0_HOME/dispatch.paused"; run
+check "a worker host follows no plan-bench merge" main ""
+if sortie_at plan-bench~1; then echo "ok: and leaves the Sortie checkout where it is"; else echo "FAIL: a worker host moved the Sortie checkout"; failed=1; fi
+no_sortie_asked "and asks no Sortie, not even to resume a pause it left"
+setup; smerge; merge dev/stage0/units; run
+check "a kit and a plan-bench merge on a worker host run stage0.sh without --update-sortie" main "stage0.sh;"
+profile_was "with the worker profile" worker
+no_sortie_asked "and ask no Sortie"
+if [[ ! -e $STAGE0_HOME/deploy-sortie.failed ]] && grep -q 'running ' "$tmp/err" && ! grep -qi 'sortie' "$tmp/err"; then echo "ok: and deploy names no Sortie"
+else echo "FAIL: a worker host's deploy: $(cat "$tmp/err")"; failed=1; fi
 cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
 
 # One run at a time: deploy.sh waits for a stage0.sh, and stage0.sh for it.
