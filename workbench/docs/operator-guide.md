@@ -179,6 +179,7 @@ A project opens on its home; the **Graph** tab beside it opens the graph. Everyo
 - **Execution health**: whether the agents will stay busy (stuck, done, idle now, will idle, healthy) and why, the agent slots (Sortie's `agent.max_concurrent_agents`), and the runway of released stories not yet started. Their history covers the hours since the workbench started.
 - **The critical path** to the next milestone's gate.
 - **Needs a person**: first, in its own **Answer** column, each question an agent asked when it stopped (see [Answer an agent](#answer-an-agent)); then every unit of planned work that cannot run yet and needs someone, in three columns (Approve, Write a spec, Operator tasks), ranked by how soon it holds agents up. **Approve** keeps the approver role check; every other action opens the graph at the item, selected and attached to the planning chat.
+- **Supervisor**: Sortie's supervisor, its status, **Pause** or **Resume**, and its recent actions (see [The supervisor](#the-supervisor)).
 - **Milestones**: each one's stories, agent tasks and person tasks, counted apart.
 
 ### Story status
@@ -237,6 +238,24 @@ Each action needs the `approver` role, and the workbench records who did it. The
 An agent that cannot go on without a person stops and states why, and Sortie parks its story. The workbench reads each park from Sortie's state at every poll, and the stop statement whole from Sortie's per-issue response. Each one is listed first on the home, under **Answer**: the story, the whole statement, when it stopped, and an answer box. The story's details in the graph show the same, its card reads "asks a question", and the execution verdict names the question (`<story> asks: …`). While a question is open, the project bar and the page title of the home and the graph show the count ("1 question"), live.
 
 An `approver` answers in the box. The workbench sends the text through Sortie's answer API (`POST /api/v1/<identifier>/answer`, with the person's name as the author); Sortie posts it on the issue and releases the park, and the story's next run resumes with the statement and the answer. The workbench writes nothing to the tracker itself, and records who answered in the story's worker history. A question leaves the list as soon as Sortie no longer reports the park, whether it was answered here or released in the tracker. A planner sees the question but no answer box, and a read-only workbench (`WORKBENCH_SYNC=0`) refuses answers. The route is `POST /api/projects/<slug>/stories/answer` (`{"key": "<change>/<id>", "text": "…"}`); Sortie's `409` for an issue that is not parked comes back as `409`.
+
+### The supervisor
+
+Sortie's supervisor watches its runs and acts on them through a token that allows only a few actions: answer a question, release a parked story, grant sessions up to a cap, record a merge the forge shows, start a fix run, mark a pull request a draft, merge a pull request whose review and CI passed (never a `review: ui` story's), file an issue, and request a live proof. Sortie refuses it anything else, such as approving a story, and records each action, refused or not, with the evidence it was based on and its result (spec store `agent-platform/run-supervision`).
+
+The workbench reads the supervisor from Sortie's state at every poll, for the project Sortie dispatches. The home's **Supervisor** section shows its status (Acting, Paused, or Off; who paused it and when) and its 20 newest actions on this project's stories, or on no story: what it did, or tried to do, the result (done, refused, failed) and why, when, a link to the story in the graph and to the pull request, and the evidence, with a merge commit linked to the commit. A story's details in the graph show its own actions under **The supervisor**. An action on another project's issue is not shown.
+
+An `approver` chooses **Pause** to stop the supervisor acting until someone chooses **Resume**; a planner sees the status but neither button. Sortie records who did it. Pausing writes nothing to the tracker, so a read-only workbench (`WORKBENCH_SYNC=0`), such as a ui story's preview, may do it too. The routes are `POST /api/projects/<slug>/supervisor/pause` and `POST /api/projects/<slug>/supervisor/resume`; the graph API names the supervisor in `supervisor` and each story's actions in `supervisor_actions`.
+
+The workbench expects this of Sortie:
+
+| Call | What Sortie does |
+| --- | --- |
+| `GET /api/v1/state` | `supervisor`: `status` (`active`, `paused`, `off`), `paused_at`, `paused_by`, and `actions`, each with `id`, `at`, `action`, `issue_identifier`, `pull_request` (`repository`, `number`, `url`), `evidence` (an object of named values, a list, or text), `result` (`done`, `refused`, `failed`) and `detail` |
+| `POST /api/v1/supervisor/pause` | `{"author": "<name>"}`: the supervisor takes no action until it is resumed |
+| `POST /api/v1/supervisor/resume` | `{"author": "<name>"}`: it acts again |
+
+A Sortie whose state has no `supervisor` reads "This Sortie reports no supervisor", and one that answers `404` to a pause is refused as `no_supervisor`.
 
 ### Watch and steer workers
 

@@ -76,6 +76,16 @@
     }
   }
 
+  async function supervise(op: "pause" | "resume"): Promise<string | null> {
+    try {
+      await projectApi(slug).supervisor(op);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return `${op === "pause" ? "Pausing" : "Resuming"} the supervisor needs the approver role.`;
+      return err instanceof Error ? err.message : "Sortie did not take that.";
+    }
+  }
+
   async function replace(replacement: string): Promise<string | null> {
     try {
       await sync.supersede(replacement);
@@ -112,7 +122,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsupervisor={supervise}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />

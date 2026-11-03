@@ -5,10 +5,11 @@
   import type { MergedGraph } from "../lib/types";
   import HomeNeeds from "./HomeNeeds.svelte";
   import HomeTimeline from "./HomeTimeline.svelte";
+  import SupervisorPanel from "./SupervisorPanel.svelte";
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsupervisor, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -19,6 +20,8 @@
     onapprove: (keys: string[]) => Promise<string | null>;
     onanswer: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
+    /** Pause or resume Sortie's supervisor; resolves to an error message, or null. */
+    onsupervisor?: (op: "pause" | "resume") => Promise<string | null>;
     actions?: Snippet;
   } = $props();
 
@@ -154,6 +157,8 @@
     {/if}
 
     <HomeNeeds items={home.not_ready} questions={home.questions ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} />
+
+    <SupervisorPanel supervisor={doc.supervisor} {slug} dispatched={!!doc.sortie.dispatched} reachable={doc.sortie.reachable} oncontrol={onsupervisor} />
 
     <section class="progress" aria-labelledby="ms-h">
       <h2 id="ms-h">Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2>

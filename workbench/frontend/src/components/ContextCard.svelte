@@ -5,6 +5,7 @@
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
   import QuestionBox from "./QuestionBox.svelte";
+  import SupervisorActions from "./SupervisorActions.svelte";
   import { workersOf, workerStatus } from "../lib/worker";
   import { renderInline, renderMarkdown } from "../lib/markdown";
   import { groupCovers, type ChangeRequirements, type CoveredRequirement, type SpecReader } from "../lib/spec";
@@ -208,6 +209,13 @@
           </div>
         {/if}
 
+        {#if node.kind === "story" && node.supervisor_actions?.length}
+          <div class="supervised" data-supervisor-actions={node.plan_key}>
+            <b>The supervisor</b>
+            <SupervisorActions actions={node.supervisor_actions} />
+          </div>
+        {/if}
+
         <dl>
           <dt>Depends on</dt>
           <dd>
@@ -359,6 +367,8 @@
   .small.danger { border-color: var(--alert); color: var(--alert); }
   .asks { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #ecc77f; border-left: 4px solid var(--amber); border-radius: var(--r-well); background: var(--amber-tint); }
   .asks > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber-ink); }
+  .supervised { display: flex; flex-direction: column; gap: 2px; margin-top: var(--s-md); padding: 10px 14px 4px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
+  .supervised > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
   .workers { display: flex; flex-direction: column; gap: 6px; }
   .worker .row { display: flex; align-items: center; gap: 8px; }
   .list .worker .row button:first-child { flex: 1; min-width: 0; margin-right: 0; }
