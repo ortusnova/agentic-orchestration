@@ -29,6 +29,31 @@ export interface Question {
   sortie?: string;
 }
 
+/** Why a story's work failed (agent-platform/run-supervision): the platform
+ * fault that holds it, or else its newest finished run, when that failed. */
+export interface Failure {
+  source: "platform_fault" | "run";
+  /** The Sortie that holds the fault or ran the run, by name. */
+  sortie: string;
+  /** The first line of the error. */
+  cause: string;
+  /** The failing step's whole output, when Sortie kept it. */
+  detail: string | null;
+  step: string | null;
+  class: string | null;
+  /** A run only: how it ended. */
+  status: string | null;
+  /** When the story stopped on it, in Unix seconds. */
+  at: number | null;
+  /** A platform fault only: its id, and what a person does to clear it and where; null when Sortie's own check clears it. */
+  fault_id: string | null;
+  action: string | null;
+  where: string | null;
+  done_at: number | null;
+  last_check_error: string | null;
+  next_check_at: number | null;
+}
+
 export interface TrackerView {
   id: string;
   identifier: string;
@@ -60,6 +85,8 @@ export interface GraphNode {
   question?: Question | null;
   /** Stories only: where it runs or why it waits, its pull request, and what unblocks it. */
   run_state?: RunState | null;
+  /** Stories only: why its work failed, with the full cause; absent from an older backend. */
+  failure?: Failure | null;
   // Stories only: the plan status the workbench derives from approvals and Sortie.
   plan_status?: PlanStatus | null;
   held_by?: string[];

@@ -198,6 +198,25 @@
             onsessions={actions?.sessions ? (n) => actions.sessions!(node.plan_key, n) : undefined} />
         {/if}
 
+        {#if node.kind === "story" && node.failure}
+          {@const f = node.failure}
+          <div class="failure" data-failure={f.source}>
+            <b>{f.source === "platform_fault" ? "Held by a platform fault" : f.status === "failed" || !f.status ? "Its last run failed" : `Its last run ${f.status.replace(/_/g, " ")}`}</b>
+            <p class="cause" data-cause>{f.cause}</p>
+            {#if f.detail}
+              <pre data-detail>{f.detail}</pre>
+            {/if}
+            {#if f.source === "platform_fault"}
+              {#if f.action}
+                <p data-fault-action>A person clears it: <b>{f.action}</b>{f.where ? ` (${f.where})` : ""}. Mark it done under Needs a person on the home.</p>
+              {:else}
+                <p data-fault-action>Sortie checks it again on its own and runs the story once the check passes.</p>
+              {/if}
+              {#if f.last_check_error}<p class="still" data-check-error>The last check failed: {f.last_check_error}</p>{/if}
+            {/if}
+          </div>
+        {/if}
+
         {#if node.kind === "story" && node.question}
           <div class="asks" data-asks={node.plan_key}>
             <b>The agent asks</b>
@@ -365,6 +384,11 @@
   .small.danger { border-color: var(--alert); color: var(--alert); }
   .asks { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #ecc77f; border-left: 4px solid var(--amber); border-radius: var(--r-well); background: var(--amber-tint); }
   .asks > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber-ink); }
+  .failure { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #e9b8b3; border-left: 4px solid var(--alert); border-radius: var(--r-well); background: #fbeceb; font-size: 12.5px; }
+  .failure > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8f241d; }
+  .failure .cause { font: 600 12px/1.5 var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+  .failure pre { max-height: 320px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-card); background: #fff; font: 500 11.5px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .failure .still { color: #8f241d; }
   .workers { display: flex; flex-direction: column; gap: 6px; }
   .worker .row { display: flex; align-items: center; gap: 8px; }
   .list .worker .row button:first-child { flex: 1; min-width: 0; margin-right: 0; }
