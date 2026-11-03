@@ -188,13 +188,17 @@ class Hub:
             return None
         out: dict[str, Any] = {k: list(self.agent_state.get(k) or []) for k in ("running", "retrying", "budget_exhausted", "parked")}
         cap = ((self.agent_state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+        workers = list(((self.agent_state.get("workers") or {}).get("workers")) or [])
         for _, s in self._peer_pairs():
             for k in out:
                 out[k] += list(s.get(k) or [])
+            workers += list(((s.get("workers") or {}).get("workers")) or [])
             more = ((s.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
             if isinstance(cap, int) and isinstance(more, int):
                 cap += more
         out["config"] = {"agent": {"max_concurrent_agents": cap} if isinstance(cap, int) else {}}
+        if workers:
+            out["workers"] = {"workers": workers}
         return out
 
     async def _questions(self, states: list[tuple[ProjectSortie, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
