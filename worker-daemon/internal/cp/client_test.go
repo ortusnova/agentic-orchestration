@@ -142,3 +142,34 @@ func TestAnswers(t *testing.T) {
 		t.Errorf("check-in 400 = %v", err)
 	}
 }
+
+// A heartbeat or report answered 410 is ErrJobGone, carrying the
+// control plane's reason; 503 is any other refusal, which the daemon
+// retries.
+func TestJobGoneAnswers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case protocol.AttemptPath("ONS-19", 1, "heartbeat"), protocol.AttemptPath("ONS-19", 1, "report"):
+			w.WriteHeader(http.StatusGone)
+			_, _ = w.Write([]byte(`{"error":{"code":"job_gone","message":"Sortie withdrew attempt 1 of job ONS-19"}}`))
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":"recovering","message":"adopting"}}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, WorkerID: "w", IdentityHeader: "X-Sortie-Worker-Identity", HTTP: HTTPClient(nil)}
+	ctx := context.Background()
+	_, err := c.Heartbeat(ctx, "ONS-19", 1, protocol.Beat{})
+	var se *StatusError
+	if !errors.Is(err, ErrJobGone) || !errors.As(err, &se) || se.Message != "Sortie withdrew attempt 1 of job ONS-19" {
+		t.Errorf("heartbeat 410 = %v, want ErrJobGone with the reason", err)
+	}
+	if err := c.Report(ctx, "ONS-19", 1, protocol.Report{}); !errors.Is(err, ErrJobGone) {
+		t.Errorf("report 410 = %v, want ErrJobGone", err)
+	}
+	if _, err := c.Heartbeat(ctx, "ONS-7", 1, protocol.Beat{}); errors.Is(err, ErrJobGone) || errors.Is(err, ErrLeaseLost) || !errors.As(err, &se) || se.Status != http.StatusServiceUnavailable {
+		t.Errorf("heartbeat 503 = %v, want a plain refusal", err)
+	}
+}

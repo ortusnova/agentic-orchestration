@@ -364,6 +364,9 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 		case errors.Is(err, cp.ErrLeaseLost):
 			log.Warn("report refused: the lease is gone", slog.String("outcome", r.Outcome))
 			return
+		case errors.Is(err, cp.ErrJobGone):
+			log.Warn("report refused: the control plane no longer wants the job", slog.String("outcome", r.Outcome), slog.String("error", err.Error()))
+			return
 		case errors.As(err, &se) && se.Status < 500:
 			log.Error("report refused", slog.String("error", err.Error()))
 			return
@@ -379,6 +382,8 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 
 var (
 	errLeaseLost = errors.New("the control plane ended the attempt: lease lost")
+	errJobGone   = errors.New("the control plane no longer wants the job")
+	errSilent    = errors.New("no heartbeat accepted for longer than the lease")
 	errShutdown  = errors.New("worker daemon shut down")
 )
 
