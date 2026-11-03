@@ -208,7 +208,7 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 		backends = append(backends, d.backend.Name())
 	}
 	_, r := d.reserved()
-	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested, Backends: backends,
+	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
 		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s),
 		Used:      protocol.Free{CPU: r.CPU, MemGiB: r.MemGiB, DiskGiB: r.DiskGiB},
 		Unmanaged: d.unmanagedSeen()}

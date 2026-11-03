@@ -38,16 +38,17 @@ func readProfile(t *testing.T) egressProfile {
 	return p
 }
 
-// workflowEgress reads the hosts p1's workflow allows and the hosts of
-// each credential it binds, from WORKFLOW.md's environment.smolvm.
-func workflowEgress(t *testing.T) (hosts []string, creds map[string][]string) {
+// workflowCredentials reads the hosts of each credential p1's workflow
+// binds, from WORKFLOW.md's environment.remote. The hosts a job may reach
+// are nono's alone (egress-profile.json): the remote kind takes no
+// allow_hosts.
+func workflowCredentials(t *testing.T) (creds map[string][]string) {
 	t.Helper()
 	b, err := os.ReadFile("../WORKFLOW.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	creds = map[string][]string{}
-	item := regexp.MustCompile(`^\s+- ([a-z0-9.-]+)\s*$`)
 	cred := regexp.MustCompile(`^\s+- \{name: ([a-z0-9_]+), .*hosts: \[([^\]]*)\]`)
 	section := ""
 	for line := range strings.SplitSeq(string(b), "\n") {
@@ -59,36 +60,39 @@ func workflowEgress(t *testing.T) (hosts []string, creds map[string][]string) {
 			section = strings.TrimSuffix(trimmed, ":")
 			continue
 		}
-		if m := item.FindStringSubmatch(line); m != nil && section == "allow_hosts" {
-			hosts = append(hosts, m[1])
-		}
 		if m := cred.FindStringSubmatch(line); m != nil && section == "credentials" {
 			for h := range strings.SplitSeq(m[2], ",") {
 				creds[m[1]] = append(creds[m[1]], strings.TrimSpace(h))
 			}
 		}
 	}
-	if len(hosts) == 0 || len(creds) == 0 {
-		t.Fatalf("WORKFLOW.md: found hosts %q and credentials %q", hosts, creds)
+	if len(creds) == 0 {
+		t.Fatal("WORKFLOW.md binds no credential")
 	}
-	return hosts, creds
+	return creds
 }
 
-// nono allows a job exactly the hosts its workflow allows, plus the hosts
-// of the credentials it holds, and holds each credential the workflow
-// binds, for its hosts, read from its process environment (run-nono.sh).
+// nono allows a job only exact hosts and *.domain patterns, among them the
+// forge's and those of the credentials it holds, and holds each credential
+// the workflow binds, for its hosts, read from its process environment
+// (run-nono.sh).
 func TestEgressProfileFollowsTheWorkflow(t *testing.T) {
 	p := readProfile(t)
-	hosts, creds := workflowEgress(t)
-	want := append(slices.Clone(hosts), forgeHosts...)
+	creds := workflowCredentials(t)
+	host := regexp.MustCompile(`^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$`)
+	for _, h := range p.Network.AllowDomain {
+		if !host.MatchString(h) {
+			t.Errorf("nono allows %q, which is neither a host nor a *.domain pattern", h)
+		}
+	}
+	want := slices.Clone(forgeHosts)
 	for _, hs := range creds {
 		want = append(want, hs...)
 	}
-	slices.Sort(want)
-	want = slices.Compact(want)
-	got := slices.Sorted(slices.Values(p.Network.AllowDomain))
-	if !slices.Equal(got, want) {
-		t.Errorf("nono allows %q; the workflow allows %q", got, want)
+	for _, h := range want {
+		if !slices.Contains(p.Network.AllowDomain, h) {
+			t.Errorf("nono does not allow %s, a host of a credential it holds", h)
+		}
 	}
 	for name, hs := range creds {
 		c, ok := p.Network.CustomCredentials[name]

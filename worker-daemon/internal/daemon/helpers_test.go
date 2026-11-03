@@ -267,6 +267,10 @@ type setup struct {
 	// backend and pack replace the fake machines with a real backend.
 	backend machine.Backend
 	pack    string
+	// images is the configuration's smolvm.images.
+	images map[string]any
+	// nested, when set, is the configuration's smolvm.nested.
+	nested any
 }
 
 func defaults() setup {
@@ -307,7 +311,7 @@ func newHarness(t *testing.T, s setup) *harness {
 		"floor":         map[string]any{"disk_gib": s.floorDisk},
 		"smallest_job":  s.smallest,
 		"state_dir":     state,
-		"smolvm":        map[string]any{"packs": map[string]string{testImage: pack}},
+		"smolvm":        map[string]any{"packs": map[string]string{testImage: pack}, "images": s.images, "nested": s.nested},
 		"log_level":     "debug",
 	}
 	if !s.noUsage {
