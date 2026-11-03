@@ -2,7 +2,8 @@
 # On p1: the two nono scenarios of the stage-1 edge against the real thing
 # (edge/live_test.go): the pinned nono with the kit's egress profile and the
 # credentials on p1, through the edge, with a fake Sortie for introspection.
-# Calls api.anthropic.com once, with the Claude subscription. Uses its own
+# Calls api.anthropic.com once, with the Claude subscription, and Firecrawl's
+# keyless search (mcp.firecrawl.dev) once, for opencode's websearch. Uses its own
 # ports and CA, so the running units are untouched.
 set -euo pipefail
 

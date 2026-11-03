@@ -1,233 +1,318 @@
-"""The supervisor's actions and its pause, in the workbench (agent-platform/
-run-supervision#The supervisor acts only through a scoped API, and each
-action is recorded): each action shows beside the story it touched, with its
-evidence and result, and a person pauses and resumes the supervisor."""
+"""The workbench shows what each worker is doing and what waits on it
+(agent-platform/run-supervision): every scenario against two fake Sorties,
+p1's, which dispatches the project, and taichi's homelab Sortie."""
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
-from tests.workbench.conftest import P, settle, sign_in
-from tests.workbench.fake_oidc import FakeProvider
+from tests.conftest import deliverable
+from tests.workbench.conftest import P, make_config, project, settle, sign_in
 from tests.workbench.fake_sortie import FakeSortie
-from tests.workbench.test_approvals import app_for, billing, status
-from tests.workbench.test_identity import sign_in_oidc
-from tests.workbench.test_questions import oidc_app
-from workbench.supervisor import evidence_of, pull_of, supervisor_view
+from tests.workbench.test_approvals import billing
+from tests.workbench.test_watch import validate_offline
+from tests.workbench.test_workers import TOKEN, FakeBrokers, sse_events, update
+from workbench.app import create_app
+from workbench.config import Config, ConfigError
+from workbench.fleet import READY_STUCK_SECONDS
 
-REPO = "ortusnova/agentic-orchestration"
-PULL = {"repository": REPO, "number": 75, "url": f"https://github.com/{REPO}/pull/75"}
-MERGE_COMMIT = "6684940c0ffee6684940c0ffee6684940c0ffee0"
-MERGED_AT = "2026-11-03T10:12:00Z"
-
-
-def ts(iso: str) -> float:
-    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+QUESTION = "Which disk holds the seed image: the NVMe or the SATA one?"
 
 
-def stories(store) -> FakeSortie:
-    """billing/b1 is T-1, parked; billing/b2 is T-2."""
-    billing(store)
-    fake = FakeSortie()
-    fake.issue("billing/b1", state="In Review")
-    fake.issue("billing/b2")
-    fake.park("T-1", "The pull request is merged, but the issue is not Done.")
-    return fake
+def ago(seconds: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
 
-def supervisor(app_or_client) -> dict:
-    app = getattr(app_or_client, "app", app_or_client)
-    return app.state.projects.runtimes["store"].hub.doc["supervisor"]
+def fleet_app(store, *, brokers: FakeBrokers | None = None):
+    """billing's stories are T-1 (a3), T-2 (b1), T-3 (b2), T-4 (b3) and T-5 (b4) on
+    both Sorties' tracker; p1 is this workbench's Sortie, taichi another."""
+    billing(store, deliverable("b3", covers=["billing#Do b3"]), deliverable("b4", covers=["billing#Do b4"]))
+    p1, taichi = FakeSortie(), FakeSortie()
+    for key in ("accounts/a3", "billing/b1", "billing/b2", "billing/b3", "billing/b4"):
+        p1.issue(key)
+    taichi.max_agents = 2
+    taichi.extra_state = {"host": {"name": "taichi", "capacity": {"cpu": 32, "mem_gib": 128, "disk_gib": 2000},
+                                   "used": {"cpu": 8, "mem_gib": 20, "disk_gib": 200}, "unmanaged": []}}
+    services = {"broker_transport": brokers.transport()} if brokers else {}
+    app = create_app(make_config(store.root, sortie_name="p1"), validate=validate_offline, sortie=p1.client(),
+                     peers={"taichi": taichi.client()}, **services)
+    return app, p1, taichi
 
 
-# Scenario: An action and its evidence -----------------------------------------------
+def workers(client) -> dict:
+    r = client.get(f"{P}/workers")
+    assert r.status_code == 200, r.text
+    return {w["name"]: w for w in r.json()["workers"]}
 
 
-def test_a_recorded_merge_names_its_pull_request_merge_commit_and_time_beside_the_story(store):
-    fake = stories(store)
-    fake.supervise("record_merge", "T-1", pull=PULL, at=MERGED_AT,
-                   evidence={"merge_commit": MERGE_COMMIT, "merged_at": MERGED_AT})
-    app = app_for(store, fake)
+def node(app, key):
+    return next(n for n in project(app).hub.doc["nodes"] if n["plan_key"] == key)
+
+
+# Scenario: A live proof running on taichi
+def test_a_live_proof_running_on_taichi(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.run("T-2", "s2", stage="build", broker="http://broker-2.test", phase="live_proof",
+               step="seed-vm-recreate", step_at=ago(30), started_at=ago(1500))
+    taichi.extra_state["pulls"] = [
+        {"issue_identifier": ident, "number": n, "repository": "ortusnova/homelab", "url": f"https://github.com/ortusnova/homelab/pull/{n}",
+         "waits_on": "live_proof", "reason": "its live proof needs a working vm chain", "since": ago(3000)}
+        for ident, n in (("T-3", 152), ("T-4", 148), ("T-5", 161))]
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        doc = client.get(f"{P}/graph").json()
-        sup = doc["supervisor"]
-        assert sup["status"] == "active" and sup["total"] == 1
-        a = sup["actions"][0]
-        assert (a["action"], a["result"], a["identifier"], a["key"], a["label"]) == ("record_merge", "done", "T-1", "billing/b1", "b1")
-        assert a["title"] == status(app, "billing/b1")["title"]
-        assert a["pull"] == {"ref": f"{REPO}#75", "url": PULL["url"]}
-        assert a["at"] == ts(MERGED_AT)
-        assert {"name": "merge commit", "value": MERGE_COMMIT,
-                "url": f"https://github.com/{REPO}/commit/{MERGE_COMMIT}"} in a["evidence"]
-        assert {"name": "merged at", "value": MERGED_AT, "url": None} in a["evidence"]
-        # Beside the story it touched, and no other.
-        b1 = next(n for n in doc["nodes"] if n["plan_key"] == "billing/b1")
-        b2 = next(n for n in doc["nodes"] if n["plan_key"] == "billing/b2")
-        assert b1["supervisor_actions"] == [a] and b2["supervisor_actions"] == []
+        t = workers(client)["taichi"]
+        job = t["jobs"][0]
+        assert (job["identifier"], job["key"], job["phase"], job["step"]) == ("T-2", "billing/b1", "live_proof", "seed-vm-recreate")
+        assert 1490 <= job["elapsed"] <= 1600 and job["slot"] == 1
+        waiting = {x["identifier"]: x for x in t["waits"] if x["kind"] == "live_proof"}
+        assert set(waiting) == {"T-3", "T-4", "T-5"}
+        assert all(x["reason"] == "its live proof needs a working vm chain" for x in waiting.values())
+        assert {x["pull"]["number"] for x in waiting.values()} == {152, 148, 161}
+        assert t["capacity"]["cpu"] == 32 and t["used"]["mem_gib"] == 20 and t["slots"] == 2 and t["busy"] == 1
+        # The story panel says the same, and the graph carries it, so the view updates live.
+        assert node(app, "billing/b2")["run_state"]["why"] == "its live proof needs a working vm chain"
+        assert node(app, "billing/b2")["run_state"]["pull"]["waits_on"] == "live_proof"
+        assert node(app, "billing/b1")["run_state"]["step"] == "seed-vm-recreate"
+        assert project(app).hub.doc["fleet"]["workers"][1]["name"] == "taichi"
+        # The step moves on: the next refresh shows it.
+        taichi.running["T-2"]["step"] = "seed-vm-boot"
+        settle(client)
+        assert workers(client)["taichi"]["jobs"][0]["step"] == "seed-vm-boot"
+        assert p1.requests and ("GET", "/api/v1/state", None) in taichi.requests
 
 
-def test_a_new_action_shows_at_the_next_refresh_newest_first(store):
-    fake = stories(store)
-    app = app_for(store, fake)
+# Scenario: A pull request with nothing left to do
+def test_a_pull_request_with_nothing_left_to_do(store):
+    app, p1, _ = fleet_app(store)
+    pull = {"issue_identifier": "T-2", "number": 77, "repository": "ortusnova/agentic-orchestration",
+            "url": "https://github.com/ortusnova/agentic-orchestration/pull/77", "waits_on": "none", "since": ago(30)}
+    p1.extra_state["pulls"] = [pull]
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        assert supervisor(app)["actions"] == []
-        fake.supervise("start_fix_run", "T-2", at="2026-11-03T09:00:00Z", evidence="CI failed on the head: lint")
-        fake.supervise("release_park", "T-1", at="2026-11-03T09:30:00Z", evidence={"merged": True})
+        pulls = client.get(f"{P}/workers").json()["pulls"]
+        assert [(p["identifier"], p["waits_text"], p["stuck"]) for p in pulls] == [("T-2", "ready to merge", False)]
+        assert workers(client)["p1"]["verdict"] == "idle"
+        p1.extra_state["pulls"] = [{**pull, "since": ago(READY_STUCK_SECONDS + 60)}]
         settle(client)
-        acts = supervisor(app)["actions"]
-        assert [(x["action"], x["key"]) for x in acts] == [("release_park", "billing/b1"), ("start_fix_run", "billing/b2")]
-        assert acts[1]["evidence"] == [{"name": None, "value": "CI failed on the head: lint", "url": None}]
-        assert acts[0]["evidence"] == [{"name": "merged", "value": "yes", "url": None}]
+        w = workers(client)["p1"]
+        assert w["verdict"] == "stuck" and w["reasons"][0]["code"] == "ready_to_merge"
+        assert w["reasons"][0]["url"] == pull["url"]
+        assert node(app, "billing/b1")["run_state"]["pull"]["waits_text"] == "ready to merge"
 
 
-# Scenario: A refused action ----------------------------------------------------------
-
-
-def test_a_refused_approval_shows_as_refused_beside_the_story(store):
-    fake = stories(store)
-    record = fake.supervise("approve_story", "T-2", evidence={"criteria": "all pass"})
-    assert record["result"] == "refused"
-    app = app_for(store, fake)
+# Scenario: The home page's top row
+def test_the_home_page_shows_the_slot_lanes_and_a_stuck_slot_says_why(store):
+    app, p1, taichi = fleet_app(store)
+    p1.run("T-3", "s3", stage="implement", started_at=ago(600))
+    taichi.park("T-2", QUESTION, ago(900))
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        a = supervisor(app)["actions"][0]
-        assert (a["action"], a["result"], a["key"]) == ("approve_story", "refused", "billing/b2")
-        assert a["detail"] == "approve story is not the supervisor's to do"
-        assert status(app, "billing/b2")["supervisor_actions"] == [a]
-        # Sortie refused it: the workbench recorded no approval.
-        assert status(app, "billing/b2")["plan_status"] == "draft"
+        lanes = client.get(f"{P}/home").json()["lanes"]
+        by = {w["name"]: w for w in lanes["workers"]}
+        assert list(by) == ["p1", "taichi"]
+        assert [len(w["lanes"]) for w in lanes["workers"]] == [3, 2]
+        assert by["p1"]["lanes"][0]["job"]["identifier"] == "T-3" and by["p1"]["verdict"] == "moving"
+        stuck = by["taichi"]["lanes"][0]["stuck"]
+        assert stuck["identifier"] == "T-2" and stuck["action"] == "answer" and QUESTION in stuck["reason"]
+        assert by["taichi"]["verdict"] == "stuck"
+        assert lanes["verdict"] == "stuck" and lanes["busy"] == 1 and lanes["slots"] == 5
+        assert any(r["worker"] == "taichi" and QUESTION in r["text"] for r in lanes["reasons"])
+        # The question is also the Needs a person section's, which counts it.
+        assert [q["identifier"] for q in client.get(f"{P}/home").json()["questions"]] == ["T-2"]
+        assert "total" not in lanes
 
 
-def test_an_action_on_another_projects_issue_is_left_out_and_one_on_no_issue_stays(store):
-    fake = stories(store)
-    fake.supervise("grant_sessions", "X-9", evidence={"sessions": 4})
-    fake.supervise("file_issue", None, evidence={"title": "Pushes fail without the workflow scope"})
-    app = app_for(store, fake)
+# Scenario: Unblock from the lane
+def test_answer_in_taichis_lane_reaches_taichis_sortie(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.park("T-2", QUESTION, ago(900))
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        assert [(a["action"], a["key"]) for a in supervisor(app)["actions"]] == [("file_issue", None)]
-
-
-# Pause and resume ---------------------------------------------------------------------
-
-
-def test_pause_and_resume_change_the_supervisors_status_in_sortie(store):
-    fake = stories(store)
-    app = app_for(store, fake)
-    with TestClient(app) as client:
-        sign_in(client)
-        settle(client)
-        r = client.post(f"{P}/supervisor/pause")
+        r = client.post(f"{P}/stories/answer", json={"key": "billing/b1", "text": "the NVMe"})
         assert r.status_code == 200, r.text
-        assert fake.supervisor_controls == [{"op": "pause", "author": "Local operator"}]
-        assert fake.supervisor["status"] == "paused"
-        sup = r.json()["supervisor"]
-        assert sup["status"] == "paused" and sup["paused_by"] == "Local operator" and sup["paused_at"] == ts("2026-11-03T11:00:00Z")
-        assert supervisor(app)["status"] == "paused"
-        # Paused, it acts no more: Sortie refuses, and records the refusal.
-        fake.supervise("merge_pull", "T-1", pull=PULL)
-        r = client.post(f"{P}/supervisor/resume")
+        assert taichi.answers == [{"identifier": "T-2", "text": "the NVMe", "author": "Local operator"}]
+        assert p1.answers == []
+        # taichi's Sortie released the park, and runs the story again.
+        taichi.run("T-2", "s2b", stage="build")
+        settle(client)
+        lane = workers(client)["taichi"]["lanes"][0]
+        assert lane["stuck"] is None and lane["job"]["identifier"] == "T-2"
+
+
+def test_more_sessions_in_p1s_lane_reach_p1s_sortie(store):
+    app, p1, taichi = fleet_app(store)
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "session_budget", "used_sessions": 32, "budget_sessions": 32,
+                            "exhausted_at": ago(300)}]
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        stuck = workers(client)["p1"]["lanes"][0]["stuck"]
+        assert stuck["identifier"] == "T-3" and stuck["action"] == "sessions" and stuck["reason"] == "used 32 of its 32 sessions"
+        assert node(app, "billing/b2")["run_state"]["action"] == "sessions"
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
         assert r.status_code == 200, r.text
-        assert fake.supervisor["status"] == "active"
-        sup = r.json()["supervisor"]
-        assert sup["status"] == "active" and sup["paused_by"] is None
-        assert (sup["actions"][0]["result"], sup["actions"][0]["detail"]) == ("refused", "the supervisor is paused")
+        assert r.json()["sortie"] == "p1"
+        # In Sortie's words: POST /api/v1/{identifier}/sessions takes {"add", "by", "reason"}.
+        assert p1.grants == [{"identifier": "T-3", "add": 4, "by": "Local operator", "reason": "granted from the plan workbench"}]
+        assert taichi.grants == []
+        assert r.json()["result"] == {"issue_identifier": "T-3", "issue_id": "id-T-3", "used_sessions": 32,
+                                      "budget_sessions": 36, "granted_sessions": 4}
+        # p1's Sortie runs it again: the lane is no longer stuck.
+        assert workers(client)["p1"]["lanes"][0]["stuck"] is None
+        rows = client.get(f"{P}/workers/T-3/messages").json()["commands"]
+        assert [(c["op"], c["text"]) for c in rows] == [("sessions", "4")]
+        # A story the budget no longer holds is refused, and so is a silly grant.
+        assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4}).status_code == 409
+        assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 0}).status_code == 400
+        # A running story is not offered sessions, though Sortie would grant them.
+        p1.run("T-3", "s3")
+        settle(client)
+        assert client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4}).status_code == 409
+        assert len(p1.grants) == 1
 
 
-def test_a_read_only_workbench_pauses_and_resumes(store):
-    """A ui story's preview runs read-only toward the tracker; the pause is no tracker write."""
-    fake = stories(store)
-    app = app_for(store, fake, sync_enabled=False)
+def test_a_story_sortie_no_longer_holds_is_not_held_by_its_budget(store):
+    app, p1, _ = fleet_app(store)
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "session_budget", "used_sessions": 32, "budget_sessions": 32}]
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        assert client.post(f"{P}/supervisor/pause").status_code == 200
-        assert client.post(f"{P}/supervisor/resume").status_code == 200
-        assert [c["op"] for c in fake.supervisor_controls] == ["pause", "resume"]
+        # Sortie released it between the workbench's poll and the grant: it answers 404 issue_not_found.
+        p1.budget_exhausted = []
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "not_budget_held"
+        assert p1.grants == []
 
 
-def test_a_planner_sees_the_supervisor_but_cannot_pause_it(store):
-    fake = stories(store)
-    provider = FakeProvider()
-    provider.claims["groups"] = ["eng"]
-    app = oidc_app(store, fake, provider)
-    with TestClient(app) as client:
-        sign_in_oidc(client, provider)
-        settle(client)
-        assert client.get(f"{P}/graph").json()["supervisor"]["status"] == "active"
-        r = client.post(f"{P}/supervisor/pause")
-        assert r.status_code == 403 and r.json()["error"]["code"] == "role_required"
-        assert fake.supervisor_controls == []
-
-
-def test_the_pause_carries_the_approvers_name(store):
-    fake = stories(store)
-    provider = FakeProvider()
-    app = oidc_app(store, fake, provider)
-    with TestClient(app) as client:
-        sign_in_oidc(client, provider)
-        settle(client)
-        assert client.post(f"{P}/supervisor/pause").status_code == 200
-        assert fake.supervisor_controls == [{"op": "pause", "author": "Ana Ruiz"}]
-
-
-def test_a_sortie_with_no_supervisor(store):
-    fake = stories(store)
-    fake.supervisor = None
-    app = app_for(store, fake)
+def test_a_token_budget_is_not_offered_sessions(store):
+    app, p1, _ = fleet_app(store)
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "token_budget", "used_sessions": 3, "budget_sessions": 32}]
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        doc = client.get(f"{P}/graph").json()
-        assert doc["supervisor"] is None
-        assert all(n.get("supervisor_actions") == [] for n in doc["nodes"] if n["kind"] == "story")
-        r = client.post(f"{P}/supervisor/pause")
-        assert r.status_code == 409 and r.json()["error"]["code"] == "no_supervisor"
+        assert node(app, "billing/b2")["run_state"]["action"] == "story"
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "not_budget_held"
+        assert p1.grants == []
 
 
-def test_an_unknown_operation_reaches_no_sortie(store):
-    fake = stories(store)
-    app = app_for(store, fake)
+def test_a_peers_brokers_are_reached_through_its_proxy(store, tmp_path):
+    app, _, taichi = fleet_app(store)
+    taichi.run("T-4", "s4", stage="build")
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
-        assert client.post(f"{P}/supervisor/approve").status_code == 422
-        assert not any(p.startswith("/api/v1/supervisor") for _, p, _ in fake.requests)
+        relay = project(app).workers
+    env = {"WORKBENCH_SORTIE_URL": "http://127.0.0.1:7680", "WORKBENCH_SECRET_KEY": "k", "WORKBENCH_PASSWORD_HASH": "h",
+           "WORKBENCH_HOME": str(tmp_path), "WORKBENCH_SORTIES": "taichi=http://127.0.0.1:7681",
+           "WORKBENCH_SORTIE_PROXY_TAICHI": "socks5://127.0.0.1:7781"}
+    assert Config.from_env(env).peer_proxies == (("taichi", "socks5://127.0.0.1:7781"),)
+    with pytest.raises(ConfigError):
+        Config.from_env({**env, "WORKBENCH_SORTIE_PROXY_TAICHI": "ftp://x"})
+    # taichi's broker listens on taichi's loopback: its stories go through taichi's proxy, p1's do not.
+    from workbench.workers import WorkerRelay
+    proxied = WorkerRelay(relay.sortie, sortie_for=relay.sortie_for, proxies={"taichi": "socks5://127.0.0.1:7781"})
+    assert proxied._client("T-4") is proxied._proxied["taichi"] and proxied._client("T-1") is proxied._http
 
 
-# How Sortie's records read -----------------------------------------------------------
+def test_a_sortie_that_cannot_grant_sessions_says_so(store):
+    app, p1, _ = fleet_app(store)
+    p1.grants_supported = False
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "session_budget", "used_sessions": 32, "budget_sessions": 32}]
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
+        assert r.status_code == 501 and r.json()["error"]["code"] == "grant_unsupported"
 
 
-def test_pull_requests_in_each_form_sortie_may_give():
-    assert pull_of(f"https://github.com/{REPO}/pull/12") == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
-    assert pull_of({"repository": REPO, "number": 12}) == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
-    assert pull_of({"url": f"https://github.com/{REPO}/pull/12"}) == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
-    assert pull_of(f"{REPO}#12") == {"ref": f"{REPO}#12", "url": None}
-    assert pull_of(None) is None and pull_of({}) is None
+def test_open_on_a_job_shows_its_session_live_and_its_last_transcript_after(store):
+    brokers = FakeBrokers()
+    app, p1, taichi = fleet_app(store, brokers=brokers)
+    taichi.run("T-4", "s4", stage="build", broker=brokers.add("broker-4.test", TOKEN, [update(1, "recreating the seed vm")]), token=TOKEN)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        assert node(app, "billing/b3")["runtime"]["watchable"] is True
+        assert node(app, "billing/b3")["run_state"]["action"] == "open"
+        r = client.post(f"{P}/workers/T-4/commands", json={"op": "steer", "text": "keep the old disk"})
+        assert r.status_code == 200, r.text
+        assert brokers.commands == [("broker-4.test", {"op": "steer", "text": "keep the old disk"})]
+        project(app).workers.follow_poll = 0.01
+        brokers.brokers["broker-4.test"]["after"] = lambda: taichi.end("T-4")
+        assert "recreating the seed vm" in client.get(f"{P}/workers/T-4/events").text
+
+        # After the run: its last transcript, from taichi's Sortie.
+        taichi.history["T-4"] = {"dispatch_id": "d-4", "events": [
+            {"seq": 1, "at": ago(60), "event": "notification", "message": "seed vm recreated", "text": "seed vm recreated"}]}
+        settle(client)
+        events = sse_events(client.get(f"{P}/workers/T-4/events").text)
+        assert [e["event"] for e in events] == ["transcript", "ended"]
+        last = json.loads(events[0]["data"])
+        assert last["sortie"] == "taichi" and last["dispatch_id"] == "d-4" and last["events"][0]["text"] == "seed vm recreated"
+        assert ("GET", "/api/v1/runs/d-4/events", None) in taichi.requests
 
 
-def test_evidence_in_each_form_sortie_may_give():
-    pull = pull_of(PULL)
-    assert evidence_of(None, pull) == [] and evidence_of({}, pull) == []
-    assert evidence_of(["a", {"ci": "passed"}], pull) == [{"name": None, "value": "a", "url": None},
-                                                         {"name": "ci", "value": "passed", "url": None}]
-    assert evidence_of({"run": "https://ci/1", "checks": ["lint", "test"]}, None) == [
-        {"name": "run", "value": "https://ci/1", "url": "https://ci/1"}, {"name": "checks", "value": "lint, test", "url": None}]
+# Scenario: A machine Sortie did not start
+def test_a_machine_sortie_did_not_start(store):
+    app, _, taichi = fleet_app(store)
+    taichi.extra_state["host"]["unmanaged"] = [{"name": "brian-scratch", "since": ago(7200), "state": "running"}]
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        [m] = workers(client)["taichi"]["unmanaged"]
+        assert m["name"] == "brian-scratch" and 7190 <= m["age"] <= 7300 and m["age_text"] == "2.0 h"
 
 
-def test_a_supervisor_with_no_status_reads_from_paused():
-    nodes = [{"plan_key": "c/s", "kind": "story", "title": "S", "tracker": {"identifier": "T-1", "url": None}}]
-    view, by_key = supervisor_view({"supervisor": {"paused": True, "actions": [{"action": "x", "issue_identifier": "T-1",
-                                                                              "result": {"status": "failed", "message": "forge down"}}]}}, nodes)
-    assert view["status"] == "paused"
-    assert (view["actions"][0]["result"], view["actions"][0]["detail"]) == ("failed", "forge down")
-    assert by_key == {"c/s": view["actions"]}
-    assert supervisor_view({}, nodes) == (None, {})
+def test_an_unreachable_peer_is_said_and_the_rest_still_shows(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.state_down = True
+    p1.run("T-3", "s3")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        doc = client.get(f"{P}/workers").json()
+        assert {s["name"]: s["reachable"] for s in doc["sorties"]} == {"p1": True, "taichi": False}
+        assert [w["name"] for w in doc["workers"]] == ["p1"]
+        lanes = client.get(f"{P}/home").json()["lanes"]
+        assert lanes["verdict"] == "stuck" and "taichi's Sortie is unreachable" in lanes["reasons"][0]["text"]
+
+
+def test_a_field_a_sortie_lacks_is_named_on_the_workers_and_the_home(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.extra_state.update(waits=[], pulls=[])
+    p1.run("T-3", "s3")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        doc = client.get(f"{P}/workers").json()
+        missing = {s["name"]: [m["field"] for m in s["missing"]] for s in doc["sorties"]}
+        # p1's fake serves none of the new fields; taichi's serves them all.
+        assert missing == {"p1": ["host", "waits", "pulls"], "taichi": []}
+        p1_row = next(w for w in doc["workers"] if w["name"] == "p1")
+        assert p1_row["known"] == {"use": False, "unmanaged": False, "steps": False}
+        lanes = client.get(f"{P}/home").json()["lanes"]
+        assert {m["sortie"] for m in lanes["missing"]} == {"p1"}
+
+
+def test_other_sorties_are_configured_by_name(tmp_path):
+    token = tmp_path / "taichi-token"
+    token.write_text("secret\n")
+    env = {"WORKBENCH_SORTIE_URL": "http://127.0.0.1:7680", "WORKBENCH_SECRET_KEY": "k", "WORKBENCH_PASSWORD_HASH": "h",
+           "WORKBENCH_HOME": str(tmp_path), "WORKBENCH_SORTIE_NAME": "p1",
+           "WORKBENCH_SORTIES": "taichi=http://127.0.0.1:7781/, mac-mini=https://mac.test",
+           "WORKBENCH_SORTIE_TOKEN_TAICHI_FILE": str(token), "WORKBENCH_SORTIE_TOKEN_MAC_MINI": "t2"}
+    c = Config.from_env(env)
+    assert c.sortie_name == "p1"
+    assert c.peer_sorties == (("taichi", "http://127.0.0.1:7781", "secret"), ("mac-mini", "https://mac.test", "t2"))
+    for bad in ("taichi", "Taichi=http://x", "p1=http://x", "a=http://x,a=http://y", "a=ftp://x"):
+        with pytest.raises(ConfigError):
+            Config.from_env({**env, "WORKBENCH_SORTIES": bad})

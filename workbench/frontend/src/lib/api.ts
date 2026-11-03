@@ -1,5 +1,6 @@
 /** The workbench backend: the browser's only server. */
 import type { About, Identity } from "./identity.svelte";
+import type { Fleet } from "./fleet";
 import type { MergedGraph, ProjectSummary, Supervisor, SyncStatus, TrackerProject } from "./types";
 
 export class ApiError extends Error {
@@ -53,6 +54,9 @@ export function projectApi(slug: string) {
     supersede: (key: string) => request<{ superseded: string; by: string }>("POST", `${p}/stories/supersede`, { key }),
     answer: (key: string, text: string) => request<{ answered: string; identifier: string }>("POST", `${p}/stories/answer`, { key, text }),
     supervisor: (op: "pause" | "resume") => request<{ supervisor: Supervisor | null }>("POST", `${p}/supervisor/${op}`),
+    grantSessions: (key: string, sessions: number) =>
+      request<{ granted: number; sortie: string }>("POST", `${p}/stories/sessions`, { key, sessions }),
+    workers: () => request<Fleet>("GET", `${p}/workers`),
     session: () => request<SessionStatus>("GET", `${p}/session`),
     startSession: (message: string) => request<SessionStatus>("POST", `${p}/session`, { message }),
     stopSession: () => request<SessionStatus>("DELETE", `${p}/session`),

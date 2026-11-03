@@ -131,7 +131,7 @@ func TestAnswers(t *testing.T) {
 	if _, err := c.Poll(ctx); !errors.Is(err, ErrNotCheckedIn) {
 		t.Errorf("poll 409 = %v", err)
 	}
-	if _, err := c.Heartbeat(ctx, "ONS-7", 1); !errors.Is(err, ErrLeaseLost) {
+	if _, err := c.Heartbeat(ctx, "ONS-7", 1, protocol.Beat{}); !errors.Is(err, ErrLeaseLost) {
 		t.Errorf("heartbeat 409 = %v", err)
 	}
 	if err := c.Report(ctx, "ONS-7", 1, protocol.Report{}); !errors.Is(err, ErrLeaseLost) {

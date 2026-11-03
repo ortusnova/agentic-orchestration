@@ -87,9 +87,10 @@ reactions:
         '
       timeout_ms: 30000
 
-# project is the repository whose checks ci_failure reads: Sortie's CI
-# provider reads one repository, so on p1 it watches agentic-orchestration's
-# CI. The other reactions read each pull request's own repository.
+# project is the CI provider's configured repository: agentic-orchestration
+# on p1. ci_failure reads each pull request's checks from the pull request's
+# own repository, as the other reactions do, so a sortie pull request gets CI
+# fix runs too.
 github:
   api_key: $STAGE0_GITHUB_TOKEN
   project: ${STAGE0_AO_REPO_PROJECT}
@@ -172,6 +173,8 @@ environment:
     storage_gib: 20
     allow_hosts:
       - models.opencode.ai
+      # opencode's websearch (pack/opencode.json): Firecrawl's keyless MCP.
+      - mcp.firecrawl.dev
       - registry.npmjs.org
       - proxy.golang.org
       - sum.golang.org
