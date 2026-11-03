@@ -133,7 +133,10 @@ agent:
   # sessions of several stories on runs that never started. Sortie has no
   # per-story grant yet (worker-activity-view asks for one).
   max_sessions: 32
-  max_concurrent_agents: ${STAGE0_MAX_AGENTS}
+  # A ceiling above every worker's run slots together: the matcher holds
+  # each worker to its own slots and resources (worker-config.sh,
+  # sortie_agent_cap).
+  max_concurrent_agents: ${STAGE0_SORTIE_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
   # A fresh VM's agent can take over 15 s to answer at session start; the

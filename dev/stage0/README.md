@@ -143,10 +143,13 @@ by the same Sortie, like any other.
 - **Session start.** `agent.read_timeout_ms` is 60 s: a fresh VM's agent
   can take over 15 s to answer at session start, past Sortie's 5 s
   default. Turns are bounded by `stall_timeout_ms` and `turn_timeout_ms`.
-- **Parallel agents.** `STAGE0_MAX_AGENTS` in p1's `stage0.env` (default 3)
-  caps agents at once, on every worker together; on a worker it is the
-  daemon's run slots. All of them share one Claude subscription and its rate
-  limits.
+- **Parallel agents.** `STAGE0_MAX_AGENTS` in a host's `stage0.env` is its
+  worker's run slots (p1 3, a worker host 2 by default). Sortie places a job
+  only on a worker with a free slot and the resources the job requires, so
+  its own cap, `agent.max_concurrent_agents`, is only a ceiling above every
+  worker's slots together: 16 unless `STAGE0_SORTIE_MAX_AGENTS` in p1's
+  `stage0.env` says otherwise (`worker-config.sh`, `sortie_agent_cap`). All
+  agents share one Claude subscription and its rate limits.
 - **Repositories.** A story runs in the repository its plan node names
   (plan sync keeps the Huly label `sortie-repository:<name>`), else in
   `sortie`, the default. The workflow lists three, all dispatched by p1's
