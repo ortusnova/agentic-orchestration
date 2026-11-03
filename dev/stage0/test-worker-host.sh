@@ -56,4 +56,9 @@ wh remove taichi || fail "remove taichi: $(cat "$tmp/out")"
 grep -q 'systemctl --user disable -q --now ortus-stage0-worker-tunnel@taichi.service' "$tmp/calls" && ok "a removed worker's tunnel is stopped" || fail "calls: $(cat "$tmp/calls")"
 wh add taichi || fail "add taichi back: $(cat "$tmp/out")"
 [[ $(ports) == "mac 127.0.0.1:7702;taichi 127.0.0.1:7701;" ]] && ok "a freed port is used again" || fail "after re-add: $(ports)"
+
+# p1's own worker (stage0.sh) is on the edge, with no tunnel to remove.
+printf 'LOCAL=1\nEDGE_PORT=7700\n' > "$STAGE0_HOME/workers/p1.env"
+wh list && grep -qx "$(printf 'p1\tlocal\tedge port 7700')" "$tmp/out" && ok "p1's worker is listed as local" || fail "list: $(cat "$tmp/out")"
+wh remove p1 && fail "p1's own worker was removed" || ok "p1's own worker is not removed here"
 exit $failed

@@ -8,9 +8,11 @@
 #     drain. When the same merge also changes the rest of the kit, only
 #     workbench/ moves ahead while the rest waits (recorded in
 #     deploy-workbench.at), and the later full apply builds it again.
-#   - A change to the rest of the kit (dev/, acp-broker/, smol-builder/) runs
-#     stage0.sh again, which restarts Sortie too, so it waits until no agent
-#     runs; until then the live kit stays where it is.
+#   - A change to the rest of the kit (dev/, acp-broker/, smol-builder/,
+#     worker-daemon/) runs stage0.sh again, which restarts Sortie and the
+#     worker daemon too, so it waits until no agent runs (on a worker host,
+#     until its daemon runs no job); until then the live kit stays where it is.
+#     A worker host builds no Sortie and follows no plan-bench merge.
 #   - A merge to Sortie's plan-bench runs stage0.sh --update-sortie, which
 #     rebuilds and restarts Sortie, so it too waits until no agent runs. A
 #     Sortie checkout that is not behind plan-bench (a branch being tried)
@@ -72,7 +74,9 @@ old=$(git -C "$LIVE" rev-parse HEAD)
 new=$(git -C "$LIVE" rev-parse origin/main)
 [[ $old == "$new" || $(cat "$failed" 2>/dev/null) == "$new" ]] && new=$old
 
+# A worker host builds no Sortie.
 src=${STAGE0_SORTIE_SRC:-}
+[[ ${STAGE0_PROFILE:-control} == worker ]] && src=''
 sortie_old='' sortie_new=''
 if [[ -n $src && -d $src ]]; then
   git -C "$src" fetch -q origin plan-bench
@@ -90,18 +94,25 @@ if [[ $old == "$new" && $sortie_old == "$sortie_new" ]]; then
 fi
 
 changed=$(git -C "$LIVE" diff --name-only "$old" "$new")
-kit=$(grep -E '^(dev|acp-broker|smol-builder)/' <<< "$changed" || true)
+kit=$(grep -E '^(dev|acp-broker|smol-builder|worker-daemon)/' <<< "$changed" || true)
 workbench=$(grep -E '^workbench/' <<< "$changed" || true)
 update_sortie=()
 [[ $sortie_old != "$sortie_new" ]] && update_sortie=(--update-sortie)
 
 if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
-  why=()
-  [[ -n $kit ]] && why+=("kit ${new:0:8}")
-  [[ ${#update_sortie[@]} -gt 0 ]] && why+=("Sortie ${sortie_new:0:8}")
-  draining="dispatch paused"
-  dispatch_pause "deploy of ${why[*]}" || draining="Sortie did not pause dispatch"
-  busy=$(sortie_running) || busy=0
+  if [[ ${STAGE0_PROFILE:-control} == worker ]]; then
+    # No Sortie runs here to pause: the jobs the worker daemon runs, one
+    # directory each (worker-config.sh).
+    draining="no Sortie on this host"
+    busy=$(find "$STAGE0_HOME/worker/jobs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+  else
+    why=()
+    [[ -n $kit ]] && why+=("kit ${new:0:8}")
+    [[ ${#update_sortie[@]} -gt 0 ]] && why+=("Sortie ${sortie_new:0:8}")
+    draining="dispatch paused"
+    dispatch_pause "deploy of ${why[*]}" || draining="Sortie did not pause dispatch"
+    busy=$(sortie_running) || busy=0
+  fi
   if (( busy > 0 )); then
     workbench_ahead
     [[ -n $kit ]] && say "${new:0:8} changes the kit; waiting until no agent runs ($busy now, $draining)"

@@ -29,9 +29,10 @@ else
   WORKBENCH_GITHUB_TOKEN=$(gh auth token) || { echo "run-workbench.sh: gh has no token: run gh auth login" >&2; exit 1; }
 fi
 # The other Sorties whose workers the workbench shows (agent-platform/run-supervision):
-# each one huly-tunnel.sh reached, as $STAGE0_HOME/sorties/<name>.env (its
-# address on this host's loopback, and the SOCKS forward that reaches its
-# agents' brokers on its host's loopback) and <name>.token (its control token).
+# each one as $STAGE0_HOME/sorties/<name>.env (its address on this host's
+# loopback, and the SOCKS forward that reaches its agents' brokers on its
+# host's loopback) and <name>.token (its control token). With one Sortie on
+# p1 there is none: stage0.sh deletes those the retired huly-tunnel.sh left.
 export WORKBENCH_SORTIE_NAME=${STAGE0_SORTIE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
 peers=()
 for f in "$STAGE0_HOME"/sorties/*.env; do
