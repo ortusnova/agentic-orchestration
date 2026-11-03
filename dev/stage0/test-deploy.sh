@@ -85,6 +85,7 @@ setup() {
     "$tmp" "$tmp" "$tmp" "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
+  echo 1 > "$tmp/up/dev/stage0/supervisor.md"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
   g clone -q "$tmp/remote" "$STAGE0_LIVE_KIT"
   mkdir -p "$STAGE0_LIVE_KIT/workbench/frontend/node_modules"
@@ -109,6 +110,8 @@ setup; merge docs/x; run; check "a docs change moves the kit, builds nothing" ma
 setup; merge workbench/app; run
 check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
 setup; merge dev/stage0/units; sortie 1; run; check "a kit change waits while an agent runs" main~1 ""
+# The supervisor's prompt is the kit's: stage0.sh installs it on the host.
+setup; merge dev/stage0/supervisor.md; run; check "a change to the supervisor's prompt runs stage0.sh, which installs it" main "stage0.sh;"
 setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh when idle" main "stage0.sh;"
 # A workbench change never waits for a drain: restarting it stops no agent.
 setup; rm -f "$STAGE0_HOME/deploy-workbench.at"; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
