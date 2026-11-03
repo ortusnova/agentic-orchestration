@@ -134,7 +134,7 @@ def action_of(raw: dict[str, Any], key_of: dict[str, str], nodes: dict[str, dict
 def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]]
                     ) -> tuple[dict[str, Any] | None, dict[str, list[dict[str, Any]]]]:
     """The supervisor's status and its recent actions on this project's
-    stories, newest first, and the actions on each story, by plan key; None
+    issues, newest first, and the actions on each, by plan key; None
     and none when Sortie reports no supervisor. An action on another
     project's issue is left out; one that names no issue stays."""
     sup = (state or {}).get("supervisor")
@@ -142,7 +142,7 @@ def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]]
         return None, {}
     node_of = {n["plan_key"]: n for n in nodes if n.get("plan_key")}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes
-              if n.get("kind") == "story" and (n.get("tracker") or {}).get("identifier")}
+              if n.get("plan_key") and (n.get("tracker") or {}).get("identifier")}
     recorded = [action_of(a, key_of, node_of) for a in sup.get("actions") or [] if isinstance(a, dict)]
     recorded = [a for a in recorded if a["identifier"] is None or a["key"] is not None]
     # Newest first; of two at the same time, the one Sortie recorded later.
