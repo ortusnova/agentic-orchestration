@@ -120,6 +120,10 @@ uv run workbench hash-password > ~/.config/plan-workbench-password-hash   # type
 | `WORKBENCH_SORTIE_NAME` | No | The name of the host the Sortie at `WORKBENCH_SORTIE_URL` runs on, as the workers' lanes show it (default `sortie`), such as `p1`. |
 | `WORKBENCH_SORTIES` | No | Other Sorties whose workers the workbench shows, and to which it sends answers, session grants and session views of the stories they hold: `name=url`, separated by commas, such as `taichi=http://127.0.0.1:7681` for taichi's homelab Sortie through an SSH forward. Lower-case names. Each one's control token is in `WORKBENCH_SORTIE_TOKEN_<NAME>`, or in the file `WORKBENCH_SORTIE_TOKEN_<NAME>_FILE` names, `<NAME>` in capitals with `_` for `-`. The stage-0 kit sets these from the files `$STAGE0_HOME/sorties/<name>.env` and `<name>.token`; with one Sortie on p1 it sets none (the retired `huly-tunnel.sh` wrote them for taichi's homelab Sortie). |
 | `WORKBENCH_SORTIE_PROXY_<NAME>` | No | The proxy through which the workbench reaches the brokers of the runs that Sortie holds, which listen on its host's loopback: `socks5://host:port`, such as `socks5://127.0.0.1:7781`, the SOCKS forward in the SSH connection that forwards taichi's Sortie. Without it, the workbench connects to the broker address Sortie gives, which only works on Sortie's own host. |
+| `WORKBENCH_NOTIFY_KIND` | No | The operator's channel, where each open question is pushed: `slack`, `discord`, `telegram` or `webhook`. Unset, nothing is pushed. See "Questions on the operator's channel". |
+| `WORKBENCH_NOTIFY_CREDENTIAL_FILE` | With a channel | The file that holds the channel's webhook URL, or the Telegram bot's token. The workbench refuses one that anyone but its owner may write. |
+| `WORKBENCH_NOTIFY_CHAT_ID` | With `telegram` | The Telegram chat the bot posts to. |
+| `WORKBENCH_PUBLIC_URL` | With a channel | Where people reach this workbench, for example `https://workbench.homelab.dev`; each pushed question links to its project's home there. |
 | `WORKBENCH_PASSWORD_HASH` | In local mode | Output of `workbench hash-password`. Local mode is the workbench without `WORKBENCH_OIDC_ISSUER`: one shared password signs in a local identity with both roles. It is for development; see "Sign-in" below. |
 | `WORKBENCH_OIDC_ISSUER` | For team use | The OpenID Connect issuer URL. Setting it turns on sign-in through the provider and turns off the password. |
 | `WORKBENCH_OIDC_CLIENT_ID` | With an issuer | The workbench's client id at the provider. |
@@ -240,6 +244,21 @@ Each action needs the `approver` role, and the workbench records who did it. The
 An agent that cannot go on without a person stops and states why, and Sortie parks its story. The workbench reads each park from Sortie's state at every poll, and the stop statement whole from Sortie's per-issue response. Each one is listed first on the home, under **Answer**: the story, the whole statement, when it stopped, and an answer box. The story's details in the graph show the same, its card reads "asks a question", and the execution verdict names the question (`<story> asks: …`). While a question is open, the project bar and the page title of the home and the graph show the count ("1 question"), live.
 
 An `approver` answers in the box. The workbench sends the text through Sortie's answer API (`POST /api/v1/<identifier>/answer`, with the person's name as the author); Sortie posts it on the issue and releases the park, and the story's next run resumes with the statement and the answer. The workbench writes nothing to the tracker itself, and records who answered in the story's worker history. A question leaves the list as soon as Sortie no longer reports the park, whether it was answered here or released in the tracker. A planner sees the question but no answer box, and a read-only workbench (`WORKBENCH_SYNC=0`) refuses answers. The route is `POST /api/projects/<slug>/stories/answer` (`{"key": "<change>/<id>", "text": "…"}`); Sortie's `409` for an issue that is not parked comes back as `409`.
+
+#### Questions on other Sorties
+
+More than one Sortie may run a project's stories, such as p1's and taichi's in the stage-0 kit. The workbench reads the parks of every Sortie in `WORKBENCH_SORTIES` too, at the same poll, and lists their questions with its own Sortie's; each one says which Sortie holds it ("on taichi's Sortie"). An answer goes to the answer API of the Sortie that holds the question, never to another. A Sortie that cannot be read keeps the questions it last reported until it answers again.
+
+#### Questions on the operator's channel
+
+With `WORKBENCH_NOTIFY_KIND` set, the workbench pushes each open question to the operator's channel the first time it sees it, within one poll: the story, the Sortie that holds it, the whole statement, and a link to the project's home on `WORKBENCH_PUBLIC_URL`, where it is answered. A question still open 4 hours after its last push is pushed once more ("Still open after 4 hours: …"), and so on every 4 hours. Once it is answered, or released in the tracker, it is not pushed again; a new park of the same story is a new question. What was pushed when is kept in `alerts.json` in `WORKBENCH_HOME`, so a restart pushes nothing twice. A push the channel refuses is logged, without the channel's address, and tried again a minute later. A read-only workbench (`WORKBENCH_SYNC=0`) pushes nothing, so that only the workbench that owns the project does. Without `WORKBENCH_NOTIFY_KIND`, no channel is configured and nothing is pushed.
+
+| Kind | Credential file holds | Also |
+| --- | --- | --- |
+| `slack` | the incoming webhook URL | |
+| `discord` | the channel webhook URL; mentions never ping | |
+| `telegram` | the bot's token | `WORKBENCH_NOTIFY_CHAT_ID` |
+| `webhook` | the URL that receives a JSON POST: `text`, `event_type` (`question.opened` or `question.open_again`), `project`, `identifier`, `story`, `title`, `statement`, `sortie`, `url` | |
 
 ### A story the supervisor holds
 

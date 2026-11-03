@@ -109,6 +109,14 @@ describe("Scenario: A question on the home page", () => {
     expect($$("[data-tile]")).toHaveLength(0);
   });
 
+  it("names the Sortie that holds the question", async () => {
+    approver();
+    const d = doc(true);
+    d.home!.questions = [{ ...homeQuestion(), sortie: "taichi" }];
+    await home(d);
+    expect(text(`[data-question='${KEY}'] [data-sortie='taichi']`)).toBe("on taichi's Sortie");
+  });
+
   it("appears within one refresh, and leaves as soon as Sortie no longer reports the park", async () => {
     approver();
     const h = await home(doc(false));

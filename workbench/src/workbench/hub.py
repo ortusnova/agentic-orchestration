@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .autosync import approved_digest
 from .fleet import build_fleet, lanes_summary, story_states
@@ -26,12 +26,17 @@ _UNSET = object()
 
 class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
-                 peers: list[ProjectSortie] | None = None, previews=None):
+                 peers: list[ProjectSortie] | None = None, previews=None,
+                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None):
         self.plan = plan
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
         self.peers = list(peers or [])
         self.peer_states: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
+        # The last questions each other Sortie reported, kept while it cannot be read.
+        self._peer_questions: dict[str, dict[str, dict[str, Any]]] = {}
+        # Pushes the open questions to the operator's channel at every poll.
+        self.alerts = alerts
         # What each worker does and what waits on it (agent-platform/run-supervision).
         self.fleet: dict[str, Any] = {"workers": [], "pulls": [], "sorties": [], "where": {}}
         # The Sortie that last ran, parked or held each issue, by identifier.
@@ -65,7 +70,7 @@ class Hub:
         # The supervisor's leases on stories, by identifier (leases.py): a
         # story under one asks no person, whatever its park says.
         self.leases: dict[str, dict[str, Any]] = {}
-        self._park_details: dict[tuple[str, Any], dict[str, Any]] = {}
+        self._park_details: dict[tuple[str, str, Any], dict[str, Any]] = {}
         self.history = History()
         # Read-only: never pull back an edited story on its own.
         self.read_only = False
@@ -81,6 +86,24 @@ class Hub:
         self._loop = loop
 
     async def poll_once(self) -> None:
+        await self._poll()
+        await self.alert()
+
+    async def alert(self) -> None:
+        """Push the project's open questions to the operator's channel. Not
+        while the main Sortie cannot be read, when the list may be short, and
+        not from a read-only workbench, which runs beside the one that does."""
+        if self.alerts is None or self.read_only or self.sortie_error is not None or self.tracker is None:
+            return
+        questions = (self.home or {}).get("questions")
+        if questions is None:
+            return
+        try:
+            await self.alerts(list(questions))
+        except Exception:  # pushing must never stop the poll
+            log.exception("could not push the open questions")
+
+    async def _poll(self) -> None:
         # Catch store edits the file watcher missed.
         if await asyncio.to_thread(self.plan.stale):
             await asyncio.to_thread(self.plan.refresh)
@@ -147,8 +170,8 @@ class Hub:
 
     def sortie_for(self, identifier: str) -> ProjectSortie:
         """The Sortie that runs, parks or holds the issue: the one whose
-        state lists it last, else this project's own."""
-        name = self.last_where.get(identifier)
+        state lists it last, or whose question it holds, else this project's own."""
+        name = self.last_where.get(identifier) or (self.questions.get(identifier) or {}).get("sortie")
         return next((p for p in self.peers if p.name == name), self.sortie)
 
     def states(self) -> list[tuple[str, dict[str, Any] | None, str | None]]:
@@ -175,23 +198,39 @@ class Hub:
         return out
 
     async def _questions(self, states: list[tuple[ProjectSortie, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
-        """The open question of each parked issue, by tracker identifier. The
-        state may shorten a stop statement; the issue's own response holds it
-        whole, and is read once per park."""
+        """The open question of each parked issue, by tracker identifier, from
+        every Sortie in ``states``; each question names the Sortie that holds
+        it. Another Sortie that cannot be read keeps the questions it last
+        reported. The state may shorten a stop statement; the issue's own
+        response holds it whole, and is read once per park."""
         out: dict[str, dict[str, Any]] = {}
-        details: dict[tuple[str, Any], dict[str, Any] | None] = {}
-        for sortie, entry in [(s, e) for s, st in states for e in parked(st)]:
-            ident = entry["issue_identifier"]
-            park = (ident, parked_at_of(entry))
-            detail = self._park_details.get(park) if park[1] is not None else None
-            if detail is None:
-                try:
-                    detail = await sortie.issue(ident)
-                except SortieError as exc:
-                    log.info("sortie has no details of %s's park: %s", ident, exc.message)
-                    detail = None
-            details[park] = detail
-            out[ident] = question(entry, detail)
+        details: dict[tuple[str, str, Any], dict[str, Any] | None] = {}
+        for sortie, st in states:
+            held: dict[str, dict[str, Any]] = {}
+            for entry in parked(st):
+                ident = entry["issue_identifier"]
+                park = (sortie.name, ident, parked_at_of(entry))
+                detail = self._park_details.get(park) if park[2] is not None else None
+                if detail is None:
+                    try:
+                        detail = await sortie.issue(ident)
+                    except SortieError as exc:
+                        log.info("%s's sortie has no details of %s's park: %s", sortie.name, ident, exc.message)
+                        detail = None
+                details[park] = detail
+                held[ident] = {**question(entry, detail), "sortie": sortie.name}
+            if sortie is not self.sortie:
+                self._peer_questions[sortie.name] = held
+            for ident, q in held.items():
+                out.setdefault(ident, q)
+        read = {s.name for s, _ in states}
+        for peer in self.peers:
+            if peer.name in read:
+                continue
+            # Unreadable now: its questions, and their park details, stay.
+            details.update({k: v for k, v in self._park_details.items() if k[0] == peer.name})
+            for ident, q in self._peer_questions.get(peer.name, {}).items():
+                out.setdefault(ident, q)
         self._park_details = {k: v for k, v in details.items() if v is not None}
         return out
 

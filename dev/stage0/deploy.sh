@@ -123,11 +123,14 @@ else
   resume
 fi
 
-git -C "$LIVE" checkout -q --detach "$new"
+# --force: workbench_ahead may have left workbench/ at an earlier merged
+# commit; the full apply replaces it. The live kit holds no other local change
+# (its builds are untracked), so nothing of value is lost.
+git -C "$LIVE" checkout -q --force --detach "$new"
 back() {
   say "$1 failed at ${new:0:8}; back on ${old:0:8} until another commit merges"
   [[ $old != "$new" ]] && echo "$new" > "$failed"
-  git -C "$LIVE" checkout -q --detach "$old"
+  git -C "$LIVE" checkout -q --force --detach "$old"
   if [[ ${#update_sortie[@]} -gt 0 ]]; then
     say "Sortie back on ${sortie_old:0:8} until another plan-bench commit merges"
     echo "$sortie_new" > "$sortie_failed"

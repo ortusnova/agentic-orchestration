@@ -147,6 +147,12 @@ STAGE0_MAX_AGENTS=3
 # host's tunnel ends on, on that host's loopback.
 STAGE0_NONO_PORT=7690
 STAGE0_EDGE_WORKER_PORT=7700
+# The operator's channel for every question (README.md): slack, discord, telegram or
+# webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
+# where people reach the workbench, for the link in each question.
+STAGE0_NOTIFY_KIND=
+STAGE0_NOTIFY_CHAT_ID=
+STAGE0_WORKBENCH_PUBLIC_URL=http://127.0.0.1:8793
 # The previews of review: ui stories' pull requests (run-previews.sh): the
 # live workbench's TLS name, which each preview's name sits beside (empty:
 # loopback ports only), the first preview port, and a command to run when
@@ -272,6 +278,18 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   exit 0
 fi
 
+# The operator's channel (notify-channel.sh): optional; with no
+# STAGE0_NOTIFY_KIND the questions show on the workbench only.
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
+STAGE0_NOTIFY_KIND=${STAGE0_NOTIFY_KIND:-}
+STAGE0_NOTIFY_ENTRY=$(notify_entry "$STAGE0_NOTIFY_KIND" "${STAGE0_NOTIFY_CHAT_ID:-}") || die "fix the channel in $ENV_FILE"
+export STAGE0_NOTIFY_ENTRY
+if [[ -n $STAGE0_NOTIFY_KIND ]]; then
+  notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
+else
+  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+fi
 mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
 STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py" >/dev/null \
