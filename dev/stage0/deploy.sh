@@ -12,7 +12,9 @@
 #     worker-daemon/) runs stage0.sh again, which restarts Sortie and the
 #     worker daemon too, so it waits until no agent runs (on a worker host,
 #     until its daemon runs no job); until then the live kit stays where it is.
-#     A worker host builds no Sortie and follows no plan-bench merge.
+#     A worker host (STAGE0_PROFILE=worker) builds no Sortie, follows no
+#     plan-bench merge and asks no Sortie anything, whatever Sortie settings
+#     its stage0.env kept from before it became a worker.
 #   - A merge to Sortie's plan-bench runs stage0.sh --update-sortie, which
 #     rebuilds and restarts Sortie, so it too waits until no agent runs. A
 #     Sortie checkout that is not behind plan-bench (a branch being tried)
@@ -32,6 +34,8 @@ STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 LIVE=${STAGE0_LIVE_KIT:-$STAGE0_HOME/kit}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
+# stage0.sh runs the profile deploy decided on.
+export STAGE0_PROFILE=${STAGE0_PROFILE:-control}
 # The PATH stage0.sh last ran with (it records it): a systemd unit gets a
 # shorter one, without the tools stage0.sh needs (openspec, under pnpm).
 if [[ -s $STAGE0_HOME/path ]]; then
@@ -43,13 +47,18 @@ sortie_failed=$STAGE0_HOME/deploy-sortie.failed
 say() { echo "deploy: $*" >&2; }
 # shellcheck source=drain.sh
 . "$(dirname "$0")/drain.sh"
-resume() { dispatch_resume || say "Sortie did not resume dispatch; trying again in a minute"; }
+# A worker host runs no Sortie: nothing to resume, even when the Sortie it
+# ran before it became a worker left a pause recorded.
+resume() {
+  [[ $STAGE0_PROFILE == worker ]] && return 0
+  dispatch_resume || say "Sortie did not resume dispatch; trying again in a minute"
+}
 
 # workbench_ahead: while the rest of the kit waits for a drain, move only
 # workbench/ to the merged commit, rebuild it and restart it, once per
 # commit. A failed build puts workbench/ back.
 workbench_ahead() {
-  [[ -n $workbench && ${STAGE0_PROFILE:-control} == control ]] || return 0
+  [[ -n $workbench && $STAGE0_PROFILE == control ]] || return 0
   [[ $(cat "$STAGE0_HOME/deploy-workbench.at" 2>/dev/null) == "$new" ]] && return 0
   say "${new:0:8} changes the workbench: rebuilding it now; the rest of the kit waits"
   git -C "$LIVE" checkout -q "$new" -- workbench
@@ -76,7 +85,7 @@ new=$(git -C "$LIVE" rev-parse origin/main)
 
 # A worker host builds no Sortie.
 src=${STAGE0_SORTIE_SRC:-}
-[[ ${STAGE0_PROFILE:-control} == worker ]] && src=''
+[[ $STAGE0_PROFILE == worker ]] && src=''
 sortie_old='' sortie_new=''
 if [[ -n $src && -d $src ]]; then
   git -C "$src" fetch -q origin plan-bench
@@ -100,7 +109,7 @@ update_sortie=()
 [[ $sortie_old != "$sortie_new" ]] && update_sortie=(--update-sortie)
 
 if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
-  if [[ ${STAGE0_PROFILE:-control} == worker ]]; then
+  if [[ $STAGE0_PROFILE == worker ]]; then
     # No Sortie runs here to pause: the jobs the worker daemon runs, one
     # directory each (worker-config.sh).
     draining="no Sortie on this host"
@@ -145,7 +154,7 @@ if [[ -n $kit || ${#update_sortie[@]} -gt 0 ]]; then
   [[ ${#update_sortie[@]} -gt 0 ]] && say "Sortie ${sortie_new:0:8} merged: running stage0.sh --update-sortie"
   "$LIVE/dev/stage0/stage0.sh" "${update_sortie[@]}" || back "stage0.sh"
   resume
-elif [[ -n $workbench && ${STAGE0_PROFILE:-control} == control ]]; then
+elif [[ -n $workbench && $STAGE0_PROFILE == control ]]; then
   say "${new:0:8} changes the workbench: rebuilding it"
   (cd "$LIVE/workbench" && uv sync -q) || back "uv sync"
   (cd "$LIVE/workbench/frontend" \
