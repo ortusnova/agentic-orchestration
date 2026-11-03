@@ -20,6 +20,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
+dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: make dev-host), then run stage0.sh
@@ -383,8 +384,10 @@ changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
 live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
-its source, `edge.json` or unit; the worker daemon for its source,
-`worker.json` or unit. A change to one of those ends the jobs that unit
+its source, `edge.json` or unit; the worker daemon for its binary,
+`worker.json` or unit (`worker-build.sh` builds it with `-trimpath
+-buildvcs=false`, so the same code builds the same bytes and a test or
+a document under `worker-daemon/` restarts nothing). A change to one of those ends the jobs that unit
 carries, and Sortie retries them. A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
