@@ -223,7 +223,8 @@ class Hub:
         approvals, rereviews = self.records()
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
                               self.previews())
-        supervisor, acted_on = supervisor_view(self.agent_state, doc["nodes"])
+        supervisor, acted_on = supervisor_view(self.agent_state, doc["nodes"],
+                                               [(p.name, s) for p, s in self._peer_pairs()], self.sortie.name)
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         try:
             self.fleet = build_fleet(self.states(), doc["nodes"], statements)
@@ -264,8 +265,8 @@ class Hub:
             },
         )
         doc["plan_states"] = (self.tracker or {}).get("plan_states")
-        # Sortie's supervisor and its recent actions, from the state of the
-        # project Sortie dispatches; None when Sortie reports none.
+        # The supervisor's status, from the Sortie that dispatches the
+        # project, and every Sortie's recent actions; None when none reports any.
         doc["supervisor"] = supervisor
         doc["sync"] = self.sync_status
         doc["fleet"] = self.fleet

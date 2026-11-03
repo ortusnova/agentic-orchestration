@@ -11,10 +11,11 @@ from tests.workbench.conftest import SORTIE_TOKEN
 from workbench.sortie import SortieClient
 
 
-# What the supervisor's scoped token allows (agent-platform/run-supervision):
-# Sortie refuses every other action for it, and records each one either way.
-SUPERVISOR_ACTIONS = {"answer_question", "release_park", "grant_sessions", "record_merge", "start_fix_run",
-                      "mark_draft", "merge_pull", "file_issue", "request_proof"}
+# What the supervisor's scoped token allows (agent-platform/run-supervision), as
+# sortie#40 names them in supervisor_actions[].action: Sortie refuses every other
+# route for it, and records each one either way.
+SUPERVISOR_ACTIONS = {"answer", "release", "grant_sessions", "record_merge", "fix_run",
+                      "mark_draft", "merge", "file_issue", "live_proof"}
 
 
 def built_unapproved(n: dict[str, Any]) -> bool:
@@ -87,25 +88,32 @@ class FakeSortie:
         self.grants: list[dict[str, Any]] = []
         self.grants_supported = True
         self.history: dict[str, dict[str, Any]] = {}
-        # The supervisor, as the state lists it, or None for a Sortie that
-        # has none; and the pauses and resumes people asked for.
-        self.supervisor: dict[str, Any] | None = {"status": "active", "paused_at": None, "paused_by": None, "actions": []}
+        # The supervisor session's status (supervisor-session), or None for a
+        # Sortie that serves none; the actions its token took, as
+        # supervisor_actions (sortie#40), or None for a Sortie without them;
+        # and the pauses and resumes people asked for.
+        self.supervisor: dict[str, Any] | None = {"status": "active", "paused_at": None, "paused_by": None}
+        self.supervisor_actions: list[dict[str, Any]] | None = []
         self.supervisor_controls: list[dict[str, str]] = []
 
-    def supervise(self, action: str, identifier: str | None = None, *, evidence: Any = None,
-                  pull: dict[str, Any] | None = None, at: str = "2026-11-03T10:00:00Z", detail: str | None = None) -> dict[str, Any]:
+    def supervise(self, action: str, identifier: str | None = None, *, evidence: str = "checked",
+                  pull: str | None = None, merge_commit: str | None = None, at: str = "2026-11-03T10:00:00Z",
+                  detail: str | None = None) -> dict[str, Any]:
         """The supervisor asks for ``action`` with its scoped token. Sortie
         does it only if the token allows it and the supervisor is not paused,
-        and records the action, its evidence and its result either way."""
-        assert self.supervisor is not None, "this Sortie has no supervisor"
-        paused = self.supervisor["status"] != "active"
+        and records the action, its evidence and its result either way; a
+        route the token may not take is recorded by its method and pattern."""
+        assert self.supervisor_actions is not None, "this Sortie records no supervisor actions"
+        paused = (self.supervisor or {}).get("status") == "paused"
         allowed = action in SUPERVISOR_ACTIONS and not paused
         if detail is None and not allowed:
-            detail = "the supervisor is paused" if paused else f"{action.replace('_', ' ')} is not the supervisor's to do"
-        record = {"id": f"a-{len(self.supervisor['actions']) + 1}", "at": at, "action": action,
-                  "issue_identifier": identifier, "pull_request": pull, "evidence": evidence,
-                  "result": "done" if allowed else "refused", "detail": detail}
-        self.supervisor["actions"].append(record)
+            detail = "the supervisor is paused" if paused else "forbidden: not a supervisor action"
+        record = {"id": len(self.supervisor_actions) + 1, "action": action,
+                  "route": action if action.startswith("POST ") else f"POST /api/v1/{identifier}/{action}",
+                  "issue_identifier": identifier, "evidence": evidence,
+                  "result": "done" if allowed else "refused", "status": 200 if allowed else 403, "detail": detail,
+                  "pull_request": pull, "merge_commit": merge_commit if allowed else None, "at": at}
+        self.supervisor_actions.append(record)
         return record
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
@@ -226,6 +234,8 @@ class FakeSortie:
                      **self.extra_state}
             if self.supervisor is not None:
                 state["supervisor"] = self.supervisor
+            if self.supervisor_actions is not None:
+                state["supervisor_actions"] = self.supervisor_actions[::-1][:50]
             return httpx.Response(200, json=state)
         if path in ("/api/v1/supervisor/pause", "/api/v1/supervisor/resume") and request.method == "POST":
             if self.supervisor is None:
@@ -239,7 +249,7 @@ class FakeSortie:
                 self.supervisor.update(status="paused", paused_at="2026-11-03T11:00:00Z", paused_by=author)
             else:
                 self.supervisor.update(status="active", paused_at=None, paused_by=None)
-            return httpx.Response(200, json={k: v for k, v in self.supervisor.items() if k != "actions"})
+            return httpx.Response(200, json=dict(self.supervisor))
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:

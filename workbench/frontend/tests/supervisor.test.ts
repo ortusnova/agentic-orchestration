@@ -6,6 +6,7 @@ import { graph, node, synced } from "./fixtures";
 import ProjectView from "../src/components/ProjectView.svelte";
 import type { HomeDoc } from "../src/lib/home";
 import { session as identity } from "../src/lib/identity.svelte";
+import { actionText, resultText, resultTone } from "../src/lib/supervisor";
 import type { SessionClient } from "../src/lib/session";
 import type { GraphNode, MergedGraph, Supervisor, SupervisorAction, ViewState } from "../src/lib/types";
 
@@ -28,15 +29,15 @@ const merge: SupervisorAction = {
   id: "a-2", at: MERGED_AT, action: "record_merge", identifier: "T-1", key: MERGED, label: "b1", title: "Invoices",
   url: "https://tracker/1", pull: { ref: `${REPO}#75`, url: PULL_URL },
   evidence: [
+    { name: null, value: "The forge shows the pull request merged.", url: null },
     { name: "merge commit", value: COMMIT, url: `https://github.com/${REPO}/commit/${COMMIT}` },
-    { name: "merged at", value: "2026-11-03T10:12:00Z", url: null },
   ],
   result: "done", detail: null,
 };
 const refused: SupervisorAction = {
-  id: "a-1", at: REFUSED_AT, action: "approve_story", identifier: "T-2", key: REFUSED, label: "b2", title: "Taxes",
-  url: "https://tracker/2", pull: null, evidence: [{ name: "criteria", value: "all pass", url: null }],
-  result: "refused", detail: "approve story is not the supervisor's to do",
+  id: "a-1", at: REFUSED_AT, action: "POST /api/v1/{identifier}/hold", identifier: "T-2", key: REFUSED, label: "b2", title: "Taxes",
+  url: "https://tracker/2", pull: null, evidence: [{ name: null, value: "It looks stuck.", url: null }],
+  result: "refused", detail: "forbidden: not a supervisor action",
 };
 
 const supervisor = (extra: Partial<Supervisor> = {}): Supervisor =>
@@ -92,7 +93,7 @@ describe("the supervisor on the home", () => {
     await home(doc());
     expect($("[data-supervisor-status]")!.dataset.supervisorStatus).toBe("active");
     expect(text("[data-supervisor-status]")).toBe("Acting");
-    expect($$("[data-supervisor] .act").map((li) => li.dataset.action)).toEqual(["record_merge", "approve_story"]);
+    expect($$("[data-supervisor] .act").map((li) => li.dataset.action)).toEqual(["record_merge", "POST /api/v1/{identifier}/hold"]);
   });
 
   // Scenario: An action and its evidence
@@ -111,17 +112,17 @@ describe("the supervisor on the home", () => {
     const commit = act.querySelector<HTMLAnchorElement>("[data-evidence='merge commit'] a")!;
     expect(commit.textContent).toBe(COMMIT.slice(0, 7));
     expect(commit.href).toBe(`https://github.com/${REPO}/commit/${COMMIT}`);
-    expect(act.querySelector("[data-evidence='merged at'] dd")!.textContent).toBe("2026-11-03T10:12:00Z");
+    expect(act.querySelector("[data-evidence=''] dd")!.textContent).toBe("The forge shows the pull request merged.");
   });
 
   // Scenario: A refused action
-  it("shows a refused approval as refused, with why, beside its story", async () => {
+  it("shows a refused route as refused, with why, beside its story", async () => {
     await home(doc());
-    const act = $("[data-supervisor] [data-action='approve_story']")!;
+    const act = $("[data-supervisor] [data-action='POST /api/v1/{identifier}/hold']")!;
     expect(act.dataset.result).toBe("refused");
-    expect(act.querySelector(".what")!.textContent).toBe("Tried to approve story");
+    expect(act.querySelector(".what")!.textContent).toBe("Tried POST /api/v1/{identifier}/hold");
     expect(act.querySelector(".res")!.textContent).toBe("refused");
-    expect(act.querySelector(".detail")!.textContent).toBe("approve story is not the supervisor's to do");
+    expect(act.querySelector(".detail")!.textContent).toBe("forbidden: not a supervisor action");
     expect(act.querySelector(`a[data-story='${REFUSED}']`)).not.toBeNull();
     expect(act.querySelector("[data-pull]")).toBeNull();
   });
@@ -263,5 +264,30 @@ describe("on the project's page", () => {
     expect(be.calls).toContainEqual({ method: "POST", url: "/api/projects/homelab/supervisor/resume" });
     expect(be.status()).toBe("active");
     expect(text("[data-supervisor-status]")).toBe("Acting");
+  });
+});
+
+describe("how Sortie's records read", () => {
+  it("names each action in Sortie's words, done or tried", () => {
+    const a = (action: string, result: string) => ({ ...merge, action, result });
+    expect(actionText(a("release", "done"))).toBe("Released a parked story");
+    expect(actionText(a("merge", "rejected"))).toBe("Tried to merge the pull request");
+    expect(actionText(a("live_proof", "failed"))).toBe("Tried to request a live proof");
+    expect(actionText(a("POST /api/v1/plan/sync", "refused"))).toBe("Tried POST /api/v1/plan/sync");
+  });
+
+  it("shows a rejected action, one Sortie found did not hold, in the refused tone", () => {
+    expect(resultText("rejected")).toBe("rejected");
+    expect(resultTone("rejected")).toBe("refused");
+    expect(resultTone("failed")).toBe("failed");
+  });
+
+  it("offers no pause for a supervisor that is off", async () => {
+    approver();
+    await home(doc(supervisor({ status: "off", reason: "it runs no supervisor session to pause" })), async () => null);
+    expect(text("[data-supervisor-status]")).toBe("Off");
+    expect($("[data-act='pause-supervisor']")).toBeNull();
+    expect($("[data-act='resume-supervisor']")).toBeNull();
+    expect($$("[data-supervisor] .act")).toHaveLength(2);
   });
 });

@@ -15,10 +15,12 @@ from tests.workbench.fake_sortie import FakeSortie
 from tests.workbench.test_approvals import app_for, billing, status
 from tests.workbench.test_identity import sign_in_oidc
 from tests.workbench.test_questions import oidc_app
+from tests.workbench.test_supervision import fleet_app
 from workbench.supervisor import evidence_of, pull_of, supervisor_view
 
 REPO = "ortusnova/agentic-orchestration"
-PULL = {"repository": REPO, "number": 75, "url": f"https://github.com/{REPO}/pull/75"}
+PULL = f"{REPO}#75"
+PULL_URL = f"https://github.com/{REPO}/pull/75"
 MERGE_COMMIT = "6684940c0ffee6684940c0ffee6684940c0ffee0"
 MERGED_AT = "2026-11-03T10:12:00Z"
 
@@ -47,8 +49,8 @@ def supervisor(app_or_client) -> dict:
 
 def test_a_recorded_merge_names_its_pull_request_merge_commit_and_time_beside_the_story(store):
     fake = stories(store)
-    fake.supervise("record_merge", "T-1", pull=PULL, at=MERGED_AT,
-                   evidence={"merge_commit": MERGE_COMMIT, "merged_at": MERGED_AT})
+    fake.supervise("record_merge", "T-1", pull=PULL, merge_commit=MERGE_COMMIT, at=MERGED_AT,
+                   evidence="The forge shows the pull request merged; the story is parked.")
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
@@ -59,11 +61,11 @@ def test_a_recorded_merge_names_its_pull_request_merge_commit_and_time_beside_th
         a = sup["actions"][0]
         assert (a["action"], a["result"], a["identifier"], a["key"], a["label"]) == ("record_merge", "done", "T-1", "billing/b1", "b1")
         assert a["title"] == status(app, "billing/b1")["title"]
-        assert a["pull"] == {"ref": f"{REPO}#75", "url": PULL["url"]}
-        assert a["at"] == ts(MERGED_AT)
-        assert {"name": "merge commit", "value": MERGE_COMMIT,
-                "url": f"https://github.com/{REPO}/commit/{MERGE_COMMIT}"} in a["evidence"]
-        assert {"name": "merged at", "value": MERGED_AT, "url": None} in a["evidence"]
+        assert a["pull"] == {"ref": f"{REPO}#75", "url": PULL_URL}
+        assert a["at"] == ts(MERGED_AT) and a["sortie"] == "sortie"
+        assert a["evidence"] == [
+            {"name": None, "value": "The forge shows the pull request merged; the story is parked.", "url": None},
+            {"name": "merge commit", "value": MERGE_COMMIT, "url": f"https://github.com/{REPO}/commit/{MERGE_COMMIT}"}]
         # Beside the story it touched, and no other.
         b1 = next(n for n in doc["nodes"] if n["plan_key"] == "billing/b1")
         b2 = next(n for n in doc["nodes"] if n["plan_key"] == "billing/b2")
@@ -77,38 +79,48 @@ def test_a_new_action_shows_at_the_next_refresh_newest_first(store):
         sign_in(client)
         settle(client)
         assert supervisor(app)["actions"] == []
-        fake.supervise("start_fix_run", "T-2", at="2026-11-03T09:00:00Z", evidence="CI failed on the head: lint")
-        fake.supervise("release_park", "T-1", at="2026-11-03T09:30:00Z", evidence={"merged": True})
+        fake.supervise("fix_run", "T-2", at="2026-11-03T09:00:00Z", evidence="CI failed on the head: lint")
+        fake.supervise("release", "T-1", at="2026-11-03T09:30:00Z", evidence="The pull request merged.")
         settle(client)
         acts = supervisor(app)["actions"]
-        assert [(x["action"], x["key"]) for x in acts] == [("release_park", "billing/b1"), ("start_fix_run", "billing/b2")]
+        assert [(x["action"], x["key"]) for x in acts] == [("release", "billing/b1"), ("fix_run", "billing/b2")]
         assert acts[1]["evidence"] == [{"name": None, "value": "CI failed on the head: lint", "url": None}]
-        assert acts[0]["evidence"] == [{"name": "merged", "value": "yes", "url": None}]
 
 
 # Scenario: A refused action ----------------------------------------------------------
 
 
-def test_a_refused_approval_shows_as_refused_beside_the_story(store):
+def test_a_refused_hold_shows_as_refused_beside_the_story(store):
     fake = stories(store)
-    record = fake.supervise("approve_story", "T-2", evidence={"criteria": "all pass"})
+    record = fake.supervise("POST /api/v1/{identifier}/hold", "T-2", evidence="It looks stuck.")
     assert record["result"] == "refused"
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
         settle(client)
         a = supervisor(app)["actions"][0]
-        assert (a["action"], a["result"], a["key"]) == ("approve_story", "refused", "billing/b2")
-        assert a["detail"] == "approve story is not the supervisor's to do"
+        assert (a["action"], a["result"], a["key"]) == ("POST /api/v1/{identifier}/hold", "refused", "billing/b2")
+        assert a["detail"] == "forbidden: not a supervisor action"
         assert status(app, "billing/b2")["supervisor_actions"] == [a]
-        # Sortie refused it: the workbench recorded no approval.
+
+
+def test_a_refused_approval_names_no_story_and_approves_nothing(store):
+    """Sortie records a refused plan route with no issue: it shows on the home only."""
+    fake = stories(store)
+    fake.supervise("POST /api/v1/plan/sync", None, evidence="All criteria pass.")
+    app = app_for(store, fake)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        a = supervisor(app)["actions"][0]
+        assert (a["action"], a["result"], a["key"]) == ("POST /api/v1/plan/sync", "refused", None)
         assert status(app, "billing/b2")["plan_status"] == "draft"
 
 
 def test_an_action_on_another_projects_issue_is_left_out_and_one_on_no_issue_stays(store):
     fake = stories(store)
-    fake.supervise("grant_sessions", "X-9", evidence={"sessions": 4})
-    fake.supervise("file_issue", None, evidence={"title": "Pushes fail without the workflow scope"})
+    fake.supervise("grant_sessions", "X-9", evidence="It ran out of sessions on a green build.")
+    fake.supervise("file_issue", None, evidence="Pushes fail without the workflow scope.")
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
@@ -133,7 +145,7 @@ def test_pause_and_resume_change_the_supervisors_status_in_sortie(store):
         assert sup["status"] == "paused" and sup["paused_by"] == "Local operator" and sup["paused_at"] == ts("2026-11-03T11:00:00Z")
         assert supervisor(app)["status"] == "paused"
         # Paused, it acts no more: Sortie refuses, and records the refusal.
-        fake.supervise("merge_pull", "T-1", pull=PULL)
+        fake.supervise("merge", "T-1", pull=PULL)
         r = client.post(f"{P}/supervisor/resume")
         assert r.status_code == 200, r.text
         assert fake.supervisor["status"] == "active"
@@ -182,6 +194,7 @@ def test_the_pause_carries_the_approvers_name(store):
 def test_a_sortie_with_no_supervisor(store):
     fake = stories(store)
     fake.supervisor = None
+    fake.supervisor_actions = None
     app = app_for(store, fake)
     with TestClient(app) as client:
         sign_in(client)
@@ -191,6 +204,35 @@ def test_a_sortie_with_no_supervisor(store):
         assert all(n.get("supervisor_actions") == [] for n in doc["nodes"] if n["kind"] == "story")
         r = client.post(f"{P}/supervisor/pause")
         assert r.status_code == 409 and r.json()["error"]["code"] == "no_supervisor"
+
+
+def test_a_sortie_that_records_actions_but_serves_no_status_reads_off(store):
+    """sortie#40 serves supervisor_actions; the status and the pause come with the supervisor session."""
+    fake = stories(store)
+    fake.supervisor = None
+    fake.supervise("release", "T-1", evidence="The pull request merged.")
+    app = app_for(store, fake)
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        sup = client.get(f"{P}/graph").json()["supervisor"]
+        assert sup["status"] == "off" and "no supervisor session" in sup["reason"]
+        assert [a["key"] for a in sup["actions"]] == ["billing/b1"]
+        r = client.post(f"{P}/supervisor/pause")
+        assert r.status_code == 409 and r.json()["error"]["code"] == "no_supervisor"
+
+
+def test_another_sorties_actions_show_beside_their_stories(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.supervise("fix_run", "T-2", at="2026-11-03T09:00:00Z", evidence="CI failed.")
+    p1.supervise("release", "T-3", at="2026-11-03T09:30:00Z", evidence="Merged.")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        sup = client.get(f"{P}/graph").json()["supervisor"]
+        assert [(a["action"], a["identifier"], a["sortie"]) for a in sup["actions"]] == [
+            ("release", "T-3", "p1"), ("fix_run", "T-2", "taichi")]
+        assert sup["status"] == "active"
 
 
 def test_an_unknown_operation_reaches_no_sortie(store):
@@ -209,8 +251,9 @@ def test_an_unknown_operation_reaches_no_sortie(store):
 def test_pull_requests_in_each_form_sortie_may_give():
     assert pull_of(f"https://github.com/{REPO}/pull/12") == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
     assert pull_of({"repository": REPO, "number": 12}) == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
+    assert pull_of(f"{REPO}#12") == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
     assert pull_of({"url": f"https://github.com/{REPO}/pull/12"}) == {"ref": f"{REPO}#12", "url": f"https://github.com/{REPO}/pull/12"}
-    assert pull_of(f"{REPO}#12") == {"ref": f"{REPO}#12", "url": None}
+    assert pull_of("#12") == {"ref": "#12", "url": None}
     assert pull_of(None) is None and pull_of({}) is None
 
 

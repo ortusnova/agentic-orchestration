@@ -3,17 +3,21 @@
 
 The supervisor acts on Sortie's runs through a token that allows only a few
 actions. Sortie records each one, refused or not, with the evidence it was
-based on and its result, and lists the recent ones, with the supervisor's
-status, under ``supervisor`` in its state:
+based on and its result, and serves the newest in its state as
+``supervisor_actions`` (sortie#40):
 
-    {"status": "active" | "paused" | "off", "paused_at": ..., "paused_by": ...,
-     "actions": [{"id", "at", "action", "issue_identifier",
-                  "pull_request": {"repository", "number", "url"},
-                  "evidence": {...} | [...] | "...", "result": "done" | "refused" | "failed",
-                  "detail": "..."}]}
+    {"supervisor_actions": [{"id", "action", "route", "issue_identifier",
+                             "evidence": "...", "result": "done" | "refused" | "rejected" | "failed",
+                             "status", "detail", "pull_request": "owner/repo#N",
+                             "merge_commit", "at"}],
+     "supervisor": {"status": "active" | "paused" | "off", "paused_at", "paused_by"}}
 
-The workbench shows each action beside the story it touched, and pauses and
-resumes the supervisor through Sortie's control API. Nothing here writes.
+``supervisor``, the supervisor session's status, comes with its pause and
+resume (openspec sortie-supervises-runs, supervisor-session); a Sortie that
+serves the actions without it reads as off, with nothing to pause. Every
+Sortie's actions show, each beside the story it touched; the status and the
+pause are those of the Sortie that dispatches the project. Nothing here
+writes.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ HOME_ACTIONS = 20
 STORY_ACTIONS = 10
 
 _PULL_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
+_PULL_REF = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
 _SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
@@ -52,6 +57,9 @@ def pull_of(raw: Any) -> dict[str, Any] | None:
         m = _PULL_URL.match(raw)
         if m:
             return {"ref": f"{m.group(1)}#{m.group(2)}", "url": raw}
+        m = _PULL_REF.match(raw)
+        if m:
+            return {"ref": raw, "url": f"https://github.com/{m.group(1)}/pull/{m.group(2)}"}
         return {"ref": raw, "url": None}
     if not isinstance(raw, dict):
         return None
@@ -101,7 +109,15 @@ def evidence_of(raw: Any, pull: dict[str, Any] | None) -> list[dict[str, Any]]:
     return out
 
 
-def action_of(raw: dict[str, Any], key_of: dict[str, str], nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _merge_commit(evidence: list[dict[str, Any]], sha: Any, pull: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The merge commit Sortie names beside the evidence, as one more named value."""
+    if not isinstance(sha, str) or not sha or any(e["value"] == sha for e in evidence):
+        return evidence
+    return evidence + evidence_of({"merge_commit": sha}, pull)
+
+
+def action_of(raw: dict[str, Any], key_of: dict[str, str], nodes: dict[str, dict[str, Any]],
+              sortie: str | None = None) -> dict[str, Any]:
     """One recorded action, with the story it touched."""
     ident = raw.get("issue_identifier") or raw.get("identifier")
     ident = ident if isinstance(ident, str) and ident else None
@@ -125,41 +141,63 @@ def action_of(raw: dict[str, Any], key_of: dict[str, str], nodes: dict[str, dict
         "title": (node or {}).get("title"),
         "url": ((node or {}).get("tracker") or {}).get("url"),
         "pull": pull,
-        "evidence": evidence_of(raw.get("evidence"), pull),
+        "evidence": _merge_commit(evidence_of(raw.get("evidence"), pull), raw.get("merge_commit"), pull),
         "result": str(result or "unknown"),
         "detail": _text(detail) or None,
+        "sortie": sortie,
     }
 
 
-def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]]
+def supervisor_view(state: dict[str, Any] | None, nodes: list[dict[str, Any]],
+                    peers: list[tuple[str, dict[str, Any]]] = (), own: str | None = None,
                     ) -> tuple[dict[str, Any] | None, dict[str, list[dict[str, Any]]]]:
     """The supervisor's status and its recent actions on this project's
     stories, newest first, and the actions on each story, by plan key; None
-    and none when Sortie reports no supervisor. An action on another
-    project's issue is left out; one that names no issue stays."""
+    and none when no Sortie reports a supervisor. ``state`` is the state of
+    the Sortie that dispatches the project, named ``own``; ``peers`` are the
+    other Sorties' names and states. An action on another project's issue is
+    left out; one that names no issue stays."""
     sup = (state or {}).get("supervisor")
-    if not isinstance(sup, dict):
+    sup = sup if isinstance(sup, dict) else None
+    sources = [(own, state or {})] + [(name, s or {}) for name, s in peers]
+    if sup is None and not any(isinstance(s.get("supervisor_actions"), list) for _, s in sources):
         return None, {}
     node_of = {n["plan_key"]: n for n in nodes if n.get("plan_key")}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes
               if n.get("kind") == "story" and (n.get("tracker") or {}).get("identifier")}
-    recorded = [action_of(a, key_of, node_of) for a in sup.get("actions") or [] if isinstance(a, dict)]
+    raws: list[tuple[str | None, dict[str, Any]]] = [(own, a) for a in (sup or {}).get("actions") or []]
+    for name, s in sources:
+        raws += [(name, a) for a in s.get("supervisor_actions") or []]
+    seen: set[tuple[str | None, str]] = set()
+    recorded = []
+    for name, a in raws:
+        if not isinstance(a, dict):
+            continue
+        if a.get("id") is not None:
+            if (name, str(a["id"])) in seen:
+                continue
+            seen.add((name, str(a["id"])))
+        recorded.append(action_of(a, key_of, node_of, name))
     recorded = [a for a in recorded if a["identifier"] is None or a["key"] is not None]
     # Newest first; of two at the same time, the one Sortie recorded later.
     order = sorted(range(len(recorded)), key=lambda i: (recorded[i]["at"] or 0.0, i), reverse=True)
     actions = [recorded[i] for i in order]
-    status = sup.get("status")
-    if not isinstance(status, str) or not status:
-        status = "paused" if sup.get("paused") else "active"
+    if sup is None:
+        status, reason = "off", ("Sortie records the supervisor's actions but serves no status for it: "
+                                 "it runs no supervisor session to pause.")
+    else:
+        status, reason = sup.get("status"), sup.get("reason") or None
+        if not isinstance(status, str) or not status:
+            status = "paused" if sup.get("paused") else "active"
     by_key: dict[str, list[dict[str, Any]]] = {}
     for a in actions:
         if a["key"] and len(by_key.setdefault(a["key"], [])) < STORY_ACTIONS:
             by_key[a["key"]].append(a)
     view = {
         "status": status,
-        "paused_at": parked_at_of({"at": sup.get("paused_at")}),
-        "paused_by": sup.get("paused_by") or None,
-        "reason": sup.get("reason") or None,
+        "paused_at": parked_at_of({"at": (sup or {}).get("paused_at")}),
+        "paused_by": (sup or {}).get("paused_by") or None,
+        "reason": reason,
         "actions": actions[:HOME_ACTIONS],
         "total": len(actions),
     }

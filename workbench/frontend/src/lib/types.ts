@@ -91,9 +91,11 @@ export interface SupervisorAction {
   pull: { ref: string; url: string | null } | null;
   /** What it was based on: named values, a link where one applies. */
   evidence: { name: string | null; value: string; url: string | null }[];
-  /** "done", "refused" or "failed". */
+  /** "done", "refused", "rejected" or "failed". */
   result: string;
   detail: string | null;
+  /** The Sortie whose supervisor took it. */
+  sortie?: string | null;
 }
 
 /** Sortie's supervisor: whether it acts, and what it did lately. */
