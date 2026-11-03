@@ -1,0 +1,108 @@
+{
+  "busy": 0,
+  "free": 3,
+  "held": [],
+  "history": [],
+  "reasons": [
+    {
+      "code": "waiting",
+      "key": null,
+      "text": "6 stories wait on 5 pull requests in review"
+    }
+  ],
+  "running": [],
+  "runway": 0,
+  "slots": 3,
+  "verdict": "stuck",
+  "waits": [
+    {
+      "does": "reviews it",
+      "kind": "review",
+      "pr": {
+        "ref": "ortusnova/homelab#91",
+        "url": "https://github.com/ortusnova/homelab/pull/91"
+      },
+      "reason": null,
+      "stories": [
+        {
+          "identifier": "ONS-1",
+          "key": "ons/s1"
+        }
+      ],
+      "text": "ortusnova/homelab#91 in review, for ons/s1: a reviewer reviews it",
+      "who": "a reviewer"
+    },
+    {
+      "does": "reviews it",
+      "kind": "review",
+      "pr": {
+        "ref": "ortusnova/homelab#92",
+        "url": "https://github.com/ortusnova/homelab/pull/92"
+      },
+      "reason": null,
+      "stories": [
+        {
+          "identifier": "ONS-2",
+          "key": "ons/s2"
+        }
+      ],
+      "text": "ortusnova/homelab#92 in review, for ons/s2: a reviewer reviews it",
+      "who": "a reviewer"
+    },
+    {
+      "does": "reviews it",
+      "kind": "review",
+      "pr": {
+        "ref": "ortusnova/homelab#93",
+        "url": "https://github.com/ortusnova/homelab/pull/93"
+      },
+      "reason": null,
+      "stories": [
+        {
+          "identifier": "ONS-3",
+          "key": "ons/s3"
+        }
+      ],
+      "text": "ortusnova/homelab#93 in review, for ons/s3: a reviewer reviews it",
+      "who": "a reviewer"
+    },
+    {
+      "does": "reviews it",
+      "kind": "review",
+      "pr": {
+        "ref": "ortusnova/homelab#94",
+        "url": "https://github.com/ortusnova/homelab/pull/94"
+      },
+      "reason": null,
+      "stories": [
+        {
+          "identifier": "ONS-4",
+          "key": "ons/s4"
+        },
+        {
+          "identifier": "ONS-5",
+          "key": "ons/s5"
+        }
+      ],
+      "text": "ortusnova/homelab#94 in review, for ons/s4 and ons/s5: a reviewer reviews it",
+      "who": "a reviewer"
+    },
+    {
+      "does": "reviews it",
+      "kind": "review",
+      "pr": {
+        "ref": "ortusnova/sortie#30",
+        "url": "https://github.com/ortusnova/sortie/pull/30"
+      },
+      "reason": null,
+      "stories": [
+        {
+          "identifier": "ONS-6",
+          "key": "ons/s6"
+        }
+      ],
+      "text": "ortusnova/sortie#30 in review, for ons/s6: a reviewer reviews it",
+      "who": "a reviewer"
+    }
+  ]
+}
