@@ -83,3 +83,17 @@ def test_legacy_approval_is_recognized_for_import():
     assert legacy_approved(doc)
     doc["deliverables"].append(deliverable("b"))
     assert not legacy_approved(doc)
+
+
+def test_review_ui_reaches_the_graph_and_another_value_is_refused(store):
+    store.plan([("billing", [])])
+    store.change("billing", breakdown(deliverable("u", review="ui")))
+    r = validate(store.root, show=no_openspec)
+    assert r.ok, r.errors
+    assert nodes(r)["billing/u"]["review"] == "ui" and r.stories["billing/u"]["review"] == "ui"
+    # A ui story is not approved by anyone: it reads as a draft.
+    assert nodes(r)["billing/u"]["approval"] == "draft"
+
+    store.change("billing", breakdown(deliverable("u", review="preview")))
+    r = validate(store.root, show=no_openspec)
+    assert not r.ok and any("preview" in str(e) for e in r.errors)

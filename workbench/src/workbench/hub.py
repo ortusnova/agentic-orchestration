@@ -23,7 +23,7 @@ _UNSET = object()
 
 
 class Hub:
-    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
+    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None, previews=None,
                  sortie_name: str = "sortie", others: dict[str, ProjectSortie] | None = None,
                  alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None):
         self.plan = plan
@@ -47,6 +47,8 @@ class Hub:
         self.records = records or (lambda: ({}, {}))
         # What GitHub reported of each pull request a story names, by ref.
         self.pulls = pulls or (lambda: {})
+        # The previews of the ui stories' pull requests, by tracker identifier.
+        self.previews = previews or (lambda: {})
         self.frozen: dict[str, str] = {}
         self.fields: dict[str, dict[str, Any]] = {}
         self._pulled_back: set[str] = set()
@@ -220,7 +222,8 @@ class Hub:
         snap = self.plan.snapshot()
         doc = merge(snap["graph"], self.tracker)
         approvals, rereviews = self.records()
-        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls())
+        self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
+                              self.previews())
         for n in doc["nodes"]:
             n.update(self.fields.get(n["plan_key"], {}))
             ident = (n.get("tracker") or {}).get("identifier")

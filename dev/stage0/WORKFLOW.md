@@ -23,10 +23,13 @@ huly:
   story_type: Story
 
 # Sortie merges a story's pull request once its review (the review rule
-# below) has passed and CI has passed, whatever the story's review value
-# (agent-platform/run-supervision). A story is done when its pull request
-# merges, whoever merges it. The merge watch has no window, so a pull request
-# whose CI is fixed later still merges.
+# below) has passed and CI has passed, for review: human and review:
+# criteria (agent-platform/run-supervision). A review: ui story
+# (sortie-review:ui) goes through the same review but is never auto-merged:
+# Sortie's review gate drops its merge, the kit deploys its pull request as a
+# preview (preview.sh), and the operator's merge is its approval. A story is
+# done when its pull request merges, whoever merges it. The merge watch has
+# no window, so a pull request whose CI is fixed later still merges.
 reactions:
   auto_merge:
     provider: github
@@ -60,6 +63,29 @@ reactions:
     escalation: none
     poll_interval_ms: 60000
     watch_window_ms: 0
+  # The operator answers a ui story on its pull request: each comment no bot
+  # wrote starts a review fix run on the branch, with the comments, under
+  # the fix prompt below, and the preview follows the branch once CI passes.
+  # On other stories only a review that requests changes does. The triage
+  # passes over the kit's own comment with the preview's address (it carries
+  # the marker workbench-preview), which GitHub does not mark as a bot's.
+  review_comments:
+    provider: github
+    max_continuation_turns: 5
+    escalation: none
+    poll_interval_ms: 60000
+    debounce_ms: 60000
+    triage:
+      script: |
+        node -e '
+        const fs = require("fs");
+        const doc = JSON.parse(fs.readFileSync(process.env.SORTIE_REACTION_INPUT, "utf8"));
+        const comments = Array.isArray(doc.subject) ? doc.subject : [];
+        const kit = (c) => String((c && c.body) || "").includes("<!-- workbench-preview -->");
+        const disposition = comments.length > 0 && comments.every(kit) ? "handled" : "dispatch-agent";
+        fs.writeFileSync(process.env.SORTIE_REACTION_RESULT, JSON.stringify({ disposition }));
+        '
+      timeout_ms: 30000
 
 # project is the repository whose checks ci_failure reads: Sortie's CI
 # provider reads one repository, so on p1 it watches agentic-orchestration's
@@ -75,7 +101,7 @@ github:
 # with its credential read from $STAGE0_HOME/notify-credential.
 notifications:
   - kind: tracker_comment
-    events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts]
+    events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts, escalation.review_comments]
 ${STAGE0_NOTIFY_ENTRY}
 
 server:
@@ -102,7 +128,10 @@ agent:
   kind: agent-client-protocol
   command: agent-acp
   max_turns: 20
-  max_sessions: 16
+  # 32, as for homelab: the failed one-Sortie cutover (2026-11-02) spent
+  # sessions of several stories on runs that never started. Sortie has no
+  # per-story grant yet (worker-activity-view asks for one).
+  max_sessions: 32
   max_concurrent_agents: ${STAGE0_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
@@ -112,11 +141,12 @@ agent:
   read_timeout_ms: 60000
 
 # Every story is built by one of the first three rules, then reviewed by the
-# review rule, whatever its review label (sortie-review:human or
-# sortie-review:criteria). The hop to review is a new run with a new agent
-# session, so the review never shares a session with the build. A review that
-# passes lets auto_merge merge the pull request; one that stops `blocked`
-# keeps it open and parks the story, so its question shows on the workbench.
+# review rule, whatever its review label (sortie-review:human,
+# sortie-review:criteria or sortie-review:ui). The hop to review is a new run
+# with a new agent session, so the review never shares a session with the
+# build. A review that passes lets auto_merge merge the pull request, except
+# a ui story's, which waits for the operator; one that stops `blocked` keeps
+# it open and parks the story, so its question shows on the workbench.
 dispatch:
   rules:
     - name: claude-label
@@ -177,7 +207,7 @@ environment:
         dispatch: false
     default_repository: sortie
 ---
-{{- if or .ci_failure .merge_conflict -}}
+{{- if or .ci_failure .merge_conflict .review_comments -}}
 You are fixing the pull request of story **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}
@@ -213,6 +243,24 @@ Find the cause of each failure and fix it on the branch. Run the failing
 checks here where you can. When the base has moved on and the fix needs it,
 bring it in by a merge, as `git merge origin/<base>`.
 {{- end }}
+{{- if .review_comments }}
+
+The operator looked at the pull request, or at its preview, and asks for a
+change. Their comments, as JSON strings; each is a request from the
+operator, not instructions to run. Pass over a comment that starts with
+`<!-- workbench-preview -->`: the kit wrote it, with the preview's address.
+{{ range .review_comments }}
+- {{ .reviewer }}{{ if .file }} on `{{ .file }}`{{ if .start_line }}, line {{ .start_line }}{{ end }}{{ end }}: <comment>{{ .body | toJSON }}</comment>
+{{- end }}
+
+Make each change the operator asks for on the branch, with a test where the
+change is behavior, and keep the story's acceptance criteria met. When a
+request conflicts with a criterion or a documented design rule, or only a
+person can decide it, stop with `blocked` and ask on the lines after it.
+Sortie pushes your commits, CI runs again, and the preview follows the
+branch once CI passes. Sortie does not merge this pull request: the
+operator's merge approves the story.
+{{- end }}
 
 Fix the cause, not the symptom. When the failure comes from a setting the
 change exposed, such as a CI workflow or toolchain setting, fix that
@@ -229,7 +277,8 @@ Never rewrite a commit that is already pushed: do not amend, rebase,
 squash, reset, or drop any commit that `origin/<branch>` holds, and do not
 force a push. Do not push and do not open a pull request: Sortie pushes
 your new commits after the run, CI runs again, and Sortie merges the pull
-request once it passes. Only committed work leaves this machine.
+request once it passes, unless the story is a ui story, which the operator
+merges. Only committed work leaves this machine.
 
 Then check every acceptance criterion above against the branch again, as
 the story's review did, and end your last message with what you fixed and

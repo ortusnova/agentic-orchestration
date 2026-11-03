@@ -140,10 +140,11 @@ uv run workbench hash-password > ~/.config/plan-workbench-password-hash   # type
 | `WORKBENCH_AGENT_MODEL` | No | Model a planning session starts with, default `anthropic/claude-opus-5-5`. It is selected through the agent's ACP `model` config option. When the agent does not offer the model, the session ends and the chat shows why. Set it empty to keep the agent's own default. The person can change the model and the thinking level below the message box; the last choice is kept in `preferences.json` in the runtime directory and wins over this setting while the agent offers it. Without a chosen thinking level, the model's own default applies. |
 | `WORKBENCH_PROMPT_FILE` | No | Planning prompt, default `prompts/planning-session.md`. |
 | `WORKBENCH_COOKIE_SECURE` | No | `1` behind HTTPS. |
-| `WORKBENCH_SYNC` | No | `0` makes the workbench read-only toward the tracker: no automatic sync, no pull-back of an edited story, and pull-back, cancel and supersede are refused. For a second workbench beside the one that owns a project, for example to check a build against live data. Default `1`. |
+| `WORKBENCH_SYNC` | No | `0` makes the workbench read-only toward the tracker: no automatic sync, no pull-back of an edited story, and pull-back, cancel and supersede are refused. It also writes and pushes no planning schema upgrade, and validates against the schemas it ships. For a second workbench beside the one that owns a project, for example to check a build against live data, as a ui story's preview does. Default `1`. |
 | `WORKBENCH_GITHUB_TOKEN` | For private repositories | The GitHub token the workbench looks up the pull requests a story names in `delivered_by` with (see "A story built outside an agent run"). It needs read access to their pull requests; the token Sortie pushes with will do. Without one, only public repositories can be looked up. |
 | `WORKBENCH_GITHUB_API_URL` | No | GitHub's API, default `https://api.github.com`. |
 | `WORKBENCH_DELIVERY_RECHECK_SECONDS` | No | How often a named pull request that is not merged yet is looked up again, default `300`, at most `540`. A merged one is never looked up again. |
+| `WORKBENCH_PREVIEWS` | No | The record of the ui stories' previews that `workbench preview-sync` keeps; with it, a ui story whose preview is up reads "Ready for you to look" with the preview's address. Unset: no previews. |
 | `WORKBENCH_RUNTIME_DIR` | No | The parent of each project's session runtime directory, `<dir>/<slug>`, which holds the running session's state, broker token, and logs. Default: `$XDG_RUNTIME_DIR/plan-workbench`, else `~/.cache/plan-workbench`. |
 
 ```sh
@@ -199,11 +200,21 @@ Each story shows its plan status on its node and in its details. The graph API n
 | Ready (`ready`) | Approved, with every direct blocker approved or merged. The next sync releases it. |
 | Released (`released`) | In the tracker's release state, so Sortie may dispatch it. |
 | Started (`frozen`) | An agent has claimed it. Its content is frozen. |
+| Building (`building`) | A `review: ui` story that an agent has claimed, before its preview is up. Its content is frozen. |
+| Ready for you to look (`preview`) | A `review: ui` story whose pull request is deployed as a preview: the node's details link to the preview's address and the pull request (`preview` in the graph API: `url`, `pull`, `pull_url`, `sha`). |
 | Delivered (`delivered`) | It names the pull requests that delivered it, and every one is merged. It reads Done, and counts as done for its epic and as approved and done for the stories that depend on it. |
 | Not confirmed (`delivery_unconfirmed`) | It names pull requests, and one is open, closed without merging, or cannot be looked up. It reads "Delivery not confirmed" with each pull request and why, and counts as not done. |
 | Re-review (`needs_rereview`) | It needs a person again: a story it depends on was cancelled (`blocker_canceled`), or an agent said the work was already done and its evidence did not check out (`unverified_no_change`). Approve it again, or cancel it. |
 
-A story's `review` field is `human` (the default) or `criteria`. In the stage-0 kit both go through the criteria gate (design D5): an agent session separate from the build checks each acceptance criterion, and Sortie merges the pull request once that review and CI pass. A criterion the review cannot settle shows as a question on the workbench, and the pull request stays open.
+A story's `review` field is `human` (the default), `criteria` or `ui`. In the stage-0 kit `human` and `criteria` both go through the criteria gate (design D5): an agent session separate from the build checks each acceptance criterion, and Sortie merges the pull request once that review and CI pass. A criterion the review cannot settle shows as a question on the workbench, and the pull request stays open.
+
+### A UI story
+
+A story with `review: ui` is built before anyone approves it, and the operator's merge of its pull request is its approval (spec store `agent-platform/run-supervision`, design D8). Once it covers a requirement it reads Ready, Held or Released as an approved story does, with no **Approve**: the epic's approval leaves it out, and `POST approve` naming it fails with `ui_story`. The stories that depend on it count it as approved. A sync sends it with no approver, and Sortie releases it. One that covers no requirement needs a spec first.
+
+An agent builds it (Building), the criteria review checks it, and once CI passes `workbench preview-sync` deploys its pull request as a preview: the branch's workbench, read-only toward the tracker (`WORKBENCH_SYNC=0`), against live data. The preview's address is commented on the pull request, and the story reads Ready for you to look with the address. Sortie never merges it. Comment on the pull request to ask for a change: a fix run adds commits on the branch, and the preview follows once CI passes. Merge the pull request to approve the story; the preview goes away and the story is Done.
+
+`workbench preview-sync --repo OWNER/REPO --record FILE --deploy COMMAND [--live-url URL] [--first-port 8800] [--handoff-state "In Review"]` is one pass, run on a timer: it reads Sortie's plan graph with `WORKBENCH_SORTIE_URL`, `WORKBENCH_SORTIE_TOKEN` and `WORKBENCH_HULY_PROJECT`, and GitHub with `WORKBENCH_GITHUB_TOKEN`. A ui story's pull request is the one from `sortie/<identifier>`. It runs `COMMAND up IDENTIFIER BRANCH SHA PORT ADDRESS` to deploy and `COMMAND down IDENTIFIER` to remove, and keeps `FILE`, which the live workbench reads as `WORKBENCH_PREVIEWS`. The address is a name beside `--live-url`'s (`https://workbench.example.net` gives `https://workbench-ons-93.example.net/`), or the loopback port without one. The stage-0 kit runs it every minute (`dev/stage0/README.md`).
 
 ### A story built outside an agent run
 

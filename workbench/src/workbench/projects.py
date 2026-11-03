@@ -16,8 +16,10 @@ from .config import Config
 from .delivery import DeliveryWatch, GitHubClient, GitHubError
 from .hub import Hub
 from .plan_state import PlanState, watch
+from .preview import read_previews
 from .registry import Project, Registry, RegistryError, check_new, suggest_slug
-from .scaffold import UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, upgrade_schemas
+from .scaffold import (UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, shipped_changes,
+                       upgrade_schemas)
 from .sessions import SessionManager, runtime_base
 from .sortie import SortieClient, SortieError
 from .workers import WorkerRelay
@@ -46,6 +48,7 @@ class ProjectRuntime:
                                         self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
         # Every Sortie this project's questions may wait in; the main one also serves the plan.
         self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls,
+                       previews=lambda: read_previews(config.previews_file),
                        sortie_name=config.sortie_name,
                        others={name: c.bind(project.huly_project) for name, c in (others or {}).items()},
                        alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None)
@@ -110,7 +113,15 @@ class ProjectRuntime:
         """Bring the store's planning schemas up to the ones the workbench
         ships: in the store itself, or, when its branch tracks an upstream,
         on a pushed branch. Until that branch merges the plan is validated
-        against the shipped schemas."""
+        against the shipped schemas. A read-only workbench, such as a ui
+        story's preview against the live store, writes and pushes nothing:
+        it only validates against the shipped schemas."""
+        if not self.config.sync_enabled:
+            try:
+                self.plan.replaced_schemas = SchemaUpgrade(shipped_changes(self.store)).replaced()
+            except OSError as exc:
+                log.warning("project %s: could not read its planning schemas: %s", self.slug, exc)
+            return None
         try:
             up = upgrade_schemas(self.store)
         except (OSError, ScaffoldError) as exc:

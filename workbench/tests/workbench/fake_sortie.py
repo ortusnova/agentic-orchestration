@@ -11,6 +11,22 @@ from tests.workbench.conftest import SORTIE_TOKEN
 from workbench.sortie import SortieClient
 
 
+def built_unapproved(n: dict[str, Any]) -> bool:
+    """A ui story that covers a requirement: Sortie syncs and releases it
+    without an approval, and refuses one that names an approver."""
+    return n.get("kind") == "story" and n.get("review") == "ui" and bool(n.get("covers"))
+
+
+def synced(n: dict[str, Any]) -> bool:
+    return n["approval"] == "approved" or built_unapproved(n)
+
+
+def releases(n: dict[str, Any]) -> bool:
+    if n.get("review") == "ui":
+        return built_unapproved(n)
+    return bool(n.get("release")) and n["approval"] == "approved"
+
+
 class FakeSortie:
     """Serves tracker workspace projects; ``nodes`` and ``edges`` are the
     configured project's (``T``), the one Sortie dispatches."""
@@ -143,9 +159,12 @@ class FakeSortie:
             return httpx.Response(200, json={"capabilities": self.capabilities, "plan_key_storage": "custom_field"})
         if path == "/api/v1/plan/sync":
             graph = body["graph"]
+            if any(n.get("review") == "ui" and ("approved_by" in n or "approved_at" in n) for n in graph["nodes"]):
+                return httpx.Response(400, json={"error": {"code": "invalid_graph",
+                                                           "message": "a ui story carries no approved_by or approved_at"}})
             if not body.get("apply"):
                 pid = f"p{len(self.previews) + 1}"
-                approved = [n for n in graph["nodes"] if n["approval"] == "approved"]
+                approved = [n for n in graph["nodes"] if synced(n)]
                 missing = [] if "link_dependency" in self.capabilities else ["link_dependency"]
                 preview = {"counts": {"creates": len(approved), "updates": 0, "parents": 0,
                                       "relations_added": len(graph["blocks"]), "relations_removed": 0, "orphans": 0},
@@ -157,7 +176,7 @@ class FakeSortie:
                 return httpx.Response(409, json={"error": {"code": "stale_preview", "message": "unknown preview"}})
             self.applied.append({**body, "project": project})
             released = [{"plan_key": n["plan_key"], "issue_id": "", "identifier": ""} for n in graph["nodes"]
-                        if n.get("release") and n["approval"] == "approved" and n["plan_key"] not in self.released]
+                        if releases(n) and n["plan_key"] not in self.released]
             self.released.update(r["plan_key"] for r in released)
             return httpx.Response(200, json={"result": {"created": [], "released": released, "orphans": [], "failed": None}})
         if path == "/api/v1/refresh":

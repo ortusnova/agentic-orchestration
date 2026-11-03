@@ -152,6 +152,13 @@ STAGE0_EDGE_WORKER_PORT=7700
 STAGE0_NOTIFY_KIND=
 STAGE0_NOTIFY_CHAT_ID=
 STAGE0_WORKBENCH_PUBLIC_URL=http://127.0.0.1:8793
+# The previews of review: ui stories' pull requests (run-previews.sh): the
+# live workbench's TLS name, which each preview's name sits beside (empty:
+# loopback ports only), the first preview port, and a command to run when
+# \$STAGE0_HOME/previews/routes changes, such as a proxy reload.
+STAGE0_WORKBENCH_URL=
+STAGE0_PREVIEW_FIRST_PORT=8800
+STAGE0_PREVIEW_ROUTES_HOOK=
 EOF
   )
 fi
@@ -314,6 +321,7 @@ UNITS=$HOME/.config/systemd/user
 mkdir -p "$UNITS"
 units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
   ortus-stage0-store.service ortus-stage0-store.timer
+  ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
   ortus-stage0-nono.service ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service)
 # A setup-token token never expires, so the homelab profile needs no token
 # timer; it has no workbench, so no store to keep current either.
@@ -343,6 +351,8 @@ systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.se
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
+# The ui stories' previews follow their pull requests (run-previews.sh).
+systemctl --user enable -q --now ortus-stage0-previews.timer
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 systemctl --user restart ortus-stage0-nono.service ortus-stage0-edge.service

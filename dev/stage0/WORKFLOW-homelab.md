@@ -110,7 +110,10 @@ agent:
   kind: agent-client-protocol
   command: agent-acp
   max_turns: 20
-  max_sessions: 16
+  # 32, not 16: a homelab story's live proofs take many sessions, and three
+  # stories spent all 16 on a push GitHub refused before the token had the
+  # workflow scope. Sortie has no per-story release of the budget.
+  max_sessions: 32
   max_concurrent_agents: ${STAGE0_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
