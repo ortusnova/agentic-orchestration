@@ -99,7 +99,10 @@ agent:
   kind: agent-client-protocol
   command: agent-acp
   max_turns: 20
-  max_sessions: 16
+  # 32, as for homelab: the failed one-Sortie cutover (2026-11-02) spent
+  # sessions of several stories on runs that never started. Sortie has no
+  # per-story grant yet (worker-activity-view asks for one).
+  max_sessions: 32
   max_concurrent_agents: ${STAGE0_MAX_AGENTS}
   turn_timeout_ms: 3600000
   stall_timeout_ms: 900000
