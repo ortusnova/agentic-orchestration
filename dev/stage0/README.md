@@ -85,12 +85,11 @@ the pull request merges, Sortie moves the story to `Done`.
   request that still fails after `max_retries` fix runs (2 for CI, 1 for a
   conflict) is a stopped failure: Sortie escalates it, comments on the
   story, and runs no further fix until a new commit lands or a person
-  answers it. Neither watch has a window. Sortie's CI provider reads the
-  checks of one repository, `github.project`: on p1 that is
-  `agentic-orchestration`, so a `sortie` pull request gets no CI fix run
-  (its CI reads fail and back off, and its failing CI only holds its
-  merge) until Sortie reads each pull request's own repository; the homelab
-  profile reads `homelab`.
+  answers it. Neither watch has a window. The CI reaction reads each pull
+  request's checks from the pull request's own repository, so a `sortie`
+  pull request on p1 gets CI fix runs as an `agentic-orchestration` one
+  does; `github.project` only names the CI provider's configured
+  repository.
   `test-review-gate.sh` checks the fix runs too.
 
 - **Operator comments.** On p1 `review_comments` is on: a comment on a ui
