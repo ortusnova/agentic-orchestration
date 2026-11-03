@@ -214,7 +214,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 6. When the agent exits, it sends the exit status, the stream's last
    frame. Then it runs the usage command and reports on `usage`, returns
    the result on `bundles` (the issue branch's bundle and the agent's
-   `.sortie/pr.json`), deletes the machine, and reports the outcome:
+   `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
+   when the agent wrote it), deletes the machine, and reports the outcome:
    `succeeded` when the agent exited 0 and the result was returned. The
    result always goes before the report. Usage goes before the result,
    because once Sortie has the result it finishes the attempt and closes
@@ -289,7 +290,7 @@ proxy. Paths are under the flow's URL:
 
 | Flow | Request |
 |---|---|
-| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional part `pr` (`.sortie/pr.json`, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
+| `bundles` | `GET /jobs/{job}/attempts/{attempt}/seed` answers the seed as `application/x-git-bundle` (the daemon uses `run.seed_path`, which is this path). `POST /jobs/{job}/attempts/{attempt}/result` takes `multipart/form-data` with the part `bundle` (the issue branch) and the optional parts `pr` (`.sortie/pr.json`, at most 64 KiB), `status` (`.sortie/status`, at most 4 KiB) and `criteria` (`.sortie/criteria.json`, a criteria review's verdict per criterion, at most 64 KiB); `bundle` is left out when the machine has no issue branch. |
 | `stdio` | `GET /jobs/{job}/attempts/{attempt}` with `Connection: Upgrade` and `Upgrade: sortie-stdio/1` opens a framed stream (answer `101`). A `ws` or `wss` flow URL is dialled as `http` or `https`. |
 | `usage` | `POST /jobs/{job}/attempts/{attempt}` with `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "model", "measured"}`, the attempt's totals so far; `"measured": false` says that spend occurred and its amount is unknown. |
 | `egress` | An HTTP proxy; the daemon carries the guest's `CONNECT` tunnels and absolute-form requests to it. |

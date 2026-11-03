@@ -811,14 +811,15 @@ func (l lenient) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// guestPRFile is the agent's pull request suggestion, returned beside
-// the bundle.
-const guestPRFile = machine.GuestWorkspace + "/.sortie/pr.json"
+// guestSortieDir is the agent's control directory, whose pull request
+// suggestion, status and criteria verdict are returned beside the bundle.
+const guestSortieDir = machine.GuestWorkspace + "/.sortie/"
 
 // returnResult returns the issue branch on the bundles flow: a bundle of
 // refs/heads/<branch> that leaves out the seed's commits (a branch with
 // nothing new is bundled as its tip alone), and the agent's
-// .sortie/pr.json beside it when there is one. The bundle part is left
+// .sortie/pr.json, .sortie/status and .sortie/criteria.json beside it
+// when there are. The bundle part is left
 // out when the machine has no issue branch.
 func (j *job) returnResult(ctx context.Context, m machine.Machine, share string, s seed) (string, error) {
 	ws := machine.GuestWorkspace
@@ -856,11 +857,17 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 		}
 		bundle = filepath.Join(share, "result.bundle")
 	}
-	pr, err := j.readPR(ctx, m)
+	pr, err := j.readSortieFile(ctx, m, "pr.json", protocol.MaxPRFile)
 	if err != nil {
 		return "", err
 	}
 	res.PR = pr
+	if res.Status, err = j.readSortieFile(ctx, m, "status", protocol.MaxStatusFile); err != nil {
+		return "", err
+	}
+	if res.Criteria, err = j.readSortieFile(ctx, m, "criteria.json", protocol.MaxCriteriaFile); err != nil {
+		return "", err
+	}
 	// A control plane that restarts takes the result once it is back.
 	if err := j.retry(ctx, "result", func() (bool, error) {
 		res.Bundle = nil
@@ -877,30 +884,33 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 	}); err != nil {
 		return "", err
 	}
-	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", bundle != ""), slog.Bool("pr", pr != nil))
-	if pr != nil {
-		note += ", with .sortie/pr.json"
+	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", bundle != ""), slog.Bool("pr", pr != nil),
+		slog.Bool("status", res.Status != nil), slog.Bool("criteria", res.Criteria != nil))
+	for name, data := range map[string][]byte{"pr.json": pr, "status": res.Status, "criteria.json": res.Criteria} {
+		if data != nil {
+			note += ", with .sortie/" + name
+		}
 	}
 	return note, nil
 }
 
-// readPR returns the agent's .sortie/pr.json, or nil when it wrote
-// none. One over 64 KiB fails the return, as the control plane would
-// refuse it.
-func (j *job) readPR(ctx context.Context, m machine.Machine) ([]byte, error) {
+// readSortieFile returns the agent's .sortie/<name>, or nil when it
+// wrote none. One over limit fails the return, as the control plane
+// would refuse it.
+func (j *job) readSortieFile(ctx context.Context, m machine.Machine, name string, limit int) ([]byte, error) {
 	var out bytes.Buffer
 	script := `test -f "$1" || exit 3; exec cat "$1"`
-	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestPRFile},
-		Stdout: &limited{w: &out, n: protocol.MaxPRFile + 1}, Stderr: io.Discard})
+	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestSortieDir + name},
+		Stdout: &limited{w: &out, n: limit + 1}, Stderr: io.Discard})
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("reading .sortie/pr.json: %w", err)
+		return nil, fmt.Errorf("reading .sortie/%s: %w", name, err)
 	case code == 3:
 		return nil, nil
 	case code != 0:
-		return nil, fmt.Errorf("reading .sortie/pr.json: exit status %d", code)
-	case out.Len() > protocol.MaxPRFile:
-		return nil, errors.New(".sortie/pr.json exceeds 64 KiB")
+		return nil, fmt.Errorf("reading .sortie/%s: exit status %d", name, code)
+	case out.Len() > limit:
+		return nil, fmt.Errorf(".sortie/%s exceeds %d bytes", name, limit)
 	}
 	return out.Bytes(), nil
 }

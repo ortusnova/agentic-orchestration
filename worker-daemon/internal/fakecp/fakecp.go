@@ -110,6 +110,10 @@ type Result struct {
 	Bundle []byte
 	// PR is the pr part; nil when the worker left it out.
 	PR []byte
+	// Status is the status part; nil when the worker left it out.
+	Status []byte
+	// Criteria is the criteria part; nil when the worker left it out.
+	Criteria []byte
 	// ContentType is the request's media type.
 	ContentType string
 }
@@ -814,8 +818,20 @@ func (f *Fake) result(w http.ResponseWriter, r *http.Request, job string, attemp
 				return
 			}
 			res.PR = b
+		case protocol.ResultStatusPart:
+			if len(b) > protocol.MaxStatusFile {
+				refuse(http.StatusRequestEntityTooLarge, "the status part exceeds 4 KiB")
+				return
+			}
+			res.Status = b
+		case protocol.ResultCriteriaPart:
+			if len(b) > protocol.MaxCriteriaFile {
+				refuse(http.StatusRequestEntityTooLarge, "the criteria part exceeds 64 KiB")
+				return
+			}
+			res.Criteria = b
 		default:
-			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr", part.FormName()))
+			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr, status, criteria", part.FormName()))
 			return
 		}
 	}

@@ -20,6 +20,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
+dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: make dev-host), then run stage0.sh
@@ -77,12 +78,17 @@ by the same Sortie, like any other.
   (`gate: criteria`, stage label `sortie-stage:review`), a new run in a new
   agent session. The review checks each acceptance criterion with evidence,
   may add fix commits, which Sortie pushes, and never rewrites a pushed
-  commit. When it passes, Sortie's `auto_merge` squashes the pull request
-  once CI passes, and merge completion moves the story to `Done`: no person
-  is involved. A criterion it cannot settle, such as one that conflicts
-  with a design rule, stops it `blocked`: the pull request stays open, and
-  Sortie parks the story with the review's question, which the workbench
-  shows. Branch protection that requires an approving review would keep
+  commit. It records its verdict on each criterion in
+  `.sortie/criteria.json` (`met`, `not-met`, `live-proof` or `unsettled`,
+  with evidence), which the worker returns to Sortie with the branch. Only
+  when every criterion is `met` does Sortie's `auto_merge` squash the pull
+  request, once CI passes, and merge completion move the story to `Done`:
+  no person is involved. A criterion `not-met`, or no verdict, keeps the
+  pull request open and parks the story with those criteria as the
+  supervisor's question. A criterion it cannot settle, such as one that
+  conflicts with a design rule, is `unsettled` and stops it `blocked`: the
+  pull request stays open, and Sortie parks the story with the review's
+  question, which the workbench shows. Branch protection that requires an approving review would keep
   every pull request from merging; the kit's repositories must not require
   one. Sortie merges a `review: human` story after a review only from the
   Sortie commit that lets its gate do so (`planReviewGate`); with an older
@@ -304,8 +310,11 @@ cannot do: a host its egress refuses, a sandbox, another repository (spec
 store `agent-platform/run-supervision`, "A live criterion a story's machine
 cannot run becomes a live-proof job"). For example, homelab's full vm chain
 needs Let's Encrypt staging, which `egress-profile.json` does not allow. The
-review names such a criterion after `live proof needed:` and does not
-settle it. The supervisor then requests a live proof:
+review records such a criterion `live-proof` in `.sortie/criteria.json`
+and names it after `live proof needed:`; Sortie then does not merge the
+pull request and comments the criterion on the story. The supervisor
+requests a live proof, and merges the pull request
+(`POST /api/v1/<identifier>/merge`) once it is proven at its head:
 `POST /api/v1/<identifier>/live-proof`, with the criterion and why the
 machine could not run it as its `evidence`. Every minute
 `ortus-stage0-live-proofs.timer` runs `run-live-proofs.sh`, one pass of
@@ -345,7 +354,7 @@ machine could not run it as its `evidence`. Every minute
   `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
   The pass reads only the kit's own account's comments written since the
   request, and the newest sets the status:
-  - proven at the head: `success`, and Sortie merges once CI passes;
+  - proven at the head: `success`, and the supervisor merges once CI passes;
   - unproven: `failure`;
   - proven at an older commit: `pending` again, until the supervisor
     requests a new proof.
@@ -383,8 +392,12 @@ changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
 live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
-its source, `edge.json` or unit; the worker daemon for its source,
-`worker.json` or unit. A change to one of those ends the jobs that unit
+its source, `edge.json` or unit; the worker daemon for its binary,
+`worker.json` or unit (`worker-build.sh` builds it with `-trimpath
+-buildvcs=false`, so the same code builds the same bytes and a test or
+a document under `worker-daemon/` restarts nothing; a daemon an earlier
+kit started from the source being built keeps running, and its record
+moves to the binary). A change to one of those ends the jobs that unit
 carries, and Sortie retries them. A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
