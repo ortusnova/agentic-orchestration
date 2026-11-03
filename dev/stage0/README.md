@@ -312,6 +312,8 @@ it up.
 
 - **Deploys.** `deploy.sh` runs `stage0.sh` within the minute of a kit or
   Sortie merge, whatever runs, on p1 and on a worker host alike.
+  `journalctl --user -u ortus-stage0-deploy` shows each one: the commit it
+  applies, then `running <commit>`, or why it went back.
 - **Host setup changes**, such as a smolvm bump. Run
   `dev/stage0/dev-host-apply.sh` on the host instead of applying the change
   by hand: it runs the apply, then `stage0.sh` so that the pack and Sortie
