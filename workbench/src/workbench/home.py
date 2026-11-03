@@ -93,9 +93,18 @@ def _words(code: str) -> str:
 
 
 def slots_of(state: dict[str, Any] | None) -> int | None:
+    """The agents that can run at once: Sortie's cap, and under the remote
+    kind no more than its workers' run slots together, since the cap is
+    only a ceiling above them."""
     agent = ((state or {}).get("config") or {}).get("agent") or {}
     cap = agent.get("max_concurrent_agents")
-    return cap if isinstance(cap, int) and cap > 0 else None
+    cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0 else None
+    workers = ((state or {}).get("workers") or {}).get("workers")
+    declared = [((w.get("declaration") or {}).get("run_slots")) for w in workers or [] if isinstance(w, dict)]
+    run_slots = sum(n for n in declared if isinstance(n, int) and not isinstance(n, bool) and n > 0)
+    if run_slots:
+        return min(cap, run_slots) if cap is not None else run_slots
+    return cap
 
 
 # What a released story can wait on while no agent works on it, in the order
