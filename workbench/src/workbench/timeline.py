@@ -151,12 +151,9 @@ class RunWorkers:
     def worker_of(self, sortie: str, run: dict[str, Any]) -> str | None:
         if run.get("ssh_host"):
             return run["ssh_host"]
-        seen = (self.seen.get(f"{sortie}/{run.get('dispatch_id') or ''}") or {}).get("worker")
-        if seen:
-            return seen
-        # A run of a job only one worker can take ran there.
-        only = self.eligible(sortie, run.get("issue_identifier"))
-        return only[0] if only and len(only) == 1 else None
+        # Only a run seen on a worker: a job Sortie counted as running that
+        # no worker took ran nowhere, even one only one worker could take.
+        return (self.seen.get(f"{sortie}/{run.get('dispatch_id') or ''}") or {}).get("worker")
 
 
 class RunHistory:

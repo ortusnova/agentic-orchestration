@@ -95,15 +95,17 @@ def test_a_run_more_than_the_slots_hold_at_once_is_counted_not_drawn():
     assert sum(len(lane["past"]) for lane in p1["lanes"]) == 3 and p1["past_hidden"] == 1
 
 
-def test_a_past_run_of_a_job_only_one_worker_takes_ran_there(tmp_path):
+def test_a_repository_s_one_worker_survives_a_restart_but_draws_no_run_it_never_saw(tmp_path):
     w = RunWorkers(tmp_path / "w.json")
     w.observe("p1", {"retrying": [{"issue_identifier": "ONS-93", "issue_labels": HOMELAB}],
                      "waits": [slot_wait("ONS-93", NOW - 20, worker="taichi")]})
     again = RunWorkers(tmp_path / "w.json")
-    assert again.worker_of("p1", run("ONS-93", NOW - 900, NOW - 100)) == "taichi"
+    assert again.eligible("p1", "ONS-93") == ["taichi"]
+    # A run counted as running that no worker took ran nowhere, though only taichi could take it.
+    assert again.worker_of("p1", run("ONS-93", NOW - 900, NOW - 100)) is None
     # Several workers can take homelab's jobs now: Sortie names none.
     again.observe("p1", {"waits": [slot_wait("ONS-93", NOW - 20)]})
-    assert again.worker_of("p1", run("ONS-93", NOW - 900, NOW - 100)) is None
+    assert again.eligible("p1", "ONS-93") is None
 
 
 def test_the_worker_of_a_run_survives_a_restart(tmp_path):
