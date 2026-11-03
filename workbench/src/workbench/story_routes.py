@@ -31,6 +31,14 @@ class AnswerBody(BaseModel):
     text: str
 
 
+class SessionsBody(BaseModel):
+    key: str
+    sessions: int = 4
+
+# The most sessions one grant gives a story.
+MAX_GRANT = 32
+
+
 def story_router(projects: ProjectManager, require_role) -> APIRouter:
     router = APIRouter(prefix="/api/projects/{slug}")
     approver = require_role(APPROVER)
@@ -172,7 +180,8 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
         writable(rt)
         try:
-            await rt.hub.sortie.answer(ident, text, who.name or who.email or who.key)
+            # The Sortie that holds the park takes the answer: p1's or another's.
+            await rt.hub.sortie_for(ident).answer(ident, text, who.name or who.email or who.key)
         except SortieError as exc:
             if exc.status == 409:
                 await rt.hub.poll_once()
@@ -185,5 +194,37 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         # The park is released: the question leaves the list now, not at the next poll.
         await rt.hub.poll_once()
         return {"answered": body.key, "identifier": ident, "by": who.public(), "node": node(rt, body.key)}
+
+    @router.post("/stories/sessions")
+    async def sessions(slug: str, body: SessionsBody, who: Identity = Depends(approver)) -> dict:
+        """Give a story whose session budget is used more sessions, through
+        the Sortie that holds it, which runs the story again with no change
+        to its workflow."""
+        rt = projects.get(slug)
+        if not 1 <= body.sessions <= MAX_GRANT:
+            raise HTTPException(status_code=400, detail={"code": "invalid_sessions", "message": f"grant between 1 and {MAX_GRANT} sessions"})
+        n = node(rt, body.key)
+        ident = ((n or {}).get("tracker") or {}).get("identifier")
+        if not n or n.get("kind") != "story" or not ident:
+            raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
+        writable(rt)
+        sortie = rt.hub.sortie_for(ident)
+        try:
+            result = await sortie.grant_sessions(ident, body.sessions, who.name or who.email or who.key)
+        except SortieError as exc:
+            if exc.status == 409:
+                await rt.hub.poll_once()
+                raise HTTPException(status_code=409, detail={"code": exc.code or "not_budget_held",
+                                                             "message": f"{body.key} is not held by its session budget"}) from exc
+            if exc.status in (404, 405):
+                raise HTTPException(status_code=501, detail={"code": "grant_unsupported",
+                                                             "message": f"{sortie.name}'s Sortie cannot grant sessions per issue yet"}) from exc
+            raise sortie_failure(exc) from exc
+        if rt.registry is not None:
+            await asyncio.to_thread(rt.registry.record_command, rt.project.id, ident, None, "sessions", str(body.sessions), who.key, who.name)
+        log.info("project %s: %s granted %s %d more sessions on %s", slug, who.key, body.key, body.sessions, sortie.name)
+        await rt.hub.poll_once()
+        return {"granted": body.sessions, "key": body.key, "identifier": ident, "sortie": sortie.name, "result": result,
+                "node": node(rt, body.key)}
 
     return router

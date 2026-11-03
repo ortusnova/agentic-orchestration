@@ -56,8 +56,10 @@ class WorkerRelay:
     """Relays the brokers of one project's workers."""
 
     def __init__(self, sortie: ProjectSortie, transport: httpx.AsyncBaseTransport | None = None,
-                 follow_poll: float = FOLLOW_POLL_SECONDS):
+                 follow_poll: float = FOLLOW_POLL_SECONDS, sortie_for: Callable[[str], ProjectSortie] | None = None):
         self.sortie = sortie
+        # The Sortie that runs a story: this project's own, or another one.
+        self.sortie_for = sortie_for or (lambda _identifier: sortie)
         self.follow_poll = follow_poll
         self._http = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0, read=None))
 
@@ -66,7 +68,7 @@ class WorkerRelay:
 
     async def _broker(self, identifier: str) -> tuple[str, str]:
         try:
-            b = await self.sortie.broker(identifier)
+            b = await self.sortie_for(identifier).broker(identifier)
         except SortieError as exc:
             if exc.status == 404:
                 raise WorkerError(409, "no_worker", f"{identifier} has no running worker that can be watched") from exc
@@ -92,7 +94,7 @@ class WorkerRelay:
         """The story's current run: ``{"session_id", "stage", "watchable"}``,
         ``{"retrying": True}`` while Sortie waits to retry, or None."""
         try:
-            info = await self.sortie.issue(identifier)
+            info = await self.sortie_for(identifier).issue(identifier)
         except SortieError as exc:
             if exc.status == 404:
                 return None
@@ -105,6 +107,28 @@ class WorkerRelay:
             return {"retrying": True, "attempt": info["retry"].get("attempt")}
         return None
 
+    async def last_transcript(self, identifier: str) -> dict[str, Any] | None:
+        """The events Sortie kept of the story's newest run: all of them
+        when it serves them, else the newest it lists with the issue."""
+        sortie = self.sortie_for(identifier)
+        try:
+            info = await sortie.issue(identifier)
+        except SortieError:
+            return None
+        runs = ((info.get("history") or {}).get("runs") or []) if isinstance(info.get("history"), dict) else []
+        dispatch = next((r.get("dispatch_id") for r in runs if isinstance(r, dict) and r.get("dispatch_id")), None)
+        events = info.get("recent_events") or []
+        if dispatch:
+            try:
+                events = (await sortie.run_events(dispatch)).get("events") or events
+            except SortieError as exc:
+                log.info("sortie keeps no events of %s's run %s: %s", identifier, dispatch, exc.message)
+        if not events:
+            return None
+        return {"identifier": identifier, "dispatch_id": dispatch, "sortie": sortie.name,
+                "events": [{"seq": e.get("seq"), "at": e.get("at"), "event": e.get("event"), "text": e.get("text") or e.get("message") or "",
+                            "tool_line": e.get("tool_line")} for e in events if isinstance(e, dict)]}
+
     async def events(self, identifier: str, last_event_id: str | None,
                      connected: Callable[[], Any] | None = None) -> AsyncIterator[bytes]:
         """The worker's events, following the story from run to run (design D3)."""
@@ -115,6 +139,11 @@ class WorkerRelay:
                 return
             run = await self._run(identifier)
             if run is None:
+                if seen is None:
+                    # Nothing runs now: show the agent's last session instead.
+                    last = await self.last_transcript(identifier)
+                    if last is not None:
+                        yield _sse("transcript", last)
                 yield _sse("ended", {"identifier": identifier})
                 return
             if run.get("retrying") or not run.get("watchable"):

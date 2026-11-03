@@ -56,6 +56,15 @@ class FakeSortie:
         self.refresh_down = False
         self.refreshes = 0
         self.released: set[str] = set()
+        # What the workbench shows of the workers (agent-platform/run-supervision):
+        # members merged into /api/v1/state as Sortie serves them (host, workers,
+        # pulls, waits, held, dispatch_paused), the sessions people granted, and
+        # the run history of issues that no longer run: identifier ->
+        # {"dispatch_id", "events"}.
+        self.extra_state: dict[str, Any] = {}
+        self.grants: list[dict[str, Any]] = []
+        self.grants_supported = True
+        self.history: dict[str, dict[str, Any]] = {}
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -169,7 +178,7 @@ class FakeSortie:
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
-                                             "config": {"agent": agent}})
+"config": {"agent": agent}, **self.extra_state})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:
@@ -180,6 +189,22 @@ class FakeSortie:
             if self.answer_releases:
                 self.unpark(ident)
             return httpx.Response(200, json={"issue_identifier": ident, "released": True})
+        if path.startswith("/api/v1/") and path.endswith("/sessions") and request.method == "POST":
+            ident = path.removeprefix("/api/v1/").removesuffix("/sessions")
+            if not self.grants_supported:
+                return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
+            if not any(b["issue_identifier"] == ident for b in self.budget_exhausted):
+                return httpx.Response(409, json={"error": {"code": "not_budget_held", "message": f"{ident} is not held by its budget"}})
+            self.grants.append({"identifier": ident, "sessions": body["sessions"], "author": body["author"]})
+            # Sortie raises the issue's budget and dispatches it again.
+            self.budget_exhausted = [b for b in self.budget_exhausted if b["issue_identifier"] != ident]
+            return httpx.Response(200, json={"issue_identifier": ident, "granted": body["sessions"]})
+        if path.startswith("/api/v1/runs/") and path.endswith("/events"):
+            dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
+            run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)
+            if run is None:
+                return httpx.Response(404, json={"error": {"code": "run_events_not_retained", "message": dispatch}})
+            return httpx.Response(200, json={"dispatch_id": dispatch, "first_seq": 1, "events": run["events"]})
         if path.startswith("/api/v1/") and path.endswith("/broker"):
             ident = path.removeprefix("/api/v1/").removesuffix("/broker")
             if ident not in self.brokers:
@@ -187,10 +212,13 @@ class FakeSortie:
             return httpx.Response(200, json=self.brokers[ident])
         if path.startswith("/api/v1/") and path.count("/") == 3:
             ident = path.removeprefix("/api/v1/")
-            if ident not in self.running and ident not in self.retrying and ident not in self.park_details:
+            if ident not in self.running and ident not in self.retrying and ident not in self.park_details and ident not in self.history:
                 return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": ident}})
+            past = self.history.get(ident)
             return httpx.Response(200, json={"issue_identifier": ident, "running": self.running.get(ident),
-                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident)})
+                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident),
+                                             "history": {"runs": [{"dispatch_id": past["dispatch_id"]}]} if past else None,
+                                             "recent_events": (past["events"][-50:] if past else [])})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
 
     def handle_project(self, method: str, key: str, body: Any) -> httpx.Response:

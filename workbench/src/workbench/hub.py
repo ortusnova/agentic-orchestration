@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from .autosync import approved_digest
+from .fleet import build_fleet, lanes_summary, story_states
 from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
@@ -23,8 +24,17 @@ _UNSET = object()
 
 
 class Hub:
-    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None):
+    def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
+                 peers: list[ProjectSortie] | None = None):
         self.plan = plan
+        # The other Sorties whose workers this project's stories may run on,
+        # and the last state each gave, or why it gave none.
+        self.peers = list(peers or [])
+        self.peer_states: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
+        # What each worker does and what waits on it (agent-platform/run-supervision).
+        self.fleet: dict[str, Any] = {"workers": [], "pulls": [], "sorties": [], "where": {}}
+        # The Sortie that last ran, parked or held each issue, by identifier.
+        self.last_where: dict[str, str] = {}
         # Called, from any thread, when the approved part of the graph changes.
         self.on_approved_change = lambda: None
         # Unset until the first build, so that build triggers the startup sync.
@@ -90,35 +100,87 @@ class Hub:
 
     async def _workers(self, graph: dict[str, Any]) -> dict[str, dict[str, Any]]:
         # The home reads the agent slots and held runs from Sortie's state,
-        # which Sortie keeps for the project it dispatches only.
+        # which Sortie keeps for the project it dispatches only. The other
+        # Sorties are read whatever this one does.
+        await self._peer_states()
         if not graph.get("dispatched"):
-            self.agent_state, self.state_error, self.questions = None, None, {}
-            return {}
+            self.agent_state, self.state_error = None, None
+            self.questions = await self._questions(self._peer_pairs())
+            return self._peer_fields()
         try:
             state = await self.sortie.state()
         except SortieError as exc:
             log.warning("sortie state unavailable: %s", exc)
-            self.agent_state, self.state_error, self.questions = None, exc.message, {}
-            return {}
+            self.agent_state, self.state_error = None, exc.message
+            self.questions = await self._questions(self._peer_pairs())
+            return self._peer_fields()
         self.agent_state, self.state_error = state, None
-        self.questions = await self._questions(state)
-        if not any(n.get("runtime") for n in graph.get("nodes") or []):
-            return {}
-        return worker_fields(state)
+        self.questions = await self._questions([(self.sortie, state)] + self._peer_pairs())
+        fields = worker_fields(state) if any(n.get("runtime") for n in graph.get("nodes") or []) else {}
+        return {**self._peer_fields(), **fields}
 
-    async def _questions(self, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    def _peer_fields(self) -> dict[str, dict[str, Any]]:
+        """The worker fields of the runs the other Sorties hold, marked so
+        that a story with no runtime in this Sortie's graph gets one."""
+        out: dict[str, dict[str, Any]] = {}
+        for p, s in self._peer_pairs():
+            for ident, f in worker_fields(s).items():
+                out[ident] = {**f, "sortie": p.name}
+        return out
+
+    async def _peer_states(self) -> None:
+        for peer in self.peers:
+            try:
+                self.peer_states[peer.name] = (await peer.state(), None)
+            except SortieError as exc:
+                log.warning("sortie %s state unavailable: %s", peer.name, exc)
+                self.peer_states[peer.name] = (None, exc.message)
+
+    def _peer_pairs(self) -> list[tuple[ProjectSortie, dict[str, Any]]]:
+        return [(p, s) for p in self.peers if (s := self.peer_states.get(p.name, (None, None))[0]) is not None]
+
+    def sortie_for(self, identifier: str) -> ProjectSortie:
+        """The Sortie that runs, parks or holds the issue: the one whose
+        state lists it last, else this project's own."""
+        name = self.last_where.get(identifier)
+        return next((p for p in self.peers if p.name == name), self.sortie)
+
+    def states(self) -> list[tuple[str, dict[str, Any] | None, str | None]]:
+        """Each Sortie's name, its last state, and why there is none."""
+        own: list[tuple[str, dict[str, Any] | None, str | None]] = []
+        if self.agent_state is not None or self.state_error is not None or self.sortie_error is not None:
+            own = [(self.sortie.name, self.agent_state, self.state_error or self.sortie_error)]
+        return own + [(p.name, *self.peer_states.get(p.name, (None, "not read yet"))) for p in self.peers]
+
+    def merged_state(self) -> dict[str, Any] | None:
+        """Every Sortie's runs and holds as one state, for the verdict on the
+        whole project; None while this project's own Sortie gave none."""
+        if self.agent_state is None:
+            return None
+        out: dict[str, Any] = {k: list(self.agent_state.get(k) or []) for k in ("running", "retrying", "budget_exhausted", "parked")}
+        cap = ((self.agent_state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+        for _, s in self._peer_pairs():
+            for k in out:
+                out[k] += list(s.get(k) or [])
+            more = ((s.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+            if isinstance(cap, int) and isinstance(more, int):
+                cap += more
+        out["config"] = {"agent": {"max_concurrent_agents": cap} if isinstance(cap, int) else {}}
+        return out
+
+    async def _questions(self, states: list[tuple[ProjectSortie, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
         """The open question of each parked issue, by tracker identifier. The
         state may shorten a stop statement; the issue's own response holds it
         whole, and is read once per park."""
         out: dict[str, dict[str, Any]] = {}
         details: dict[tuple[str, Any], dict[str, Any] | None] = {}
-        for entry in parked(state):
+        for sortie, entry in [(s, e) for s, st in states for e in parked(st)]:
             ident = entry["issue_identifier"]
             park = (ident, parked_at_of(entry))
             detail = self._park_details.get(park) if park[1] is not None else None
             if detail is None:
                 try:
-                    detail = await self.sortie.issue(ident)
+                    detail = await sortie.issue(ident)
                 except SortieError as exc:
                     log.info("sortie has no details of %s's park: %s", ident, exc.message)
                     detail = None
@@ -157,11 +219,26 @@ class Hub:
         doc = merge(snap["graph"], self.tracker)
         approvals, rereviews = self.records()
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls())
+        statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
+        try:
+            self.fleet = build_fleet(self.states(), doc["nodes"], statements)
+            self.last_where.update(self.fleet["where"])
+            held = {h["issue_identifier"]: {**h, "sortie": name} for name, s, _ in self.states() if s
+                    for h in s.get("held") or [] if isinstance(h, dict) and h.get("issue_identifier")}
+            runs = story_states(self.fleet, held)
+        except Exception:  # the fleet must never take the graph down with it
+            log.exception("could not build the workers' view")
+            self.fleet, runs = {"workers": [], "pulls": [], "sorties": [], "where": {}, "error": "see the workbench log"}, {}
         for n in doc["nodes"]:
             n.update(self.fields.get(n["plan_key"], {}))
             ident = (n.get("tracker") or {}).get("identifier")
             if n.get("kind") == "story":
                 n["question"] = self.questions.get(ident) if ident else None
+                n["run_state"] = runs.get(ident) if ident else None
+                peer = self.workers.get(ident or "", {}).get("sortie")
+                if peer and not n.get("runtime") and n.get("tracker"):
+                    # Another Sortie runs it: this Sortie's graph knows no runtime of it.
+                    n["runtime"] = {"status": "running", "turn_count": None, "last_message": None, "attempt": None}
             if n.get("runtime") and n.get("tracker"):
                 n["runtime"] = {"stage": None, "session_id": None, "held": False, "holder": None, "watchable": False,
                                 **n["runtime"], **self.workers.get(n["tracker"]["identifier"], {})}
@@ -182,6 +259,7 @@ class Hub:
         )
         doc["plan_states"] = (self.tracker or {}).get("plan_states")
         doc["sync"] = self.sync_status
+        doc["fleet"] = self.fleet
         doc["home"] = self.home = self._home(doc, snap)
         self.doc = doc
         self._publish(doc)
@@ -212,13 +290,14 @@ class Hub:
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
-                    "state": self.agent_state, "state_error": self.state_error, "sync": doc.get("sync"),
+                    "state": self.merged_state(), "state_error": self.state_error, "sync": doc.get("sync"),
                     "statements": {i: q["statement"] for i, q in self.questions.items() if q["statement"]},
                 },
             )
         except Exception:  # the home must never take the graph down with it
             log.exception("could not build the project home")
             return {"error": "the home could not be computed; see the workbench log"}
+        home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
 
