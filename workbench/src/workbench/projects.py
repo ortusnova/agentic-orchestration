@@ -15,8 +15,10 @@ from .config import Config
 from .delivery import DeliveryWatch, GitHubClient, GitHubError
 from .hub import Hub
 from .plan_state import PlanState, watch
+from .preview import read_previews
 from .registry import Project, Registry, RegistryError, check_new, suggest_slug
-from .scaffold import UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, upgrade_schemas
+from .scaffold import (UPGRADE_MESSAGE, SchemaUpgrade, ScaffoldError, push_upgrade, scaffold_store, shipped_changes,
+                       upgrade_schemas)
 from .sessions import SessionManager, runtime_base
 from .sortie import SortieClient, SortieError
 from .workers import WorkerRelay
@@ -42,7 +44,8 @@ class ProjectRuntime:
         # The pull requests the stories name in delivered_by, looked up on GitHub.
         self.deliveries = DeliveryWatch(github or GitHubClient(config.github_api_url, config.github_token),
                                         self.delivered_by, registry=registry, recheck=config.delivery_recheck_seconds)
-        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls)
+        self.hub = Hub(self.plan, sortie.bind(project.huly_project), records=self.records, pulls=self.deliveries.pulls,
+                       previews=lambda: read_previews(config.previews_file))
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
@@ -104,7 +107,15 @@ class ProjectRuntime:
         """Bring the store's planning schemas up to the ones the workbench
         ships: in the store itself, or, when its branch tracks an upstream,
         on a pushed branch. Until that branch merges the plan is validated
-        against the shipped schemas."""
+        against the shipped schemas. A read-only workbench, such as a ui
+        story's preview against the live store, writes and pushes nothing:
+        it only validates against the shipped schemas."""
+        if not self.config.sync_enabled:
+            try:
+                self.plan.replaced_schemas = SchemaUpgrade(shipped_changes(self.store)).replaced()
+            except OSError as exc:
+                log.warning("project %s: could not read its planning schemas: %s", self.slug, exc)
+            return None
         try:
             up = upgrade_schemas(self.store)
         except (OSError, ScaffoldError) as exc:

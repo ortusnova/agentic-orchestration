@@ -222,7 +222,7 @@ class _Plan:
 def _story_reason(p: _Plan, key: str, fields: dict[str, Any], gate_tasks: list[dict[str, Any]] | None) -> str | None:
     n = p.nodes[key]
     status = fields.get("plan_status")
-    if status in ("frozen", "delivered", "delivery_unconfirmed"):
+    if status in ("frozen", "building", "preview", "delivered", "delivery_unconfirmed"):
         return None
     draft = status in ("draft", "needs_rereview")
     if status == "needs_spec" or (draft and n.get("deliverable_kind") == "story" and not n.get("covers")):

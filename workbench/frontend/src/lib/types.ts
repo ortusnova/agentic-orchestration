@@ -60,13 +60,23 @@ export interface GraphNode {
   frozen?: boolean;
   approved_by?: { name: string; id: string } | null;
   approved_at?: number | null;
-  review?: "human" | "criteria";
+  review?: "human" | "criteria" | "ui";
   supersedes?: string | null;
   /** The pull requests the story names in delivered_by, as GitHub reports them; null when it names none. */
   delivery?: Delivery | null;
+  /** A ui story only: the preview of its pull request, once the kit deployed it; null before. */
+  preview?: Preview | null;
 }
 
-export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "building" | "preview" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
+
+/** The preview of a ui story's pull request: its branch's read-only workbench. */
+export interface Preview {
+  url: string;
+  pull: string;
+  pull_url: string;
+  sha: string;
+}
 
 /** One pull request a story names, as GitHub last reported it. */
 export interface DeliveryPull {

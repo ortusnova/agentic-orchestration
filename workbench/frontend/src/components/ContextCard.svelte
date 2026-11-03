@@ -51,6 +51,7 @@
   }
 
   const approver = $derived(!!actions && can("approver"));
+  const REVIEW_LABEL: Record<string, string> = { criteria: "acceptance criteria", human: "a person", ui: "you, on a preview" };
   const epicStories = $derived(view.epic ? model.storiesOf(view.epic) : []);
   const drafts = $derived(epicStories.filter((n) => n.plan_status === "draft"));
   const epicNeverApproved = (epic: GraphNode) => model.storiesOf(epic.plan_key).every((n) => n.approval !== "approved");
@@ -132,13 +133,13 @@
           <span class="chip {model.statusClass(node)}"><i></i>{model.statusLabel(node)}</span>
           {#if node.status === "orphaned"}<span class="chip">orphaned: no longer in the plan</span>{/if}
           {#if node.plan_status}<span class="chip plan {node.plan_status}" data-plan-status={node.plan_status}>{planStatusLabel(node.plan_status)}</span>{/if}
-          {#if node.kind === "story" && node.review}<span class="chip">review: {node.review === "criteria" ? "acceptance criteria" : "a person"}</span>{/if}
+          {#if node.kind === "story" && node.review}<span class="chip">review: {REVIEW_LABEL[node.review] ?? node.review}</span>{/if}
           {#if approver && actions}
             {#if node.kind === "epic" && node.approval === "draft" && epicNeverApproved(node) && epicHasDrafts(node)}
               <button type="button" class="chip go" data-act="approve-epic" disabled={!!busy}
                 onclick={() => act("approve", () => actions.approve({ epic: node.change }))}>{busy === "approve" ? "Approving…" : "Approve the epic"}</button>
             {/if}
-            {#if node.kind === "story" && (node.plan_status === "draft" || node.plan_status === "needs_rereview") && !node.frozen}
+            {#if node.kind === "story" && node.review !== "ui" && (node.plan_status === "draft" || node.plan_status === "needs_rereview") && !node.frozen}
               <button type="button" class="chip go" data-act="approve" disabled={!!busy}
                 onclick={() => act("approve", () => actions.approve({ keys: [node.plan_key] }))}>{busy === "approve" ? "Approving…" : "Approve"}</button>
             {/if}
@@ -182,6 +183,10 @@
           <p class="why warn" data-why="delivery">{deliveryText(node.delivery)}</p>
         {:else if node.plan_status === "needs_spec"}
           <p class="why" data-why="needs-spec">It covers no requirement, so it cannot be approved. Plan its spec first.</p>
+        {:else if node.plan_status === "building"}
+          <p class="why" data-why="building">Agents are building it, with no approval: a review checks its criteria, then its pull request is deployed as a preview for you to look at. Merging the pull request approves it.</p>
+        {:else if node.plan_status === "preview" && node.preview}
+          <p class="why" data-why="preview">Ready for you to look: <a href={node.preview.url} target="_blank" rel="noopener">{node.preview.url}</a>. Comment on <a href={node.preview.pull_url || undefined} target="_blank" rel="noopener">{node.preview.pull}</a> to ask for a change, and merge it to approve the story.</p>
         {:else if node.plan_status === "frozen"}
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
