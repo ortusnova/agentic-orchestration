@@ -9,7 +9,7 @@ Everything is rootless: systemd user units and Huly's podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
-dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
+dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack (it is rebuilt by itself when its inputs change)
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
@@ -115,6 +115,11 @@ the pull request merges, Sortie moves the story to `Done`.
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
+- **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
+  (`websearch.provider` in `pack/opencode.json`), so the workflows allow
+  `mcp.firecrawl.dev` and no credential is bound. With no provider set,
+  opencode asks the user to pick one on the first search, and Sortie
+  refuses that prompt.
 - **What the agent reads.** The VM has no copy of the spec store and no
   network beyond the workflow's hosts, so the prompt carries everything:
   the story's Huly description holds its notes, its acceptance criteria,
