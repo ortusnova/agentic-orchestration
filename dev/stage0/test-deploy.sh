@@ -77,13 +77,13 @@ setup() {
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
-  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs"
+  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon"
   # Like the real one, --update-sortie moves the Sortie checkout to plan-bench.
   # shellcheck disable=SC2016 # expanded by the stub, not here
   printf '#!/bin/sh\nprintf stage0.sh >> "%s/calls"; for a; do printf " %%s" "$a" >> "%s/calls"; done; echo >> "%s/calls"\n[ "$1" != --update-sortie ] || git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench\n[ -z "$FAIL_STAGE0" ]\n' \
     "$tmp" "$tmp" "$tmp" > "$tmp/up/dev/stage0/stage0.sh"
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
-  echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"
+  echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
   g clone -q "$tmp/remote" "$STAGE0_LIVE_KIT"
   mkdir -p "$STAGE0_LIVE_KIT/workbench/frontend/node_modules"
@@ -135,16 +135,16 @@ setup; echo 2 > "$tmp/sortie/go"; g -C "$tmp/sortie" commit -qam try; smerge; ru
 check "a Sortie checkout not behind plan-bench stays where it is" main ""
 
 # A pending deploy drains its host (agent-platform/run-supervision): a busy
-# taichi, 2 stories running and 9 waiting, 2 at a time.
+# p1, 2 stories running and 9 waiting, 2 at a time.
 setup; sortie 2 9 2; merge dev/stage0/units; run
-check "busy taichi: the kit change waits for the 2 runs" main~1 ""
-want "busy taichi: Sortie dispatches no new run" "running 2, queued 9, paused"
-finish 1; want "busy taichi: a run ends, and none takes its slot" "running 1, queued 9, paused"
-run; check "busy taichi: the change still waits for the last run" main~1 ""
-finish 1; run; check "busy taichi: the change applies once the 2 finish" main "stage0.sh;"
-want "busy taichi: then Sortie dispatches the 9" "running 2, queued 7, dispatching"
-if [[ ! -e $STAGE0_HOME/dispatch.paused && $(tr '\n' ' ' < "$SORTIE_STUB/log") == "pause pause pause resume " ]]; then echo "ok: busy taichi: each wait pauses, the apply resumes"
-else echo "FAIL: busy taichi: Sortie calls '$(tr '\n' ' ' < "$SORTIE_STUB/log")'"; failed=1; fi
+check "busy p1: the kit change waits for the 2 runs" main~1 ""
+want "busy p1: Sortie dispatches no new run" "running 2, queued 9, paused"
+finish 1; want "busy p1: a run ends, and none takes its slot" "running 1, queued 9, paused"
+run; check "busy p1: the change still waits for the last run" main~1 ""
+finish 1; run; check "busy p1: the change applies once the 2 finish" main "stage0.sh;"
+want "busy p1: then Sortie dispatches the 9" "running 2, queued 7, dispatching"
+if [[ ! -e $STAGE0_HOME/dispatch.paused && $(tr '\n' ' ' < "$SORTIE_STUB/log") == "pause pause pause resume " ]]; then echo "ok: busy p1: each wait pauses, the apply resumes"
+else echo "FAIL: busy p1: Sortie calls '$(tr '\n' ' ' < "$SORTIE_STUB/log")'"; failed=1; fi
 setup; sortie 1 4 1; smerge; run; finish 1; want "a plan-bench merge pauses dispatch too" "running 0, queued 4, paused"
 run; check "and applies when the run finishes" main "stage0.sh --update-sortie;"
 want "and dispatches again" "running 1, queued 3, dispatching"
@@ -160,6 +160,15 @@ want "a pause without the control token is refused" "running 1, queued 4, dispat
 echo control > "$STAGE0_HOME/sortie-token"
 setup; sortie 0 4 1; echo "deploy of kit 0" > "$STAGE0_HOME/dispatch.paused"; touch "$SORTIE_STUB/paused"; run
 want "a pause the kit left with nothing pending is resumed" "running 1, queued 3, dispatching"
+# A worker host: it waits while its daemon runs a job, and builds no Sortie.
+cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
+printf 'STAGE0_PROFILE=worker\nSTAGE0_SORTIE_SRC=%s\n' "$tmp/sortie" > "$STAGE0_HOME/stage0.env"
+setup; merge dev/stage0/units; mkdir -p "$STAGE0_HOME/worker/jobs/ONS-9-1"; run
+check "on a worker host a kit change waits while a job runs" main~1 ""
+rmdir "$STAGE0_HOME/worker/jobs/ONS-9-1"; run; check "and runs stage0.sh once none does" main "stage0.sh;"
+setup; merge worker-daemon/x; run; check "a worker-daemon change runs stage0.sh" main "stage0.sh;"
+setup; smerge; run; check "a worker host follows no plan-bench merge" main ""
+cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
 
 # One run at a time: deploy.sh waits for a stage0.sh, and stage0.sh for it.
 setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8
@@ -185,7 +194,7 @@ applied() { # applied NAME WANT_RC WANT_CALLS
   if [[ $rc == "$2" && $(calls) == "$3" ]]; then echo "ok: $1"; else echo "FAIL: $1: exit $rc, calls '$(calls)', want $2 and '$3': $(cat "$tmp/err")"; failed=1; fi
 }
 sortie 2 9 2; touch "$SORTIE_STUB/finish-on-poll"; apply "${apply[@]}"
-applied "a smolvm bump on busy taichi applies once its 2 runs finish, dispatch paused" 0 "apply: running 0, paused;stage0.sh;"
+applied "a smolvm bump on busy p1 applies once its 2 runs finish, dispatch paused" 0 "apply: running 0, paused;stage0.sh;"
 rm "$SORTIE_STUB/finish-on-poll"; finish 0
 want "and then Sortie dispatches the 9" "running 2, queued 7, dispatching"
 sortie 1 4 1; touch "$SORTIE_STUB/finish-on-poll"; apply false
