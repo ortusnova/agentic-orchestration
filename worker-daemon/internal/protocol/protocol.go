@@ -33,8 +33,8 @@ const (
 	PollPath    = "/api/v1/workers/poll"
 )
 
-// AttemptPath returns the path of an attempt's heartbeat or report
-// route; action is "heartbeat" or "report".
+// AttemptPath returns the path of an attempt's heartbeat, report or
+// resume route; action is "heartbeat", "report" or "resume".
 func AttemptPath(job string, attempt int, action string) string {
 	return "/api/v1/workers/jobs/" + url.PathEscape(job) + "/attempts/" + strconv.Itoa(attempt) + "/" + action
 }

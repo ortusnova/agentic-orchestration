@@ -239,6 +239,27 @@ func (s *Smolvm) Create(ctx context.Context, spec Spec) (Machine, error) {
 	return m, nil
 }
 
+// Reopen implements [Reopener]: a handle on spec's machine, when smolvm
+// lists it. Its forwards still run in the guest, so only their addresses
+// are taken again.
+func (s *Smolvm) Reopen(ctx context.Context, spec Spec) (Machine, error) {
+	listed, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range listed {
+		if l.Name != spec.Name {
+			continue
+		}
+		m := &smolvmMachine{s: s, name: spec.Name, env: spec.HostEnv, addrs: map[string]string{}}
+		for _, f := range spec.Forwards {
+			m.addrs[f.Name] = net.JoinHostPort("127.0.0.1", strconv.Itoa(f.GuestPort))
+		}
+		return m, nil
+	}
+	return nil, nil
+}
+
 // waitReady waits until the guest runs socat: right after a start,
 // smolvm can run a command before the pack's root file system is in
 // place.

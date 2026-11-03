@@ -84,7 +84,7 @@ the start instead of being ignored.
 | `reserve.cpu` | no | `0` | CPUs the host keeps for itself. |
 | `floor.disk_gib` | yes | | Disk, in GiB, kept free on `disk_path`'s file system. `free.disk_gib` is what is available there less this, less running jobs' disks. |
 | `smallest_job.cpu`, `mem_gib`, `disk_gib` | no | `0` | What the smallest job this worker should take needs. The daemon does not poll while less than this is free. |
-| `state_dir` | yes | | Absolute. Holds one directory per running job (`jobs/<job>-<attempt>`, mode 0700): the workspace seed, the exported bundle and the forwarders' sockets. Removed when the job ends. Keep the path short: a Unix socket path is limited to 104 bytes on macOS. |
+| `state_dir` | yes | | Absolute. Holds one directory per running job (`jobs/<job>-<attempt>`, mode 0700): the job's record (`job.json`, without its tokens), the workspace seed, the exported bundle and the forwarders' sockets. Removed when the job ends; kept across a restart of the daemon, which adopts the job. Keep the path short: a Unix socket path is limited to 104 bytes on macOS. |
 | `disk_path` | no | `state_dir` | Where free disk is measured: the file system smolvm keeps machines on. |
 | `smolvm.binary` | no | `smolvm` | The smolvm program. |
 | `smolvm.packs` | no | | Maps an image reference (`run.image`) to an absolute pack path. |
@@ -248,8 +248,36 @@ next check-in, and sends no result, usage or report for that attempt.
 
 When a heartbeat answers `409`, the daemon stops the machine at once,
 within the heartbeat interval, and sends no result, usage or report for
-that attempt. When the daemon is stopped (SIGTERM or SIGINT), it stops
-every machine and reports each running attempt `failed`.
+that attempt.
+
+A restart of the daemon ends no job either. When the daemon is stopped
+(SIGTERM or SIGINT), it stops each job's agent and leaves the job to its
+next start: the machine keeps running, nothing is reported, and the
+job's directory under `state_dir` keeps its record (`job.json`: the
+offer without its tokens, and the seed once the agent may run). The
+stdio stream breaks, and Sortie keeps the run and waits for it. At its
+next start, before its first check-in, the daemon adopts each job it
+left:
+
+- It takes the job's offer again from Sortie with
+  `POST /api/v1/workers/jobs/{job}/attempts/{attempt}/resume`, which
+  hands it new flow tokens, since it keeps none at rest. Then it renews
+  the lease, dials the `stdio` stream again and starts the agent again in
+  the same machine and workspace, and the job goes on to its result and
+  its report, once.
+- A job Sortie no longer wants (`410`) or holds for another worker
+  (`409`) is released: its machine is deleted and nothing is reported. A
+  Sortie that cannot resume (`404`), a job whose machine is gone, as
+  after a host reboot, and a job whose agent had not started yet are
+  reported `failed`, their machines deleted.
+- A machine labelled `worker-daemon.worker=<worker_id>` and
+  `worker-daemon.job` that no job directory names, as when `state_dir`
+  was removed, is deleted. A machine of another worker or of no daemon
+  is left alone.
+
+The machines must outlive the daemon's process: under systemd, run it
+with `KillMode=process` (see [Run as a service](#run-as-a-service)), or
+stopping the unit kills the machines with it.
 
 ### Flows on the wire
 
@@ -339,6 +367,9 @@ After=network-online.target
 ExecStart=/usr/local/bin/worker-daemon run -config /etc/worker-daemon/config.json
 Restart=on-failure
 TimeoutStopSec=150
+# The jobs' machines run in the unit's control group: a stop signals the
+# daemon only, which leaves the machines running for its next start.
+KillMode=process
 
 [Install]
 WantedBy=default.target

@@ -585,16 +585,23 @@ func TestUsageReadable(t *testing.T) {
 	}
 }
 
-func TestShutdownReportsRunningJobs(t *testing.T) {
+// A daemon that stops leaves its running jobs to its next start: their
+// machines keep running and nothing is reported.
+func TestShutdownLeavesRunningJobs(t *testing.T) {
 	h := newHarness(t, defaults())
 	h.offer("ONS-7", 1, map[string]string{"AGENT_MODE": "sleep"})
 	h.waitFor("the agent to run", 20*time.Second, func() bool {
 		return strings.Contains(h.fake.StdioOutput("ONS-7", 1), "sleeping")
 	})
 	h.stop()
-	r := h.reports("ONS-7", 1)
-	if len(r) != 1 || r[0].Outcome != protocol.OutcomeFailed || r[0].Machine != protocol.MachineDeleted {
-		t.Errorf("reports = %+v, want one failure with the machine deleted", r)
+	if r := h.reports("ONS-7", 1); len(r) != 0 {
+		t.Errorf("reports = %+v, want none", r)
+	}
+	if m := h.machine("ONS-7", 1); !m.StoppedAt().IsZero() || m.Deleted() {
+		t.Error("the stopping daemon stopped or deleted the job's machine")
+	}
+	if _, err := os.Stat(filepath.Join(h.d.JobDir("ONS-7", 1), "job.json")); err != nil {
+		t.Errorf("the job's state is gone: %v", err)
 	}
 }
 
