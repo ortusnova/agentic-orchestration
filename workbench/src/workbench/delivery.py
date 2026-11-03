@@ -96,6 +96,52 @@ class GitHubClient:
             raise GitHubError("GitHub answered the new pull request with no object")
         return {"url": made.get("html_url"), "number": made.get("number"), "created": True}
 
+    def _repo(self, owner: str, repo: str) -> str:
+        return f"/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
+
+    async def pull_from(self, owner: str, repo: str, branch: str) -> dict[str, Any] | None:
+        """The newest pull request from ``branch``, open or closed, as GitHub
+        returns it, or None; raises GitHubError."""
+        found = await self._call("GET", self._repo(owner, repo) + "/pulls",
+                                 params={"head": f"{owner}:{branch}", "state": "all", "per_page": "1"})
+        return found[0] if isinstance(found, list) and found and isinstance(found[0], dict) else None
+
+    async def pull_by_number(self, owner: str, repo: str, number: int) -> dict[str, Any]:
+        """The pull request as GitHub returns it; raises GitHubError."""
+        body = await self._call("GET", self._repo(owner, repo) + f"/pulls/{int(number)}")
+        if not isinstance(body, dict):
+            raise GitHubError("GitHub answered the pull request with no object")
+        return body
+
+    async def ci_state(self, owner: str, repo: str, sha: str) -> str:
+        """``success`` when every check run and commit status of ``sha`` has
+        passed and there is at least one, ``failure`` when one failed, else
+        ``pending``; raises GitHubError."""
+        base = self._repo(owner, repo) + f"/commits/{quote(sha, safe='')}"
+        runs = await self._call("GET", base + "/check-runs", params={"per_page": "100"})
+        status = await self._call("GET", base + "/status")
+        checks = (runs.get("check_runs") if isinstance(runs, dict) else None) or []
+        statuses = (status.get("statuses") if isinstance(status, dict) else None) or []
+        if any(c.get("status") == "completed" and c.get("conclusion") not in ("success", "neutral", "skipped")
+               for c in checks) or any(s.get("state") in ("failure", "error") for s in statuses):
+            return "failure"
+        if not checks and not statuses:
+            return "pending"
+        if all(c.get("status") == "completed" for c in checks) and all(s.get("state") == "success" for s in statuses):
+            return "success"
+        return "pending"
+
+    async def comments(self, owner: str, repo: str, number: int) -> list[dict[str, Any]]:
+        """The conversation comments of a pull request; raises GitHubError."""
+        body = await self._call("GET", self._repo(owner, repo) + f"/issues/{int(number)}/comments",
+                                params={"per_page": "100"})
+        return [c for c in body if isinstance(c, dict)] if isinstance(body, list) else []
+
+    async def comment(self, owner: str, repo: str, number: int, text: str) -> dict[str, Any]:
+        """Comment on a pull request's conversation; raises GitHubError."""
+        body = await self._call("POST", self._repo(owner, repo) + f"/issues/{int(number)}/comments", json={"body": text})
+        return body if isinstance(body, dict) else {}
+
     async def _call(self, method: str, path: str, **kw: Any) -> Any:
         try:
             r = await self._client.request(method, path, **kw)

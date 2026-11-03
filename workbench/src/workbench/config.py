@@ -82,6 +82,9 @@ class Config:
     github_api_url: str = "https://api.github.com"
     # How often a pull request that is not merged yet is looked up again.
     delivery_recheck_seconds: float = 300.0
+    # The previews of the review: ui stories' pull requests, as the kit
+    # that deploys them records them (workbench.preview); none when unset.
+    previews_file: Path | None = None
     # OpenID Connect. With no issuer, the workbench runs in local mode.
     oidc_issuer: str = ""
     oidc_client_id: str = ""
@@ -158,6 +161,7 @@ class Config:
             github_token=env.get("WORKBENCH_GITHUB_TOKEN", "").strip(),
             github_api_url=(env.get("WORKBENCH_GITHUB_API_URL", "").strip() or "https://api.github.com").rstrip("/"),
             delivery_recheck_seconds=_recheck(env.get("WORKBENCH_DELIVERY_RECHECK_SECONDS", "")),
+            previews_file=Path(env["WORKBENCH_PREVIEWS"].strip()).expanduser() if env.get("WORKBENCH_PREVIEWS", "").strip() else None,
             oidc_issuer=issuer,
             oidc_client_id=env.get("WORKBENCH_OIDC_CLIENT_ID", "").strip(),
             oidc_client_secret=secret,

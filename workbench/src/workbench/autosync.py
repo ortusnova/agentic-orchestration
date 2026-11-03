@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any, Awaitable, Callable
 
-from .plan_overlay import sync_graph
+from .plan_overlay import built_unapproved, sync_graph
 from .sortie import SortieError
 
 log = logging.getLogger(__name__)
@@ -115,12 +115,14 @@ class SyncLoop:
 
 
 def approved_digest(graph: dict[str, Any] | None, fields: dict[str, dict[str, Any]]) -> str | None:
-    """A digest of what a sync would write: the approved nodes as a sync sends
-    them, and the relations among them. A draft edit leaves it unchanged."""
+    """A digest of what a sync would write: the approved nodes, and the ui
+    stories built before their approval, as a sync sends them, and the
+    relations among them. A draft edit leaves it unchanged."""
     if graph is None:
         return None
     g = sync_graph(graph, fields)
-    keep = {n["plan_key"] for n in g["nodes"] if n.get("approval") == "approved"}
+    keep = {n["plan_key"] for n in g["nodes"]
+            if n.get("approval") == "approved" or built_unapproved(n, n.get("review"))}
     nodes = []
     for n in g["nodes"]:
         if n["plan_key"] not in keep:
