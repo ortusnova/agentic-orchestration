@@ -271,6 +271,29 @@ func TestResultCarriesTheStatusAndCriteria(t *testing.T) {
 	}
 }
 
+// Between turns Sortie asks for the agent's .sortie files with an S
+// frame, and the worker answers at once with an F frame holding each file
+// the agent has written, while the agent still runs, so Sortie ends the
+// run after the turn that recorded a status or a criteria verdict.
+func TestSortieFilesBetweenTurns(t *testing.T) {
+	const verdict = `{"criteria": [{"criterion": "the chain ends DONE", "verdict": "met", "evidence": "steps.tsv ends DONE"}]}`
+	h := newHarness(t, defaults())
+	h.offerJob("ONS-7", 1, map[string]string{"AGENT_MODE": "wait-input", "AGENT_CRITERIA": verdict}, func(j *fakecp.Job) {
+		j.KeepInputOpen, j.AskFilesAfter = true, "waiting for input"
+	})
+	res := resultOf(t, h)
+	files, ok := h.fake.SortieFiles("ONS-7", 1)
+	if !ok {
+		t.Fatalf("no files answer: %s", h.describe())
+	}
+	if len(files) != 2 || string(files["criteria.json"]) != verdict || string(files["pr.json"]) != testPR {
+		t.Errorf("files = %q, want the verdict and the pull request suggestion, and no status", files)
+	}
+	if string(res.Criteria) != verdict {
+		t.Errorf("result criteria %q, want the verdict as well", res.Criteria)
+	}
+}
+
 // The X frame carries the agent's exit status, a failure too, and the
 // result is still returned before the failure report.
 func TestExitStatusOnTheStream(t *testing.T) {

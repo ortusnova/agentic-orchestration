@@ -142,6 +142,12 @@ func fakeAgent() int {
 			return 7
 		}
 	}
+	// wait-input: the turn is done, and the agent waits for its input
+	// to close, as an agent between turns waits for the next prompt.
+	if os.Getenv("AGENT_MODE") == "wait-input" {
+		fmt.Println("waiting for input")
+		_, _ = io.Copy(io.Discard, in)
+	}
 	fmt.Println("done")
 	if code, err := strconv.Atoi(os.Getenv("AGENT_EXIT")); err == nil {
 		return code

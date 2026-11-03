@@ -139,3 +139,50 @@ func TestAcceptNeedsTheUpgrade(t *testing.T) {
 		t.Errorf("answer = %d, Upgrade %q; want 426 naming %s", resp.StatusCode, resp.Header.Get("Upgrade"), stdio.Protocol)
 	}
 }
+
+// The worker asks for sortie-stdio/2, which carries the .sortie files
+// between turns, and takes sortie-stdio/1 from a control plane that
+// knows only that.
+func TestDialPrefersProtocol2AndFallsBackTo1(t *testing.T) {
+	var asked []string
+	only1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Header.Get("Upgrade"))
+		if r.Header.Get("Upgrade") != stdio.Protocol {
+			w.Header().Set("Upgrade", stdio.Protocol)
+			http.Error(w, "the stdio flow needs Upgrade: "+stdio.Protocol, http.StatusUpgradeRequired)
+			return
+		}
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + stdio.Protocol + "\r\n\r\n")
+		_ = rw.Flush()
+		_ = conn.Close()
+	}))
+	defer only1.Close()
+	c, err := stdio.Dial(context.Background(), only1.URL+"/jobs/ONS-7/attempts/1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if c.Files() || len(asked) != 2 || asked[0] != stdio.ProtocolFiles || asked[1] != stdio.Protocol {
+		t.Errorf("files %v, asked %q; want %s, then %s", c.Files(), asked, stdio.ProtocolFiles, stdio.Protocol)
+	}
+
+	both := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := stdio.Accept(w, r)
+		if err == nil {
+			_ = c.Close()
+		}
+	}))
+	defer both.Close()
+	c, err = stdio.Dial(context.Background(), both.URL+"/jobs/ONS-7/attempts/1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if !c.Files() {
+		t.Error("a control plane that speaks sortie-stdio/2 gave a stream without the files")
+	}
+}
