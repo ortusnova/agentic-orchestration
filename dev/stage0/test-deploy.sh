@@ -116,6 +116,12 @@ check "busy: a kit and workbench merge rebuilds the workbench at once" main~1 "u
 if cmp -s "$STAGE0_LIVE_KIT/workbench/app" "$tmp/up/workbench/app"; then echo "ok: busy: the workbench files are the merged ones"; else echo "FAIL: busy: workbench/ not moved"; failed=1; fi
 rm -f "$tmp/calls"; run; check "busy: and only once per commit" main~1 ""
 finish 1; run; check "busy: the kit change applies once the run finishes" main "stage0.sh;"
+# Two workbench merges during one drain: the later full apply still moves the kit.
+setup; rm -f "$STAGE0_HOME/deploy-workbench.at"; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
+g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
+# The run ends, then another merge changes the same workbench file before the next pass.
+finish 1; merge workbench/app; rm -f "$tmp/calls"; run; check "busy: then the full apply moves the whole kit" main "stage0.sh;"
+if [[ -z $(g -C "$STAGE0_LIVE_KIT" status --porcelain) ]]; then echo "ok: busy: and leaves the live kit clean"; else echo "FAIL: busy: live kit not clean: $(g -C "$STAGE0_LIVE_KIT" status --porcelain)"; failed=1; fi
 # stage0.sh runs with the PATH the last stage0.sh recorded, not the unit's.
 setup; mkdir -p "$tmp/tools"; echo "$tmp/tools:$PATH" > "$STAGE0_HOME/path"
 # shellcheck disable=SC2016 # the stub expands $PATH, not this script
