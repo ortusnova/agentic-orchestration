@@ -149,18 +149,16 @@ describe("home: the timeline", () => {
 });
 
 describe("home: the focal points", () => {
-  it("shows the verdict in words, with its reasons, the slots and the runway", async () => {
+  it("shows the verdict in words, with its reasons, the slots and the runway, and no tiles", async () => {
     await render(doc(homeDoc()));
     expect($("[data-verdict]")!.dataset.verdict).toBe("idle_now");
     expect(text("[data-verdict] .big")).toBe("Idle now");
     expect(text("[data-verdict] .reasons")).toBe("3 agent slots are free and 0 stories are ready");
-    expect(text("[data-tile='slots'] .num")).toBe("0 / 3 busy");
-    expect($$("[data-tile='slots'] .slots i")).toHaveLength(3);
-    expect(text("[data-tile='runway'] .num")).toBe("0 stories ready");
-    expect(text("[data-tile='runway']")).toContain("needs 3 more to fill the slots");
-    expect($$("[data-tile='slots'] .hist i")).toHaveLength(2);
-    expect(text("[data-tile='needs'] .num")).toBe("5");
-    expect(text("[data-tile='needs']")).toContain("nearest: worker-daemon, on the critical path");
+    expect(text("[data-summary]")).toBe("0 of 3 slots busy");
+    // The four tiles are gone, and the count of what needs a person is the section's.
+    expect($$("[data-tile]")).toHaveLength(0);
+    expect($("[aria-label='Execution health']")).toBeNull();
+    expect(text("#needs-h")).toContain("Needs a person");
   });
 
   it("shows the critical path to the next milestone's gate, each story with what it needs", async () => {
@@ -245,8 +243,7 @@ describe("home: honest when sources fail", () => {
     await render(doc(h, { sortie: { reachable: false, error: "refused", capabilities: [], generated_at: null } }));
     expect(text("[data-notice='sortie']")).toContain("story progress is the last known");
     expect(text("[data-verdict] .big")).toBe("Stuck");
-    expect(text("[data-tile='slots'] .num")).toBe("—");
-    expect(text("[data-tile='runway'] .num")).toBe("—");
+    expect(text("[data-verdict] .reasons")).toBe("Sortie is unreachable: refused");
     expect(text("[data-milestone='m1'] .cnt")).toContain("stories last known");
     expect(text("[data-milestone='m1'] .cnt")).toContain("101 / 151 agent tasks");
   });
@@ -311,7 +308,7 @@ describe("home: live", () => {
     a.setDoc(doc(h));
     await settle();
     expect(text("[data-verdict] .big")).toBe("Healthy");
-    expect(text("[data-tile='slots'] .num")).toBe("3 / 3 busy");
+    expect(text("[data-summary]")).toBe("3 of 3 slots busy");
   });
 
   it("says every slack in words beside its bar, shorter for less slack", () => {

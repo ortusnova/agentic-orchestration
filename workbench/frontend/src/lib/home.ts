@@ -1,4 +1,5 @@
 /** The project home the backend computes with the graph (planning/project-home). */
+import type { Lanes } from "./fleet";
 import type { GraphNode, Question } from "./types";
 
 export interface Count { done: number; total: number }
@@ -116,6 +117,8 @@ export interface HomeDoc {
   questions?: HomeQuestion[];
   needs_person: { total: number; questions?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
+  /** The workers as slot lanes, and what they say of the whole. Absent from an older backend. */
+  lanes?: Lanes | null;
 }
 
 export const REASON_TEXT: Record<Reason, string> = {
