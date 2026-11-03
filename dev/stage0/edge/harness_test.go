@@ -195,11 +195,11 @@ func (h *harness) do(worker string, req *http.Request) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// connect sends a CONNECT for host through taichi's port with token as
+// connect sends a CONNECT for host through worker's port with token as
 // the proxy credential, and returns the status of the answer.
-func (h *harness) connect(host, token string) int {
+func (h *harness) connect(worker, host, token string) int {
 	h.t.Helper()
-	u, _ := url.Parse(h.ports["taichi"].URL)
+	u, _ := url.Parse(h.ports[worker].URL)
 	c, err := net.Dial("tcp", u.Host)
 	if err != nil {
 		h.t.Fatal(err)

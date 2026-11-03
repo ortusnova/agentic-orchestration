@@ -186,7 +186,7 @@ func TestFlowRequestsTheEdgeRefuses(t *testing.T) {
 	if h.services["stdio"].hits() != 0 {
 		t.Error("the stdio service was reached with Sortie down")
 	}
-	if status := h.connect("api.anthropic.com:443", h.sortie.mint("egress")); status != http.StatusServiceUnavailable {
+	if status := h.connect("taichi", "api.anthropic.com:443", h.sortie.mint("egress")); status != http.StatusServiceUnavailable {
 		t.Errorf("egress with Sortie down: %d, want 503", status)
 	}
 }
@@ -230,7 +230,7 @@ func TestModelRequest(t *testing.T) {
 func TestAHostNotAllowed(t *testing.T) {
 	nono := startFakeNono(t, newTestCA(t), http.NotFoundHandler())
 	h := newHarness(t, nono.addr, nono.pass)
-	status := h.connect("pastebin.com:443", h.sortie.mint("egress"))
+	status := h.connect("taichi", "pastebin.com:443", h.sortie.mint("egress"))
 	if status != http.StatusForbidden {
 		t.Fatalf("CONNECT to a host not allowed answered %d, want nono's 403", status)
 	}
@@ -246,7 +246,7 @@ func TestEgressNeedsTheEgressToken(t *testing.T) {
 	ended := h.sortie.mint("egress")
 	h.sortie.end(ended)
 	for name, tok := range map[string]string{"an mcp token": h.sortie.mint("mcp"), "an ended token": ended, "no token": ""} {
-		status := h.connect("api.anthropic.com:443", tok)
+		status := h.connect("taichi", "api.anthropic.com:443", tok)
 		if status != http.StatusUnauthorized {
 			t.Errorf("%s: %d, want 401", name, status)
 		}
