@@ -10,7 +10,7 @@ import { graph, synced } from "./fixtures";
 import WorkersPage from "../src/components/WorkersPage.svelte";
 import WorkersHarness from "./WorkersHarness.svelte";
 import WorkerPane from "../src/components/WorkerPane.svelte";
-import { boxGeometry, duration, type Fleet, type Job, type Lanes, type Pull, type Stuck, type Wait, type Worker } from "../src/lib/fleet";
+import { boxGeometry, duration, releaseText, type Fleet, type Job, type Lanes, type Pull, type Stuck, type Wait, type Worker } from "../src/lib/fleet";
 import type { HomeDoc, HomeQuestion } from "../src/lib/home";
 import { session as identity } from "../src/lib/identity.svelte";
 import { parseRoute, watchHref } from "../src/lib/router";
@@ -304,6 +304,13 @@ describe("A story's panel: its run state and the action that unblocks it", () =>
     expect(text("[data-run-state] [data-release]")).toBe("Released by the live proof running here passes.");
     expect(text("[data-run-pull]")).toContain("#152 waits on a live proof");
     expect($<HTMLAnchorElement>("[data-run-state] [data-act='pull']")!.href).toBe("https://github.com/ortusnova/homelab/pull/152");
+  });
+
+  it("says what releases a wait in one sentence, whether Sortie or the workbench wrote it", () => {
+    expect(releaseText("Released when a running session ends.")).toBe("Released when a running session ends.");
+    expect(releaseText("Released when the blocker reaches the done state", "when")).toBe("Released when the blocker reaches the done state.");
+    expect(releaseText("your answer")).toBe("Released by your answer.");
+    expect(releaseText("worker taichi frees a slot", "when")).toBe("Released when worker taichi frees a slot.");
   });
 
   it("a story its session budget holds offers more sessions there", async () => {

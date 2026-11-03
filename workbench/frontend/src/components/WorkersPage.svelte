@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { ACTION_TEXT, capacityText, duration, missingText, WAIT_TEXT, WORKER_VERDICT_TEXT, type Fleet } from "../lib/fleet";
+  import { ACTION_TEXT, capacityText, duration, missingText, releaseText, WAIT_TEXT, WORKER_VERDICT_TEXT, type Fleet } from "../lib/fleet";
   import { graphHref, watchHref } from "../lib/router";
   import TopBar, { type Tab } from "./TopBar.svelte";
 
@@ -83,7 +83,7 @@
             <li data-wait={x.kind} data-wait-for={x.identifier ?? x.label}>
               <b>{#if x.key}<a href={storyHref(x.key)}>{x.label}</a>{:else}{x.label}{/if}</b>
               {#if x.pull}<span class="mono">{#if x.pull.url}<a href={x.pull.url} target="_blank" rel="noopener">#{x.pull.number}</a>{:else}#{x.pull.number}{/if}</span>{/if}
-              waits for {WAIT_TEXT[x.kind] ?? x.kind}: {x.reason}{#if x.release}<small>released when {x.release}</small>{/if}
+              waits for {WAIT_TEXT[x.kind] ?? x.kind}: {x.reason}{#if x.release}<small>{releaseText(x.release, "when")}</small>{/if}
             </li>
           {/each}
         </ul>

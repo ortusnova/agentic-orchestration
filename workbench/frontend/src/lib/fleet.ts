@@ -233,6 +233,14 @@ export function laneText(lane: Lane): string {
   return `slot ${lane.slot}: free`;
 }
 
+/** What releases a wait, as one sentence: Sortie serves a whole sentence
+ * ("Released when a running session ends."), the workbench a phrase ("your answer"). */
+export function releaseText(release: string, lead: "by" | "when" = "by"): string {
+  const r = release.trim();
+  if (/^released\b/i.test(r)) return /[.!?]$/.test(r) ? r : `${r}.`;
+  return `Released ${lead} ${r.replace(/[.]$/, "")}.`;
+}
+
 /** The button a stuck box or a reason offers, in words. */
 export const ACTION_TEXT: Record<Exclude<Action, null>, string> = {
   answer: "Answer", sessions: "More sessions", open: "Open", pull: "Open pull request", story: "Open story",

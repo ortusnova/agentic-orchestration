@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ACTION_TEXT, duration, type RunState } from "../lib/fleet";
+  import { ACTION_TEXT, duration, releaseText, type RunState } from "../lib/fleet";
 
   /** A story's run state in its panel: where it runs or why it waits, what
    * releases it, its pull request and what that waits on, and the action
@@ -43,7 +43,7 @@
 <div class="run {run.status}" data-run-state={run.status} data-run-for={story}>
   <b>{heading}</b>
   <p data-why>{run.why}{#if run.status === "running" && run.started_at} · for {duration(Date.now() / 1000 - run.started_at)}{/if}</p>
-  {#if run.release}<p class="rel" data-release>Released by {run.release}.</p>{/if}
+  {#if run.release}<p class="rel" data-release>{releaseText(run.release)}</p>{/if}
   {#if run.pull}
     <p class="pr" data-run-pull={run.pull.number}>
       Pull request {#if run.pull.url}<a href={run.pull.url} target="_blank" rel="noopener">#{run.pull.number}</a>{:else}#{run.pull.number}{/if}
