@@ -17,6 +17,7 @@ from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
+from .timeline import RunHistory, RunWorkers
 from .workers import worker_fields
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,8 @@ _UNSET = object()
 class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
                  peers: list[ProjectSortie] | None = None, previews=None,
-                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None):
+                 alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
+                 history: RunHistory | None = None):
         self.plan = plan
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
@@ -39,6 +41,9 @@ class Hub:
         self.alerts = alerts
         # What each worker does and what waits on it (agent-platform/run-supervision).
         self.fleet: dict[str, Any] = {"workers": [], "pulls": [], "sorties": [], "where": {}}
+        # Each Sortie's recent runs, the worker each ran on, and its rules'
+        # medians: the lanes' past and their forecast (timeline.py).
+        self.run_history = history or RunHistory(RunWorkers())
         # The Sortie that last ran, parked or held each issue, by identifier.
         self.last_where: dict[str, str] = {}
         # Called, from any thread, when the approved part of the graph changes.
@@ -144,6 +149,7 @@ class Hub:
             self.questions = await self._questions(self._peer_pairs())
             return self._peer_fields()
         self.agent_state, self.state_error = state, None
+        await self._runs(self.sortie, state)
         self.questions = await self._questions([(self.sortie, state)] + self._peer_pairs())
         fields = worker_fields(state) if any(n.get("runtime") for n in graph.get("nodes") or []) else {}
         return {**self._peer_fields(), **fields}
@@ -164,6 +170,17 @@ class Hub:
             except SortieError as exc:
                 log.warning("sortie %s state unavailable: %s", peer.name, exc)
                 self.peer_states[peer.name] = (None, exc.message)
+            else:
+                await self._runs(peer, self.peer_states[peer.name][0])
+
+    async def _runs(self, sortie: ProjectSortie, state: dict[str, Any] | None) -> None:
+        """Note the worker of each run the state lists, and read the Sortie's
+        recent runs when due: the lanes' past and forecast."""
+        self.run_history.workers.observe(sortie.name, state)
+        try:
+            await self.run_history.refresh(sortie.name, sortie)
+        except Exception:  # the run history must never stop the poll
+            log.exception("could not read %s's run history", sortie.name)
 
     def _peer_pairs(self) -> list[tuple[ProjectSortie, dict[str, Any]]]:
         return [(p, s) for p in self.peers if (s := self.peer_states.get(p.name, (None, None))[0]) is not None]
@@ -272,7 +289,8 @@ class Hub:
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         self.leases = leases_of(self.states())
         try:
-            self.fleet = build_fleet(self.states(), doc["nodes"], statements, leases=self.leases)
+            self.fleet = build_fleet(self.states(), doc["nodes"], statements, leases=self.leases,
+                                     history=self.run_history)
             self.last_where.update(self.fleet["where"])
             held = {h["issue_identifier"]: {**h, "sortie": name} for name, s, _ in self.states() if s
                     for h in s.get("held") or [] if isinstance(h, dict) and h.get("issue_identifier")}

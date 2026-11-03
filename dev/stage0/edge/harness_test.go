@@ -197,7 +197,7 @@ func (h *harness) do(worker string, req *http.Request) (int, string) {
 
 // connect sends a CONNECT for host through worker's port with token as
 // the proxy credential, and returns the status of the answer.
-func (h *harness) connect(worker, host, token string) int { //nolint:unparam // every test dials taichi now; the harness serves each worker's port
+func (h *harness) connect(worker, host, token string) int {
 	h.t.Helper()
 	u, _ := url.Parse(h.ports[worker].URL)
 	c, err := net.Dial("tcp", u.Host)

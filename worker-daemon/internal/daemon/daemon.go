@@ -200,6 +200,9 @@ func (d *Daemon) Free(s hostinfo.Snapshot) protocol.Free {
 	}
 }
 
+// runSlots is how many jobs run at once on the host of snapshot s.
+func (d *Daemon) runSlots(s hostinfo.Snapshot) int { return d.cfg.Slots(s.CPUs, s.MemTotalGiB) }
+
 // Declaration is the check-in body for snapshot s.
 func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	running, _ := d.reserved()
@@ -209,7 +212,7 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	}
 	_, r := d.reserved()
 	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
-		RunSlots: d.cfg.RunSlots, Running: running, Free: d.Free(s),
+		RunSlots: d.runSlots(s), Running: running, Free: d.Free(s),
 		Used:      protocol.Free{CPU: r.CPU, MemGiB: r.MemGiB, DiskGiB: r.DiskGiB},
 		Unmanaged: d.unmanagedSeen()}
 }
@@ -242,12 +245,12 @@ func (d *Daemon) pollWhileFree(ctx context.Context) {
 		if !d.backendOK.Load() {
 			return
 		}
-		if n, _ := d.reserved(); n >= d.cfg.RunSlots {
-			return
-		}
 		s, err := d.probe.Snapshot(d.cfg.DiskPath)
 		if err != nil {
 			d.log.Warn("cannot read the host", slog.String("error", err.Error()))
+			return
+		}
+		if n, _ := d.reserved(); n >= d.runSlots(s) {
 			return
 		}
 		free, sj := d.Free(s), d.cfg.SmallestJob
@@ -285,12 +288,12 @@ func (d *Daemon) refusal(o *protocol.Offer) string {
 	if _, err := d.cfg.Smolvm.Pack(o.Run.Image); err != nil {
 		return err.Error()
 	}
-	if n, _ := d.reserved(); n >= d.cfg.RunSlots {
-		return fmt.Sprintf("all %d run slots are in use", d.cfg.RunSlots)
-	}
 	s, err := d.probe.Snapshot(d.cfg.DiskPath)
 	if err != nil {
 		return "cannot read the host: " + err.Error()
+	}
+	if n, _ := d.reserved(); n >= d.runSlots(s) {
+		return fmt.Sprintf("all %d run slots are in use", d.runSlots(s))
 	}
 	f, r := d.Free(s), o.Job.Requires
 	switch {

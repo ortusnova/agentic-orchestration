@@ -35,7 +35,7 @@ calls() { [[ -f $tmp/calls ]] && tr '\n' ';' < "$tmp/calls"; true; }
 . "$KIT/worker-config.sh"
 # shellcheck source=homelab-inputs.sh
 . "$KIT/homelab-inputs.sh"
-STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine STAGE0_MAX_AGENTS=2
+STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
 echo cert > "$tmp/ca.crt"
 conf=$STAGE0_HOME/worker.json
 
@@ -52,6 +52,41 @@ grep -q '"url": "http://127.0.0.1:7700"' "$conf" && ok "the worker dials the edg
 for host in p1 taichi; do
   if grep -v '"worker_id"' "$conf" | grep -q "\"$host\""; then fail "the configuration names the host $host beyond worker_id"; fi
 done
+
+# The run slots follow the host unless STAGE0_WORKER_SLOTS says otherwise:
+# a fixed 2 left taichi, 32 CPUs and 91 GiB, with 18 CPUs and 42 GiB free
+# while a job waited on its slots (2026-11-03).
+if grep -q '"run_slots"' "$conf"; then fail "run_slots is written without STAGE0_WORKER_SLOTS: $(cat "$conf")"; else ok "without STAGE0_WORKER_SLOTS the daemon sizes the slots from the host"; fi
+STAGE0_WORKER_SLOTS=4 render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
+grep -q '"run_slots": 4,' "$conf" && "$daemon" check -config "$conf" > "$tmp/out" 2>&1 \
+  && ok "STAGE0_WORKER_SLOTS sets run_slots" || fail "override: $(cat "$conf" "$tmp/out")"
+for bad in 0 -1 two; do
+  if STAGE0_WORKER_SLOTS=$bad render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt" 2> /dev/null; then
+    fail "STAGE0_WORKER_SLOTS=$bad was taken"
+  else ok "STAGE0_WORKER_SLOTS=$bad is refused"; fi
+done
+STAGE0_WORKER_SLOTS='' render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
+grep -q '"run_slots"' "$conf" && fail "an empty STAGE0_WORKER_SLOTS wrote run_slots" || ok "an empty STAGE0_WORKER_SLOTS follows the host"
+
+# The retired STAGE0_MAX_AGENTS: the default the kit wrote goes, with its
+# comment; a person's own value becomes STAGE0_WORKER_SLOTS.
+env_case() { # NAME COMMENT VALUE: migrate a stage0.env holding COMMENT and STAGE0_MAX_AGENTS=VALUE
+  printf 'STAGE0_PROFILE=worker\n%s\nSTAGE0_MAX_AGENTS=%s\n# The next one.\nSTAGE0_HOMELAB_SRC=/h\n' "$2" "$3" > "$tmp/$1.env"
+  (STAGE0_MAX_AGENTS=$3; migrate_max_agents "$tmp/$1.env"; echo "${STAGE0_WORKER_SLOTS-unset} ${STAGE0_MAX_AGENTS-unset}") > "$tmp/$1.out"
+}
+env_case p1 '# Agents at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).' 3
+env_case taichi '# Agents at once; each homelab machine takes 8 vCPU and 20 GiB (design D11).' 2
+env_case newer "# p1's own worker's jobs at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md)." 3
+for c in p1 taichi newer; do
+  [[ $(cat "$tmp/$c.env") == $'STAGE0_PROFILE=worker\n# The next one.\nSTAGE0_HOMELAB_SRC=/h' && $(cat "$tmp/$c.out") == "unset unset" ]] \
+    && ok "$c's old default STAGE0_MAX_AGENTS goes, with its comment" || fail "$c: $(cat "$tmp/$c.env" "$tmp/$c.out")"
+done
+env_case own '# Mine.' 6
+[[ $(cat "$tmp/own.env") == $'STAGE0_PROFILE=worker\n# Mine.\nSTAGE0_WORKER_SLOTS=6\n# The next one.\nSTAGE0_HOMELAB_SRC=/h' && $(cat "$tmp/own.out") == "6 unset" ]] \
+  && ok "a person's STAGE0_MAX_AGENTS becomes STAGE0_WORKER_SLOTS" || fail "own: $(cat "$tmp/own.env" "$tmp/own.out")"
+sum=$(sha256sum < "$tmp/own.env"); migrate_max_agents "$tmp/own.env"
+[[ $(sha256sum < "$tmp/own.env") == "$sum" ]] && ok "migrating again changes nothing" || fail "a second migration changed $(cat "$tmp/own.env")"
+render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 
 # A worker with homelab's inputs: the homelab pack and what a homelab job needs.
 STAGE0_EGRESS_CA=$tmp/ca.crt
@@ -96,20 +131,22 @@ echo control > "$STAGE0_HOME/sortie-token"
 echo pass > "$STAGE0_HOME/nono-pass"
 [[ $("$edge" -check -config "$STAGE0_HOME/edge.json" | tr '\n' ';') == "p1 127.0.0.1:7700;taichi 127.0.0.1:7701;" ]] \
   && ok "the edge names p1's worker by the port the workflow's flows use" || fail "edge: $(cat "$STAGE0_HOME/edge.json")"
+grep -q "\"jobs_file\": \"$STAGE0_HOME/live-proofs/active\"" "$STAGE0_HOME/edge.json" && grep -q '"egress": "127.0.0.1:7691"' "$STAGE0_HOME/edge.json" \
+  && ok "the edge sends a running live proof's egress to the live-proof nono" || fail "edge live_proof: $(cat "$STAGE0_HOME/edge.json")"
 [[ $(edge_port mac) == 7702 ]] && ok "a new worker host gets the next free port" || fail "next port: $(edge_port mac)"
 
 # Sortie's agent cap is a ceiling above the workers' run slots, not p1's own
 # slots: the matcher holds each worker to its slots (a fixed 3 for p1 and
 # taichi together left taichi idle while 10 stories waited, 2026-11-03).
-cap=$(STAGE0_MAX_AGENTS=3 sortie_agent_cap)
-(( cap >= 3 + 2 )) && ok "the default cap ($cap) is above p1's 3 slots and taichi's 2" || fail "default cap: $cap"
+cap=$(sortie_agent_cap)
+(( cap >= 5 + 7 )) && ok "the default cap ($cap) is above p1's 5 slots and taichi's 7" || fail "default cap: $cap"
 [[ $(STAGE0_SORTIE_MAX_AGENTS='' sortie_agent_cap) == "$cap" ]] && ok "an empty STAGE0_SORTIE_MAX_AGENTS is the default" || fail "empty override"
 [[ $(STAGE0_SORTIE_MAX_AGENTS=4 sortie_agent_cap) == 4 ]] && ok "STAGE0_SORTIE_MAX_AGENTS overrides the cap" || fail "override: $(STAGE0_SORTIE_MAX_AGENTS=4 sortie_agent_cap)"
 for bad in 0 -1 three; do
   if STAGE0_SORTIE_MAX_AGENTS=$bad sortie_agent_cap > /dev/null 2>&1; then fail "cap $bad was taken"; else ok "cap $bad is refused"; fi
 done
 # shellcheck disable=SC2016 # the placeholders, literally
-grep -q 'max_concurrent_agents: ${STAGE0_SORTIE_MAX_AGENTS}' "$KIT/WORKFLOW.md" && ! grep -q '${STAGE0_MAX_AGENTS}' "$KIT/WORKFLOW.md" \
+grep -q 'max_concurrent_agents: ${STAGE0_SORTIE_MAX_AGENTS}' "$KIT/WORKFLOW.md" && ! grep -q '${STAGE0_WORKER_SLOTS}' "$KIT/WORKFLOW.md" \
   && ok "the workflow's cap is sortie_agent_cap's, not a worker's slots" || fail "WORKFLOW.md's max_concurrent_agents"
 
 # A worker host's Sortie is stopped and its unit removed, once.

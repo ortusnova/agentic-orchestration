@@ -9,6 +9,10 @@ STAGE0_EDGE_WORKER_PORT=${STAGE0_EDGE_WORKER_PORT:-7700}
 # The first edge port on p1; each worker host gets the next free one.
 STAGE0_EDGE_FIRST_PORT=${STAGE0_EDGE_FIRST_PORT:-7701}
 STAGE0_NONO_PORT=${STAGE0_NONO_PORT:-7690}
+# The live-proof nono (run-nono.sh live-proof), and the file of the live-proof
+# jobs that run, which stage0-live-proofs writes and the edge reads.
+STAGE0_NONO_LIVE_PROOF_PORT=${STAGE0_NONO_LIVE_PROOF_PORT:-7691}
+STAGE0_LIVE_PROOFS=$STAGE0_HOME/live-proofs
 # The service of each path flow; Sortie until a flow gets a service of its own.
 STAGE0_EDGE_STDIO_URL=${STAGE0_EDGE_STDIO_URL:-http://127.0.0.1:$STAGE0_SORTIE_PORT/api/v1/flows/stdio}
 STAGE0_EDGE_MCP_URL=${STAGE0_EDGE_MCP_URL:-http://127.0.0.1:$STAGE0_SORTIE_PORT/mcp}
@@ -59,7 +63,11 @@ render_edge_config() {
     "usage": "$STAGE0_EDGE_USAGE_URL"
   },
   "egress": "127.0.0.1:$STAGE0_NONO_PORT",
-  "egress_pass_file": "$STAGE0_HOME/nono-pass"
+  "egress_pass_file": "$STAGE0_HOME/nono-pass",
+  "live_proof": {
+    "egress": "127.0.0.1:$STAGE0_NONO_LIVE_PROOF_PORT",
+    "jobs_file": "$STAGE0_LIVE_PROOFS/active"
+  }
 }
 EOF
   )
