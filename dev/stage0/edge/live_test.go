@@ -99,7 +99,7 @@ func TestLiveNono(t *testing.T) {
 	})
 
 	t.Run("A host not allowed", func(t *testing.T) {
-		status := h.connect("taichi", "pastebin.com:443", h.sortie.mint("egress"))
+		status := h.connect("pastebin.com:443", h.sortie.mint("egress"))
 		if status == http.StatusOK {
 			t.Fatal("nono let the job reach pastebin.com")
 		}

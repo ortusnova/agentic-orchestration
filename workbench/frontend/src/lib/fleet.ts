@@ -71,7 +71,44 @@ export interface Stuck extends StoryRef {
   lease?: Lease | null;
 }
 
-export interface Lane { slot: number; job: Job | null; stuck: Stuck | null; extra: boolean }
+/** A run a slot ran before now, from its Sortie's run history. Times in Unix seconds. */
+export interface PastRun extends StoryRef {
+  started_at: number;
+  ended_at: number;
+  status: string | null;
+  rule: string | null;
+  phase: Phase;
+  phase_text: string;
+  error: string | null;
+}
+
+/** A job that waits for a slot, placed where the forecast expects it to run:
+ * in the slot that frees first on a worker that can take it. */
+export interface Projected extends StoryRef {
+  starts_at: number;
+  ends_at: number;
+  /** Its expected length, in seconds, and what that comes from. */
+  estimate: number;
+  basis: string;
+  rule: string | null;
+  since: number | null;
+}
+
+/** A job that waits for a slot that no slot can take: no worker can run it, or its workers drain. */
+export interface Waiting extends StoryRef {
+  sortie: string;
+  kind: string;
+  reason: string;
+  release: string | null;
+  since: number | null;
+}
+
+export interface Lane {
+  slot: number; job: Job | null; stuck: Stuck | null; extra: boolean;
+  /** Absent from an older backend. */
+  past?: PastRun[];
+  next?: Projected[];
+}
 
 export interface Wait extends StoryRef {
   sortie: string;
@@ -120,6 +157,10 @@ export interface Worker {
   known?: { use: boolean; unmanaged: boolean; steps: boolean };
   /** Whether stories wait for a slot while its lanes are free because its Sortie's cap is reached; absent from an older backend. */
   capped?: boolean;
+  /** Jobs the forecast places beyond its horizon, and past runs more than its slots held at once; absent from an older backend. */
+  later?: number;
+  past_hidden?: number;
+  gone?: boolean;
 }
 
 export interface Pull extends StoryRef {
@@ -158,6 +199,9 @@ export interface Lanes {
   missing?: Missing[];
   generated_at?: number;
   workers: Worker[];
+  /** The jobs no slot can take, and the runs that ended on no worker the workbench knows; absent from an older backend. */
+  waiting?: Waiting[];
+  unattributed?: number;
 }
 
 /** A story's run state, in its panel. */
@@ -239,14 +283,30 @@ export function missingText(sortie: string, missing: Missing[]): string {
   return `${sortie}'s Sortie does not serve ${missing.length === 1 ? "this field" : "these fields"} yet, so the view cannot show ${what}.`;
 }
 
-/** The time window of the lanes: the last hours and the next one, around now. */
-export function laneWindow(workers: Worker[], now: number): { start: number; end: number } {
-  const HOUR = 3600;
-  const starts = workers.flatMap((w) => w.jobs.map((j) => j.started_at));
-  const ends = workers.flatMap((w) => w.jobs.map((j) => j.ends_at));
-  const start = Math.min(now - 2 * HOUR, ...starts.map((s) => Math.max(s, now - 8 * HOUR)));
-  const end = Math.max(now + HOUR, ...ends.map((e) => Math.min(e, now + 8 * HOUR)));
-  return { start, end };
+/** The lanes' axis, in seconds around now: 30 minutes back to an hour ahead, now at one third. */
+export const LANE_FROM = -1800;
+export const LANE_TO = 3600;
+
+/** The time window of the lanes around now. */
+export function laneWindow(now: number): { start: number; end: number } {
+  return { start: now + LANE_FROM, end: now + LANE_TO };
+}
+
+/** Where a time sits on the lanes' axis, in percent, clipped to it. */
+export function lanePct(t: number, now: number): number {
+  const m = Math.max(LANE_FROM, Math.min(LANE_TO, t - now));
+  return ((m - LANE_FROM) / (LANE_TO - LANE_FROM)) * 100;
+}
+
+/** The axis's ticks: every quarter hour, now among them. */
+export const LANE_TICKS: { at: number; label: string }[] = [
+  { at: -1800, label: "−30 min" }, { at: -900, label: "−15" }, { at: 0, label: "NOW" }, { at: 900, label: "+15" },
+  { at: 1800, label: "+30" }, { at: 2700, label: "+45" }, { at: 3600, label: "+1 h" },
+];
+
+/** Minutes, rounded, at least one: "~8 min". */
+export function minutes(seconds: number): string {
+  return `${Math.max(1, Math.round(seconds / 60))} min`;
 }
 
 /** A box's left edge and width in the window, as percentages, clipped to it. */
@@ -255,17 +315,6 @@ export function boxGeometry(from: number, to: number, win: { start: number; end:
   const a = Math.min(Math.max(from, win.start), win.end);
   const b = Math.min(Math.max(to, a), win.end);
   return { left: ((a - win.start) / span) * 100, width: Math.max(1.5, ((b - a) / span) * 100) };
-}
-
-/** The ticks of the window, one per hour. */
-export function hourTicks(win: { start: number; end: number }, now: number): { at: number; left: number; label: string }[] {
-  const out = [];
-  const span = Math.max(1, win.end - win.start);
-  for (let h = Math.ceil((win.start - now) / 3600); now + h * 3600 <= win.end; h++) {
-    const at = now + h * 3600;
-    out.push({ at, left: ((at - win.start) / span) * 100, label: h === 0 ? "now" : `${h > 0 ? "+" : ""}${h} h` });
-  }
-  return out;
 }
 
 /** What a lane says in words, for a screen reader and a tooltip. */

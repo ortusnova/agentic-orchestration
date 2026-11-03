@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,7 +27,8 @@ type Config struct {
 
 	ControlPlane ControlPlane `json:"control_plane"`
 
-	// RunSlots is how many jobs run at once.
+	// RunSlots is how many jobs run at once. Zero, the default, follows
+	// the host's capacity: see [Config.Slots].
 	RunSlots int `json:"run_slots"`
 
 	// Reserve is what the daemon never declares free: memory, and CPUs.
@@ -167,7 +169,6 @@ type Mount struct {
 
 // Defaults.
 const (
-	DefaultRunSlots = 1
 	DefaultLogLevel = "info"
 )
 
@@ -218,9 +219,6 @@ func (c *Config) normalize() error {
 	}
 	if (t.CertFile != "" || t.CAFile != "") && u.Scheme != "https" {
 		return fieldError("control_plane.tls", "a certificate needs an https control_plane.url")
-	}
-	if c.RunSlots == 0 {
-		c.RunSlots = DefaultRunSlots
 	}
 	if c.RunSlots < 0 {
 		return fieldError("run_slots", "must be positive")
@@ -326,6 +324,30 @@ func (img Image) validate(field string) error {
 		}
 	}
 	return nil
+}
+
+// Slots is how many jobs run at once on a host of cpus CPUs and
+// memTotalGiB memory: run_slots when it is set, else as many smallest
+// jobs as fit in the host's CPUs and memory above the reserve, and at
+// least one. The host's own figures, not a number written down once,
+// so a host that gains or loses CPUs or memory gets its slots at the
+// next check-in; what is free now still bounds each job.
+func (c Config) Slots(cpus, memTotalGiB float64) int {
+	if c.RunSlots > 0 {
+		return c.RunSlots
+	}
+	n, sized := math.MaxInt, false
+	for _, d := range [][2]float64{{cpus - c.Reserve.CPU, c.SmallestJob.CPU}, {memTotalGiB - c.ReserveMemGiB(), c.SmallestJob.MemGiB}} {
+		if d[1] <= 0 {
+			continue
+		}
+		sized = true
+		n = min(n, int(math.Floor(d[0]/d[1]+1e-9)))
+	}
+	if !sized || n < 1 {
+		return 1
+	}
+	return n
 }
 
 // ReserveMemGiB is the memory reserve.

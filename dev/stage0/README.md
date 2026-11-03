@@ -143,13 +143,19 @@ by the same Sortie, like any other.
 - **Session start.** `agent.read_timeout_ms` is 60 s: a fresh VM's agent
   can take over 15 s to answer at session start, past Sortie's 5 s
   default. Turns are bounded by `stall_timeout_ms` and `turn_timeout_ms`.
-- **Parallel agents.** `STAGE0_MAX_AGENTS` in a host's `stage0.env` is its
-  worker's run slots (p1 3, a worker host 2 by default). Sortie places a job
-  only on a worker with a free slot and the resources the job requires, so
-  its own cap, `agent.max_concurrent_agents`, is only a ceiling above every
-  worker's slots together: 16 unless `STAGE0_SORTIE_MAX_AGENTS` in p1's
-  `stage0.env` says otherwise (`worker-config.sh`, `sortie_agent_cap`). All
-  agents share one Claude subscription and its rate limits.
+- **Parallel agents.** A worker's run slots follow its host: as many of
+  the smallest job (4 CPUs, 8 GiB) as its CPUs and memory hold above the
+  reserve (2 CPUs, 8 GiB), at least one, which the worker daemon reads at
+  each check-in (p1 5, taichi 7 in 2026-11). `STAGE0_WORKER_SLOTS` in a
+  host's `stage0.env` sets them instead. A slot only lets a job be offered:
+  Sortie places a job only on a worker with a free slot and the CPU, memory
+  and disk the job requires free now, and free memory is the host's
+  `MemAvailable`, so what a model server or a sandbox on the host takes is
+  not offered. Sortie's own cap, `agent.max_concurrent_agents`, is only a
+  ceiling above every worker's slots together: 16 unless
+  `STAGE0_SORTIE_MAX_AGENTS` in p1's `stage0.env` says otherwise
+  (`worker-config.sh`, `sortie_agent_cap`). All agents share one Claude
+  subscription and its rate limits.
 - **Repositories.** A story runs in the repository its plan node names
   (plan sync keeps the Huly label `sortie-repository:<name>`), else in
   `sortie`, the default. The workflow lists three, all dispatched by p1's

@@ -106,8 +106,9 @@ STAGE0_PROFILE=worker
 STAGE0_KIT_ROOT=$ROOT
 # The worker's name; p1's edge names it by its tunnel anyway (worker-host.sh).
 STAGE0_WORKER_NAME=$(hostname -s)
-# Jobs at once (the daemon's run_slots).
-STAGE0_MAX_AGENTS=2
+# Jobs at once (the daemon's run_slots): unset, as many as this host's CPUs
+# and memory hold (worker-config.sh).
+STAGE0_WORKER_SLOTS=
 # The operator's homelab checkout, for homelab jobs: the kit adds its own
 # detached worktree of origin/master under \$STAGE0_HOME/homelab and builds the
 # homelab pack from it. Without it, this worker takes no homelab job.
@@ -141,8 +142,9 @@ STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
 STAGE0_HOMELAB_REPO_BASE=master
 STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
 STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
-# p1's own worker's jobs at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
-STAGE0_MAX_AGENTS=3
+# p1's own worker's jobs at once: unset, as many as p1's CPUs and memory
+# hold (worker-config.sh); each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
+STAGE0_WORKER_SLOTS=
 # Sortie's cap on agents at once, on every worker together: unset, a ceiling
 # above the workers' slots, which the matcher holds (worker-config.sh).
 STAGE0_SORTIE_MAX_AGENTS=
@@ -171,7 +173,6 @@ fi
 # A stage0.env written before a setting existed gets its default here.
 STAGE0_PROFILE=${STAGE0_PROFILE:-control}
 case $STAGE0_PROFILE in control|worker) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or worker" ;; esac
-STAGE0_MAX_AGENTS=${STAGE0_MAX_AGENTS:-3}
 STAGE0_PACK=${STAGE0_PACK:-$STAGE0_HOME/stage0.smolmachine}
 STAGE0_EDGE_WORKER_PORT=${STAGE0_EDGE_WORKER_PORT:-7700}
 STAGE0_WORKER_NAME=${STAGE0_WORKER_NAME:-$(hostname -s)}
@@ -187,7 +188,7 @@ if [[ $STAGE0_KIT_ROOT != "$ROOT" ]]; then
   sed -i "s|^STAGE0_KIT_ROOT=.*|STAGE0_KIT_ROOT=$ROOT|" "$ENV_FILE"
   STAGE0_KIT_ROOT=$ROOT
 fi
-export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
+export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
   STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT STAGE0_EDGE_WORKER_PORT
@@ -209,6 +210,7 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+migrate_max_agents "$ENV_FILE"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 
 # The pack is built again when its inputs change (the kit's pack/,
