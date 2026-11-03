@@ -89,7 +89,8 @@ by the same Sortie, like any other.
   request merges only once that job proves it ([below](#live-proofs)).
   `test-review-gate.sh` checks all of this against
   Sortie's own loader, exit and merge code: it needs the `sortie/`
-  submodule, or `SORTIE_SRC` naming a Sortie checkout.
+  submodule, or `SORTIE_SRC` naming a Sortie checkout. Without either it
+  skips, and with `STAGE0_TEST_NO_SKIP=1`, as in CI, it fails instead.
 
 - **CI failures and merge conflicts.** The workflow turns on Sortie's
   `ci_failure` and `merge_conflicts` reactions (spec store
