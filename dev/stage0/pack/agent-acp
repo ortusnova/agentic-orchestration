@@ -26,5 +26,11 @@ case "$agent" in
       "$id" "${CLAUDE_CODE_OAUTH_TOKEN:?}" > "$cred"
     opencode auth import --standalone "$cred" >&2 || { rm -f "$cred"; exit 1; }
     rm -f "$cred"
+    # opencode reads the login from its store, and every shell command it
+    # runs inherits its environment. A command that prints it (a test's
+    # traceback with os.environ, say) puts the placeholder into the model's
+    # input, and smolvm refuses every later request of that session ("a
+    # request may carry one placeholder").
+    unset CLAUDE_CODE_OAUTH_TOKEN
     exec opencode acp "$@" ;;
 esac
