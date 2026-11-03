@@ -9,7 +9,7 @@ Everything is rootless: systemd user units and Huly's podman containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
-dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack
+dev/stage0/stage0.sh --rebuild-pack   # also rebuild the smolvm pack (it is rebuilt by itself when its inputs change)
 dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/plan-bench (the timer does this by itself)
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
