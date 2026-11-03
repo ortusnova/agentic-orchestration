@@ -351,10 +351,15 @@ machine could not run it as its `evidence`. Every minute
   GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
   `github_api` credential that nono holds. The comment's first line is
   `<!-- live-proof-result -->`, followed by `Result: proven` or
-  `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
+  `Result: unproven`, `Commit: <sha>`, the criterion, with a proven result
+  the line `sortie:live-proof proven <sha>`, and the step table. Sortie's
+  supervisor merge reads that line: it refuses to merge a story whose
+  review left a criterion to a live proof until the line names the head
+  (`409 live_proof_unproven`).
   The pass reads only the kit's own account's comments written since the
   request, and the newest sets the status:
-  - proven at the head: `success`, and the supervisor merges once CI passes;
+  - proven at the head: `success`, and the supervisor merges once CI passes
+    (Sortie checks the `sortie:live-proof proven` line itself);
   - unproven: `failure`;
   - proven at an older commit: `pending` again, until the supervisor
     requests a new proof.

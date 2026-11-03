@@ -454,15 +454,17 @@ story's branch as it is in this workspace:
    first line is `<!-- live-proof-result -->`; then a line
    `Result: proven` or `Result: unproven`, a line `Commit: ` with the full
    sha of `git rev-parse HEAD` after your last commit, and a line
-   `Criterion: ` with the criterion; then the step table, one row per step
-   you ran, `| Step | Command | Result |`, and the issues you opened. Write
-   `proven` only when every step that runs the criterion passed at that
-   commit.
+   `Criterion: ` with the criterion; with `Result: proven`, a line
+   `sortie:live-proof proven ` followed by that same sha; then the step
+   table, one row per step you ran, `| Step | Command | Result |`, and the
+   issues you opened. Write `proven`, and that line, only when every step
+   that runs the criterion passed at that commit.
 
 Sortie pushes your commits after the run. The kit reads your comment and
-sets the pull request's `live-proof` status, which the merge requires:
-`proven` at the pull request's head lets the supervisor merge it once CI
-passes, and `unproven` keeps it open. This machine reaches GitHub's API only for that
+sets the pull request's `live-proof` status, which the merge requires, and
+Sortie's merge reads the `sortie:live-proof proven` line: `proven` at the
+pull request's head lets the supervisor merge it once CI passes, and
+`unproven` keeps it open. This machine reaches GitHub's API only for that
 comment and those issues: do not fetch, push, or comment anything else.
 {{- else }}
 
