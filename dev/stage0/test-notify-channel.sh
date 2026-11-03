@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Checks the operator's channel (notify-channel.sh, spec store
-# agent-platform/run-supervision): the entry each kind renders into the
-# workflow, the credential file only the operator writes, what
-# run-sortie.sh and run-workbench.sh hand on, and that with no channel, the
-# default, both start. The workbench and Sortie are stubs; test-review-gate.sh loads the same entries with Sortie's
+# Checks where Sortie's notifications go (notify-channel.sh, spec store
+# agent-platform/run-supervision): the workbench, by default, with this
+# host's token; then the operator's channel: the entry each kind renders into
+# the workflow, the credential file only the operator writes, what
+# run-sortie.sh and run-workbench.sh hand on, and that with no channel of the
+# operator's, the default, both start. The workbench and Sortie are stubs; test-review-gate.sh loads the same entries with Sortie's
 # own loader and delivers a question through them.
 # shellcheck disable=SC2015,SC2016 # each check is "test && ok || fail"; the stubs' $ expand when they run
 set -euo pipefail
@@ -62,9 +63,35 @@ section=$(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")
 if [[ $section == *"kind: tracker_comment"* && $section == *"$(notify_entry slack)"* ]]; then
   ok "$wf sends each question to the channel"
 else fail "$wf notifications: $section"; fi
+[[ $(grep -c 'kind:' <<< "$section") == 3 ]] && ok "$wf's operator channel is one more entry" || fail "$wf with slack: $section"
 render "$KIT/$wf" "$tmp/$wf" ""
-[[ $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf" | grep -c 'kind:') == 1 ]] && ok "$wf with no channel keeps the comments only" \
-  || fail "$wf with no channel: $(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")"
+section=$(sed -n '/^notifications:/,/^$/p' "$tmp/$wf")
+[[ $(grep -c 'kind:' <<< "$section") == 2 ]] && ok "$wf with no channel keeps the comments and the workbench" \
+  || fail "$wf with no channel: $section"
+# The workbench is the default destination, by Sortie's webhook backend, for
+# every event that needs a person.
+workbench=$(grep -A2 -- '- kind: webhook' <<< "$section")
+[[ $workbench == *'url: $SORTIE_WORKBENCH_NOTIFY_URL'* && $workbench == *"events: $WORKBENCH_EVENTS"* ]] \
+  && ok "$wf sends the workbench its notifications" || fail "$wf's workbench entry: $workbench"
+for e in session.stopped session.failed session.escalated budget.held escalation.ci_failure escalation.review_comments \
+  escalation.bot_review escalation.merge_conflicts escalation.auto_merge escalation.merge_completion; do
+  [[ $WORKBENCH_EVENTS == *"$e"[],]* ]] || fail "the workbench does not get $e: $WORKBENCH_EVENTS"
+done
+ok "the workbench gets session.stopped, session.failed, session.escalated, every escalation and budget.held"
+
+# The host's token: minted by stage0.sh, mode 0600, in the URL Sortie posts to.
+STAGE0_SORTIE_NAME=p1
+mkdir -p "$tmp/tokens-home/notify-tokens"
+workbench_notify_url "$tmp/tokens-home" 8793 2>/dev/null && fail "a missing token was accepted" || ok "Sortie refuses a missing token"
+printf 'host-token-0123\n' > "$tmp/tokens-home/notify-tokens/p1.token"
+chmod 644 "$tmp/tokens-home/notify-tokens/p1.token"
+workbench_notify_url "$tmp/tokens-home" 8793 2>/dev/null && fail "a token others can read was accepted" || ok "Sortie refuses a token others can read"
+chmod 600 "$tmp/tokens-home/notify-tokens/p1.token"
+url=$(workbench_notify_url "$tmp/tokens-home" 8793)
+[[ $url == http://127.0.0.1:8793/api/notifications/p1/host-token-0123 ]] && ok "Sortie posts to the workbench with the host's token" || fail "workbench url: $url"
+STAGE0_SORTIE_NAME='P1;x' notify_host 2>/dev/null && fail "a host name that is not a name was accepted" || ok "a host name is lower-case letters, digits and dashes"
+unset STAGE0_SORTIE_NAME
+grep -q 'secret "$STAGE0_HOME/notify-tokens/$notify_host.token"' "$KIT/stage0.sh" && ok "stage0.sh mints the host's token" || fail "stage0.sh mints no token"
 
 # run-sortie.sh and run-workbench.sh: a stub kit, Sortie and workbench that
 # print what they were handed. Both scripts put $STAGE0_HOME/bin first on PATH.
@@ -74,7 +101,7 @@ cp "$KIT"/{run-sortie.sh,run-workbench.sh,notify-channel.sh} "$tmp/kit/dev/stage
 printf '#!/bin/sh\necho token\n' > "$tmp/kit/dev/huly_project.py"
 printf '#!/bin/sh\necho claude\n' > "$tmp/kit/dev/stage0/anthropic-token.py"
 printf '#!/bin/sh\nenv | grep -E "^(SORTIE_NOTIFY_SECRET|WORKBENCH_)" | sort\n' > "$tmp/kit/workbench/.venv/bin/workbench"
-printf '#!/bin/sh\nenv | grep -E "^SORTIE_NOTIFY_SECRET=" | sort\n' > "$home/bin/sortie"
+printf '#!/bin/sh\nenv | grep -E "^SORTIE_(NOTIFY_SECRET|WORKBENCH_NOTIFY_URL)=" | sort\n' > "$home/bin/sortie"
 printf '#!/bin/sh\necho p1\n' > "$home/bin/hostname"
 chmod +x "$tmp/kit/dev/huly_project.py" "$tmp/kit/dev/stage0/anthropic-token.py" "$tmp/kit/workbench/.venv/bin/workbench" "$home/bin/"*
 for f in github-token sortie-token workbench-password-hash workbench-secret; do echo "$f-value" > "$home/$f"; done
@@ -86,20 +113,23 @@ STAGE0_NOTIFY_KIND=slack
 STAGE0_WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev
 EOF
 cp "$cred" "$home/notify-credential"
+mkdir -p "$home/notify-tokens"
+(umask 077; echo "p1-notify-token" > "$home/notify-tokens/p1.token")
+wb_url=SORTIE_WORKBENCH_NOTIFY_URL=http://127.0.0.1:8793/api/notifications/p1/p1-notify-token
 echo "taichi-token" > "$home/sorties/taichi.token"
 echo "SORTIE_URL=http://127.0.0.1:7681" > "$home/sorties/taichi.env"
 run() { STAGE0_HOME=$home PATH=$tmp/bin:$PATH HOME=$tmp "$@" 2>&1 || true; }
 # huly_project.py runs under python3; the stub kit's runs as a script.
 sed -i 's|python3 "$STAGE0_KIT_ROOT/dev/huly_project.py"|"$STAGE0_KIT_ROOT/dev/huly_project.py"|' "$tmp/kit/dev/stage0/run-sortie.sh"
 out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
-[[ $out == "SORTIE_NOTIFY_SECRET=https://hooks.slack.test/x" ]] && ok "Sortie gets the credential from the file" || fail "run-sortie.sh: $out"
+[[ $out == "SORTIE_NOTIFY_SECRET=https://hooks.slack.test/x"$'\n'"$wb_url" ]] && ok "Sortie gets the credential from the file, and the workbench's URL" || fail "run-sortie.sh: $out"
 chmod 644 "$home/notify-credential"
 out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
 [[ $out == *"must be mode 0600"* && $out != *SORTIE_NOTIFY_SECRET=* ]] && ok "Sortie refuses a credential others can read" || fail "run-sortie.sh with 0644: $out"
 chmod 600 "$home/notify-credential"
 out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
 for want in WORKBENCH_NOTIFY_KIND=slack "WORKBENCH_NOTIFY_CREDENTIAL_FILE=$home/notify-credential" \
-  WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev WORKBENCH_SORTIE_NAME=p1 \
+  WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev WORKBENCH_SORTIE_NAME=p1 "WORKBENCH_NOTIFY_TOKENS=$home/notify-tokens" \
   WORKBENCH_SORTIES=taichi=http://127.0.0.1:7681 "WORKBENCH_SORTIE_TOKEN_TAICHI_FILE=$home/sorties/taichi.token"; do
   grep -qxF "$want" <<< "$out" && ok "the workbench gets $want" || fail "run-workbench.sh lacks $want: $out"
 done
@@ -108,9 +138,14 @@ grep -q 'hooks.slack.test' <<< "$out" && fail "the credential is in the workbenc
 sed -i '/^STAGE0_NOTIFY_KIND=/d' "$home/stage0.env"
 mv "$home/notify-credential" "$home/notify-credential.off"
 out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
-[[ -z $out ]] && ok "with no channel Sortie starts, with no credential" || fail "run-sortie.sh with no channel: $out"
+[[ $out == "$wb_url" ]] && ok "with no channel Sortie starts, with no credential, and posts to the workbench" || fail "run-sortie.sh with no channel: $out"
+mv "$home/notify-tokens/p1.token" "$home/p1.token.off"
+out=$(run "$tmp/kit/dev/stage0/run-sortie.sh")
+[[ $out == *"Sortie has no token for the workbench's notifications"* && $out != *SORTIE_WORKBENCH_NOTIFY_URL=* ]] \
+  && ok "Sortie does not start without the host's token" || fail "run-sortie.sh with no token: $out"
+mv "$home/p1.token.off" "$home/notify-tokens/p1.token"
 out=$(run "$tmp/kit/dev/stage0/run-workbench.sh")
-[[ $out == *WORKBENCH_SORTIES=taichi=* && $out != *WORKBENCH_NOTIFY_* ]] && ok "with no channel the workbench starts, with no channel" \
+[[ $out == *WORKBENCH_SORTIES=taichi=* && $out != *WORKBENCH_NOTIFY_KIND* && $out != *WORKBENCH_NOTIFY_CREDENTIAL* ]] && ok "with no channel the workbench starts, with no channel" \
   || fail "run-workbench.sh with no channel: $out"
 echo STAGE0_NOTIFY_KIND=slack >> "$home/stage0.env"
 mv "$home/notify-credential.off" "$home/notify-credential"

@@ -288,7 +288,7 @@ export STAGE0_NOTIFY_ENTRY
 if [[ -n $STAGE0_NOTIFY_KIND ]]; then
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
 else
-  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+  say "No operator channel of your own: Sortie's notifications go to the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE to add one (README.md)"
 fi
 mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
@@ -345,6 +345,12 @@ from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
 secret "$STAGE0_HOME/sortie-token"
+# This host's token for the workbench's notifications (notify-channel.sh):
+# Sortie posts with it, the workbench takes it, no person writes it.
+mkdir -p "$STAGE0_HOME/notify-tokens"
+chmod 700 "$STAGE0_HOME/notify-tokens"
+notify_host=$(notify_host) || die "fix the host name in $ENV_FILE"
+secret "$STAGE0_HOME/notify-tokens/$notify_host.token"
 secret "$STAGE0_HOME/viewer-token"
 # The edge reaches nono with this; nono intercepts TLS for the credential
 # hosts with the egress CA, whose certificate each worker gets (worker-host.sh,

@@ -17,6 +17,9 @@
 #                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
+#   SORTIE_WORKBENCH_NOTIFY_URL  the workbench's notifications endpoint, with
+#                            this host's token from
+#                            $STAGE0_HOME/notify-tokens/<host>.token, mode 0600
 #   SORTIE_NOTIFY_SECRET     $STAGE0_HOME/notify-credential, mode 0600, when
 #                            stage0.env names the operator's channel
 # Git reaches GitHub over HTTPS with that same token, through a credential
@@ -41,11 +44,15 @@ else
 fi
 export STAGE0_SORTIE_TOKEN
 STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
+# shellcheck source=notify-channel.sh
+. "$(dirname "$0")/notify-channel.sh"
+# The workbench, the default destination of the workflow's notifications.
+export SORTIE_WORKBENCH_NOTIFY_URL
+SORTIE_WORKBENCH_NOTIFY_URL=$(workbench_notify_url "$STAGE0_HOME" "$STAGE0_WORKBENCH_PORT") \
+  || die "Sortie has no token for the workbench's notifications"
 # The operator's channel (notify-channel.sh): its webhook URL or bot token,
 # from the file only the operator writes, for the workflow's notifications.
 if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
-  # shellcheck source=notify-channel.sh
-  . "$(dirname "$0")/notify-channel.sh"
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
   export SORTIE_NOTIFY_SECRET
   SORTIE_NOTIFY_SECRET=$(cat "$STAGE0_HOME/notify-credential")

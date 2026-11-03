@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
-# The operator's channel (spec store agent-platform/run-supervision: a
-# person is alerted, wherever the question is held). The workflow sends each
-# question for a person to it through Sortie's notifications; the workbench
-# pushes the same questions there with a link to where each is answered, and
-# again every 4 hours while one stays open. The operator chooses it in
-# stage0.env:
+# Where Sortie's notifications go (spec store agent-platform/run-supervision:
+# a person is alerted, wherever the question is held).
+#
+# The default destination is the workbench, by Sortie's webhook backend: the
+# workflow's entry posts to the workbench's notifications endpoint, at a URL
+# that names this host and carries its token, which stage0.sh mints into
+# $STAGE0_HOME/notify-tokens/<host>.token (0600) and run-sortie.sh reads into
+# SORTIE_WORKBENCH_NOTIFY_URL. It needs no operator credential.
+#
+# The operator may add a channel of their own, one more entry. The workflow
+# sends each question for a person to it through Sortie's notifications; the
+# workbench pushes the same questions there with a link to where each is
+# answered, and again every 4 hours while one stays open. The operator
+# chooses it in stage0.env:
 #
 #   STAGE0_NOTIFY_KIND     slack, discord, telegram or webhook (Sortie's
 #                          notification kinds); empty: no channel
@@ -13,13 +21,40 @@
 # and writes its credential, the webhook URL or the Telegram bot's token, into
 # $STAGE0_HOME/notify-credential, mode 0600. Nothing in the kit writes that
 # file. Sourced by stage0.sh and run-sortie.sh; run-workbench.sh hands the
-# file's path to the workbench. Optional: with no kind, nothing needs it.
+# file's path to the workbench. Optional: with no kind, nothing needs it, and
+# the workbench is the only destination.
 
 # What Sortie sends there: a run that stopped for a person (an agent's park,
 # a review that cannot settle a criterion), a question its broker escalates,
 # and the holds, merge failures, and pull requests still failing or
 # conflicting after their fix runs, that need a person.
 NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts]'
+
+# What Sortie sends the workbench (WORKFLOW.md lists the same): a run that
+# stopped for a person or failed, a question its broker escalates, every
+# escalation, and a budget hold.
+# shellcheck disable=SC2034 # the kit's tests check WORKFLOW.md against it
+WORKBENCH_EVENTS='[session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]'
+
+# notify_host: this host's name, as the workbench names its Sortie
+# (run-workbench.sh) and its notifications token.
+notify_host() {
+  local host=${STAGE0_SORTIE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}
+  [[ $host =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "the host name '$host' is not lower-case letters, digits and dashes: set STAGE0_SORTIE_NAME in stage0.env" >&2; return 1; }
+  printf '%s\n' "$host"
+}
+
+# workbench_notify_url HOME PORT: the URL this host's Sortie posts its
+# notifications to, with the host's token in it; fails, saying why, when the
+# token is missing or others can read it.
+workbench_notify_url() {
+  local home=$1 port=$2 host token
+  host=$(notify_host) || return 1
+  token=$home/notify-tokens/$host.token
+  [[ -s $token ]] || { echo "$token is missing: run dev/stage0/stage0.sh, which mints it" >&2; return 1; }
+  [[ $(stat -c %a "$token") == 600 ]] || { echo "$token must be mode 0600: chmod 600 $token" >&2; return 1; }
+  printf 'http://127.0.0.1:%s/api/notifications/%s/%s\n' "$port" "$host" "$(cat "$token")"
+}
 
 # notify_entry KIND [CHAT_ID]: the workflow's notifications entry for the
 # channel, indented as a list item; nothing for no kind. The credential stays
@@ -51,6 +86,7 @@ if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   case ${1:-} in
     entry) shift; notify_entry "$@" ;;
     check) shift; notify_credential "$@" ;;
-    *) echo "usage: $0 entry KIND [CHAT_ID] | check FILE" >&2; exit 2 ;;
+    workbench-url) shift; workbench_notify_url "$@" ;;
+    *) echo "usage: $0 entry KIND [CHAT_ID] | check FILE | workbench-url HOME PORT" >&2; exit 2 ;;
   esac
 fi

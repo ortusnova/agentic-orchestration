@@ -88,6 +88,9 @@ func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The workbench's notifications endpoint, as run-sortie.sh puts it in
+	// Sortie's environment (stage0_notify_test.go).
+	t.Setenv("SORTIE_WORKBENCH_NOTIFY_URL", stage0Workbench.url())
 	mgr, err := workflow.NewManager(path, discardLogger())
 	if err != nil {
 		t.Fatalf("Sortie refused %s: %v", name, err)
