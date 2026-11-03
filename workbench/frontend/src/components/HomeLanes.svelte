@@ -1,7 +1,7 @@
 <script lang="ts">
   import {
-    ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, WORKER_VERDICT_TEXT,
-    type Lanes, type Reason, type Stuck, type Worker,
+    ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, missingText, WORKER_VERDICT_TEXT,
+    type Lanes, type Missing, type Reason, type Stuck, type Worker,
   } from "../lib/fleet";
   import { VERDICT_TEXT, type Health, type HomeQuestion } from "../lib/home";
   import { graphHref, watchHref, workersHref } from "../lib/router";
@@ -29,6 +29,11 @@
   const verdict = $derived(lanes?.verdict ?? health?.verdict ?? null);
   const reasons: Reason[] = $derived(lanes?.reasons ?? health?.reasons ?? []);
   const workers: Worker[] = $derived(lanes?.workers ?? []);
+  const missingBySortie = $derived.by(() => {
+    const by = new Map<string, Missing[]>();
+    for (const m of lanes?.missing ?? []) by.set(m.sortie ?? "", [...(by.get(m.sortie ?? "") ?? []), m]);
+    return [...by.entries()];
+  });
   const now = $derived(lanes?.generated_at ?? Date.now() / 1000);
   const win = $derived(laneWindow(workers, now));
   const ticks = $derived(hourTicks(win, now));
@@ -124,6 +129,9 @@
     </ul>
   </div>
   {#if note}<p class="ok-note" role="status">{note}</p>{/if}
+  {#each missingBySortie as [name, ms] (name)}
+    <p class="missing" role="status" data-missing={name}>{missingText(name, ms)}</p>
+  {/each}
 
   {#if workers.length}
     <div class="axis" aria-hidden="true">
@@ -200,6 +208,7 @@
   .reasons li.ask span { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .reasons a { color: inherit; }
   .ok-note { margin-top: 8px; font-size: 12.5px; color: var(--done); }
+  .missing { margin-top: 8px; font-size: 12px; color: var(--amber-ink); }
 
   .axis, .lane { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: center; }
   .axis { margin-top: 14px; height: 16px; }

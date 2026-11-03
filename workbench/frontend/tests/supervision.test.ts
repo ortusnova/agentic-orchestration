@@ -340,6 +340,44 @@ describe("Scenario: A machine Sortie did not start", () => {
   });
 });
 
+describe("A Sortie that does not serve a field yet", () => {
+  const MISSING = [{ field: "host", text: "its host's capacity and use, and the machines it did not start" },
+    { field: "running[].step", text: "the step each job reports" }];
+
+  function olderP1(): Fleet {
+    const f = fleet();
+    f.sorties[0].missing = MISSING;
+    const p1 = f.workers[0];
+    p1.capacity = null;
+    p1.used = null;
+    p1.known = { use: false, unmanaged: false, steps: false };
+    p1.jobs = [job("ONS-70", "agentic/ready", { sortie: "p1", worker: "p1", phase: "build", phase_text: "build", step: null, step_at: null })];
+    return f;
+  }
+
+  it("says plainly on the Workers view what it cannot show, instead of an empty row", async () => {
+    app = mount(WorkersPage, { target: document.body, props: { fleet: olderP1(), slug: "homelab" } });
+    await settle();
+    expect(text("[data-missing='p1']")).toBe("p1's Sortie does not serve these fields yet, so the view cannot show its host's capacity and use, "
+      + "and the machines it did not start (host); the step each job reports (running[].step).");
+    expect($("[data-missing='taichi']")).toBeNull();
+    expect(text("[data-worker-row='p1'] [data-capacity]")).toContain("CPU, memory and disk: p1's Sortie does not report them");
+    expect(text("[data-worker-row='p1'] [data-job='ONS-70'] [data-step]")).toBe("not reported by its Sortie");
+    expect(text("[data-worker-row='p1'] [data-unmanaged-unknown]")).toBe("p1's Sortie does not report the machines on p1 it did not start, so they cannot be shown.");
+    expect(text("[data-worker-row='taichi']")).not.toContain("does not report");
+  });
+
+  it("says it on the home's lanes too", async () => {
+    const f = olderP1();
+    const doc = homeDoc(f);
+    doc.lanes = { ...doc.lanes!, missing: MISSING.map((m) => ({ ...m, sortie: "p1" })) };
+    app = mount(HomeHarness, { target: document.body, props: { initial: graph([synced("homelab"), synced("homelab/question")], [], { home: doc, fleet: f }) } });
+    await settle();
+    expect(text(".lanes-home [data-missing='p1']")).toContain("p1's Sortie does not serve these fields yet");
+    expect(text("[data-worker='p1'] .wh")).toContain("p1's Sortie does not report them");
+  });
+});
+
 describe("the lanes' geometry and words", () => {
   it("places a box from its start to its end in the window, clipped to it", () => {
     expect(boxGeometry(50, 75, { start: 0, end: 100 })).toEqual({ left: 50, width: 25 });

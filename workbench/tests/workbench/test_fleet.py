@@ -183,3 +183,23 @@ def test_a_remote_sortie_with_no_worker_checked_in_still_shows_its_runs():
     state = p1_state(running=[{"issue_identifier": "ONS-34", "started_at": iso(NOW - 10)}], workers={"workers": [], "queue": [], "leases": []})
     p1 = worker(build_fleet([("p1", state, None)], NODES, now=NOW), "p1")
     assert p1["jobs"][0]["identifier"] == "ONS-34"
+
+
+def test_the_fields_a_sortie_does_not_serve_are_named_not_shown_empty():
+    full = taichi_state(waits=[])
+    fleet = build_fleet([("taichi", full, None)], NODES, now=NOW)
+    assert fleet["sorties"][0]["missing"] == []
+    assert worker(fleet, "taichi")["known"] == {"use": True, "unmanaged": True, "steps": True}
+
+    older = {"running": [{"issue_identifier": "ONS-34", "started_at": iso(NOW - 10)}], "config": {"agent": {"max_concurrent_agents": 2}}}
+    fleet = build_fleet([("p1", older, None)], NODES, now=NOW)
+    assert [m["field"] for m in fleet["sorties"][0]["missing"]] == ["host", "running[].step", "waits", "pulls"]
+    assert all(m["text"] for m in fleet["sorties"][0]["missing"])
+    assert worker(fleet, "p1")["known"] == {"use": False, "unmanaged": False, "steps": False}
+    summary = lanes_summary(fleet, None)
+    assert [(m["sortie"], m["field"]) for m in summary["missing"]][0] == ("p1", "host")
+
+    remote = p1_state(waits=[], pulls=[], workers={"workers": [{"id": "mac", "declaration": {"run_slots": 1, "free": {"cpu": 2}}}]})
+    fleet = build_fleet([("p1", remote, None)], NODES, now=NOW)
+    assert [m["field"] for m in fleet["sorties"][0]["missing"]] == ["workers[].declaration.used", "workers[].declaration.unmanaged"]
+    assert worker(fleet, "mac")["known"] == {"use": False, "unmanaged": False, "steps": True}

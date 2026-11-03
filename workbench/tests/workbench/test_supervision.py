@@ -233,6 +233,23 @@ def test_an_unreachable_peer_is_said_and_the_rest_still_shows(store):
         assert lanes["verdict"] == "stuck" and "taichi's Sortie is unreachable" in lanes["reasons"][0]["text"]
 
 
+def test_a_field_a_sortie_lacks_is_named_on_the_workers_and_the_home(store):
+    app, p1, taichi = fleet_app(store)
+    taichi.extra_state.update(waits=[], pulls=[])
+    p1.run("T-3", "s3")
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        doc = client.get(f"{P}/workers").json()
+        missing = {s["name"]: [m["field"] for m in s["missing"]] for s in doc["sorties"]}
+        # p1's fake serves none of the new fields; taichi's serves them all.
+        assert missing == {"p1": ["host", "running[].step", "waits", "pulls"], "taichi": []}
+        p1_row = next(w for w in doc["workers"] if w["name"] == "p1")
+        assert p1_row["known"] == {"use": False, "unmanaged": False, "steps": False}
+        lanes = client.get(f"{P}/home").json()["lanes"]
+        assert {m["sortie"] for m in lanes["missing"]} == {"p1"}
+
+
 def test_other_sorties_are_configured_by_name(tmp_path):
     token = tmp_path / "taichi-token"
     token.write_text("secret\n")

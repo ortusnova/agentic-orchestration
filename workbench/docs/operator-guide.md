@@ -250,7 +250,7 @@ Every stuck or waiting lane, and every story it names, has an action:
 - **Open**, on a job, opens the graph at the story with its agent's session in the chat pane: live while it runs, where an approver can send it a message, and its last transcript after, from the Sortie that ran it (`GET /api/v1/runs/<dispatch_id>/events`). The link names the session in the URL (`watch=<identifier>`).
 - A story's panel shows its **run state**: where it runs or why it waits, what releases it, its pull request and what that waits on, and the same action.
 
-What the workbench reads of each Sortie's `GET /api/v1/state`, and where a Sortie lacks a member the view goes without that part:
+What the workbench reads of each Sortie's `GET /api/v1/state`. Where a Sortie lacks a member, the view goes without that part and says so instead of showing it empty: the Workers view and the home's lanes name the Sortie, the missing field and what cannot be shown without it (`sorties[].missing` and `lanes.missing`, each `{"field", "text"}`), and a worker's row says "does not report" for its use, its unmanaged machines or its jobs' steps (`workers[].known`). The fields it names are `host`, `workers[].declaration.used`, `workers[].declaration.unmanaged`, `running[].step`, `waits` and `pulls`.
 
 | Member | What the view shows |
 | --- | --- |

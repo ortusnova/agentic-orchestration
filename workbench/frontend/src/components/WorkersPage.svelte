@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { ACTION_TEXT, capacityText, duration, WAIT_TEXT, WORKER_VERDICT_TEXT, type Fleet } from "../lib/fleet";
+  import { ACTION_TEXT, capacityText, duration, missingText, WAIT_TEXT, WORKER_VERDICT_TEXT, type Fleet } from "../lib/fleet";
   import { graphHref, watchHref } from "../lib/router";
   import TopBar, { type Tab } from "./TopBar.svelte";
 
@@ -30,6 +30,9 @@
   {#each fleet?.sorties.filter((s) => !s.reachable) ?? [] as s (s.name)}
     <p class="band warn" role="status" data-unreachable={s.name}>{s.name}'s Sortie is unreachable{s.error ? `: ${s.error}` : ""}. Its workers are not shown.</p>
   {/each}
+  {#each fleet?.sorties.filter((s) => s.reachable && s.missing?.length) ?? [] as s (s.name)}
+    <p class="band warn" role="status" data-missing={s.name}>{missingText(s.name, s.missing ?? [])}</p>
+  {/each}
   {#if !fleet?.workers.length}
     <div class="empty"><b>No worker reports yet</b>The workers appear once a Sortie answers with its state.</div>
   {/if}
@@ -53,7 +56,7 @@
                 <td class="mono">{j.slot ?? ""}</td>
                 <td>{#if j.key}<a href={storyHref(j.key)}>{j.label}</a>{:else}{j.label}{/if}<small>{j.identifier}</small></td>
                 <td>{j.phase_text}{#if j.hold}<small class="warn">{j.hold.reason}</small>{/if}</td>
-                <td class="mono" data-step>{j.step ?? "—"}{#if j.step_at}<small>{ago(j.step_at)}</small>{/if}</td>
+                <td class="mono" data-step>{j.step ?? (w.known?.steps === false ? "not reported by its Sortie" : "—")}{#if j.step_at}<small>{ago(j.step_at)}</small>{/if}</td>
                 <td class="n">{duration(j.elapsed)}</td>
                 <td>{#if j.key && j.identifier}<a class="btn" data-act="open" href={watchHref(slug, j.key, j.identifier)}>{ACTION_TEXT.open}</a>{/if}</td>
               </tr>
@@ -88,13 +91,17 @@
         <p class="cap">Nothing waits on {w.name}.</p>
       {/if}
 
-      {#if w.unmanaged.length}
-        <h3>Machines Sortie did not start</h3>
+      <h3>Machines Sortie did not start</h3>
+      {#if w.known?.unmanaged === false}
+        <p class="cap warn" data-unmanaged-unknown>{w.sortie}'s Sortie does not report the machines on {w.name} it did not start, so they cannot be shown.</p>
+      {:else if w.unmanaged.length}
         <ul class="waits">
           {#each w.unmanaged as m (m.name)}
             <li data-unmanaged={m.name}><b class="mono">{m.name}</b> {m.state ? `${m.state}, ` : ""}for {m.age_text}</li>
           {/each}
         </ul>
+      {:else}
+        <p class="cap">None: every machine on {w.name} is Sortie's.</p>
       {/if}
     </section>
   {/each}

@@ -96,6 +96,8 @@ export interface Worker {
   next: Wait[];
   unmanaged: Unmanaged[];
   draining: { reason: string | null; since: number | null } | null;
+  /** Whether its Sortie serves its use, its unmanaged machines and its jobs' steps; absent from an older backend. */
+  known?: { use: boolean; unmanaged: boolean; steps: boolean };
 }
 
 export interface Pull extends StoryRef {
@@ -111,9 +113,12 @@ export interface Pull extends StoryRef {
   stuck: boolean;
 }
 
+/** A field of Sortie's state the view reads that this Sortie does not serve, and what it cannot show without it. */
+export interface Missing { field: string; text: string; sortie?: string }
+
 export interface Fleet {
   generated_at?: number;
-  sorties: { name: string; reachable: boolean; error: string | null }[];
+  sorties: { name: string; reachable: boolean; error: string | null; missing?: Missing[] }[];
   workers: Worker[];
   pulls: Pull[];
   error?: string;
@@ -126,6 +131,7 @@ export interface Lanes {
   busy: number;
   slots: number | null;
   runway: number | null;
+  missing?: Missing[];
   generated_at?: number;
   workers: Worker[];
 }
@@ -167,14 +173,25 @@ export function duration(seconds: number | null | undefined): string {
 const gib = (n: number | undefined) => (n == null ? "?" : Number.isInteger(n) ? `${n}` : n.toFixed(1));
 
 /** A worker's capacity and use in words, each resource apart. */
-export function capacityText(w: Pick<Worker, "slots" | "busy" | "capacity" | "used">): string[] {
+export function capacityText(w: Pick<Worker, "slots" | "busy" | "capacity" | "used" | "known" | "sortie">): string[] {
   const out = [`${w.busy} / ${w.slots} slots`];
-  if (w.capacity) {
+  if (w.known && !w.known.use && !w.capacity) {
+    out.push(`CPU, memory and disk: ${w.sortie}'s Sortie does not report them`);
+  } else if (w.capacity && w.known && !w.known.use) {
+    out.push(`${gib(w.capacity.cpu)} CPU`, `${gib(w.capacity.mem_gib)} GiB memory`, `${gib(w.capacity.disk_gib)} GiB disk`,
+      `use: ${w.sortie}'s Sortie does not report it`);
+  } else if (w.capacity) {
     const u = w.used ?? {};
     out.push(`${gib(u.cpu)} / ${gib(w.capacity.cpu)} CPU`, `${gib(u.mem_gib)} / ${gib(w.capacity.mem_gib)} GiB memory`,
       `${gib(u.disk_gib)} / ${gib(w.capacity.disk_gib)} GiB disk`);
   }
   return out;
+}
+
+/** What a Sortie does not serve, in one sentence: what the view cannot show, and the field it needs. */
+export function missingText(sortie: string, missing: Missing[]): string {
+  const what = missing.map((m) => `${m.text} (${m.field})`).join("; ");
+  return `${sortie}'s Sortie does not serve ${missing.length === 1 ? "this field" : "these fields"} yet, so the view cannot show ${what}.`;
 }
 
 /** The time window of the lanes: the last hours and the next one, around now. */

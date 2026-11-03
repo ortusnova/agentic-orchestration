@@ -164,6 +164,44 @@ class _Worker:
         self.waits: list[dict[str, Any]] = []
         self.reasons: list[dict[str, Any]] = []
         self.draining: dict[str, Any] | None = None
+        # Whether its Sortie serves its use, its unmanaged machines and its jobs' steps.
+        self.known = {"use": used is not None, "unmanaged": unmanaged is not None, "steps": True}
+
+
+# The Sortie state fields the view reads that an older Sortie may not
+# serve, and what the view cannot show without each.
+MISSING_TEXT = {
+    "host": "its host's capacity and use, and the machines it did not start",
+    "workers[].declaration.used": "each worker's use of its capacity",
+    "workers[].declaration.unmanaged": "the machines on each worker that no Sortie started",
+    "running[].step": "the step each job reports",
+    "waits": "what waits on a worker beyond its slot holds and queue",
+    "pulls": "what each open pull request waits on, beyond those of running or parked stories",
+}
+
+
+def missing_fields(state: dict[str, Any]) -> list[dict[str, str]]:
+    """The fields of MISSING_TEXT this Sortie's state lacks: the view says
+    so plainly instead of showing them as empty."""
+    out = []
+    remote = state.get("workers")
+    listed = remote.get("workers") if isinstance(remote, dict) and isinstance(remote.get("workers"), list) else []
+    if listed:
+        decls = [(w, w.get("declaration") or {}) for w in listed if isinstance(w, dict)]
+        if any("used" not in d for _, d in decls):
+            out.append("workers[].declaration.used")
+        if any("unmanaged" not in d and "unmanaged" not in w for w, d in decls):
+            out.append("workers[].declaration.unmanaged")
+    elif not isinstance(state.get("host"), dict):
+        out.append("host")
+    running = [r for r in state.get("running") or [] if isinstance(r, dict)]
+    leases = [x for x in (remote.get("leases") or []) if isinstance(x, dict)] if isinstance(remote, dict) else []
+    if running and not any("step" in r for r in running) and not any("step" in x for x in leases):
+        out.append("running[].step")
+    for key in ("waits", "pulls"):
+        if key not in state:
+            out.append(key)
+    return [{"field": f, "text": MISSING_TEXT[f]} for f in out]
 
 
 def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
@@ -178,7 +216,7 @@ def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
                                 "nested" if d.get("nested") else None, *(d.get("backends") or [])] if c]
             out.append(_Worker(w.get("id") or "worker", name, slots=d.get("run_slots"), used=_size(d.get("used")),
                                free=_size(d.get("free")), last_seen=ts(w.get("last_check_in")),
-                               unmanaged=d.get("unmanaged") or w.get("unmanaged"), capabilities=caps, remote=True))
+                               unmanaged=d.get("unmanaged", w.get("unmanaged")), capabilities=caps, remote=True))
         if out:
             return out
     host = state.get("host") if isinstance(state.get("host"), dict) else {}
@@ -219,10 +257,14 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
 
     for name, state, error in states:
         if state is None:
-            sorties.append({"name": name, "reachable": False, "error": error})
+            sorties.append({"name": name, "reachable": False, "error": error, "missing": []})
             continue
-        sorties.append({"name": name, "reachable": True, "error": None})
+        missing = missing_fields(state)
+        sorties.append({"name": name, "reachable": True, "error": None, "missing": missing})
         mine = _workers_of(name, state, now)
+        if any(m["field"] == "running[].step" for m in missing):
+            for w in mine:
+                w.known["steps"] = False
         workers += mine
         leases = {l.get("job"): l for l in ((state.get("workers") or {}).get("leases") or []) if isinstance(l, dict)}
         if isinstance(state.get("dispatch_paused"), dict):
@@ -474,7 +516,7 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         "slots": slots, "slots_known": isinstance(w.slots, int) and w.slots > 0, "busy": busy,
         "capacity": w.capacity, "used": w.used,
         "verdict": verdict, "reasons": reasons, "lanes": lanes, "jobs": jobs, "stuck": sorted(w.stuck, key=lambda s: s["slot"] or 99),
-        "waits": waits, "next": nxt[:3], "unmanaged": unmanaged, "draining": w.draining,
+        "waits": waits, "next": nxt[:3], "unmanaged": unmanaged, "draining": w.draining, "known": dict(w.known),
     }
 
 
@@ -503,7 +545,8 @@ def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[
     else:
         verdict = (health or {}).get("verdict") or ("healthy" if busy else None)
         reasons = [{**r, "worker": None, "identifier": None, "action": None} for r in (health or {}).get("reasons") or []]
-    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots,
+    missing = [{**m, "sortie": s["name"]} for s in fleet.get("sorties") or [] for m in s.get("missing") or []]
+    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots, "missing": missing,
             "runway": (health or {}).get("runway"), "generated_at": fleet.get("generated_at")}
 
 
