@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
@@ -72,12 +73,57 @@ func (j *job) listeners() []net.Addr {
 	return out
 }
 
-func (j *job) lost() bool { return errors.Is(context.Cause(j.ctx), errLeaseLost) }
+// lost reports that the attempt is no longer the daemon's to report:
+// the control plane ended it, no longer wants it, or accepted no
+// heartbeat for longer than the lease.
+func (j *job) lost() bool {
+	cause := context.Cause(j.ctx)
+	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone) || errors.Is(cause, errSilent)
+}
+
+// release ends a job the control plane no longer wants: the agent stops
+// with the job's context, run deletes the machine, which frees what the
+// job reserved, and nothing more is reported.
+func (j *job) release(why error) {
+	if j.ctx.Err() != nil {
+		return
+	}
+	j.log.Warn("the control plane no longer wants the job: stopping the agent and deleting the machine", slog.String("why", why.Error()))
+	j.cancel(errJobGone)
+}
+
+// gone reports whether err is the control plane's answer that it no
+// longer wants the job: 410 on the worker API or a flow.
+func gone(err error) bool {
+	if errors.Is(err, cp.ErrJobGone) {
+		return true
+	}
+	if se, ok := errors.AsType[*flows.StatusError](err); ok && se.Status == http.StatusGone {
+		return true
+	}
+	if re, ok := errors.AsType[*stdio.RefusedError](err); ok && re.Status == http.StatusGone {
+		return true
+	}
+	return false
+}
+
+// releaseIfGone releases the job when err says the control plane no
+// longer wants it, and returns err.
+func (j *job) releaseIfGone(err error) error {
+	if gone(err) {
+		j.release(err)
+	}
+	return err
+}
 
 // heartbeats renews the lease every heartbeat_ms until the run ends. A
-// 409 ends the attempt: the machine stops at once and nothing is
-// reported.
+// 409 ends the attempt and a 410 releases the job: the machine stops at
+// once and nothing is reported. Any other failure is retried at the
+// next beat, until no heartbeat was accepted for longer than the lease:
+// the control plane can then no longer hold the job, which ends as for
+// a 409.
 func (j *job) heartbeats() {
+	accepted := time.Now()
 	for {
 		interval := j.d.heartbeatInterval()
 		select {
@@ -94,12 +140,24 @@ func (j *job) heartbeats() {
 		default:
 		}
 		switch {
+		case err == nil:
+			accepted = time.Now()
 		case errors.Is(err, cp.ErrLeaseLost):
 			j.log.Warn("heartbeat answered 409: stopping the machine, sending no report")
 			j.cancel(errLeaseLost)
 			j.stopMachine()
 			return
-		case err != nil:
+		case gone(err):
+			j.release(err)
+			j.stopMachine()
+			return
+		case time.Since(accepted) > j.d.leaseDuration():
+			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine, sending no report",
+				slog.Duration("lease", j.d.leaseDuration()), slog.String("error", err.Error()))
+			j.cancel(errSilent)
+			j.stopMachine()
+			return
+		default:
 			j.log.Warn("heartbeat failed", slog.String("error", err.Error()))
 		}
 	}
@@ -133,6 +191,10 @@ func (j *job) run() {
 
 	outcome, reason := j.execute(dir)
 	machineState := j.dispose()
+	if errors.Is(context.Cause(j.ctx), errJobGone) {
+		j.log.Info("job released: the control plane no longer wants the job; not reporting", slog.String("machine", machineState))
+		return
+	}
 	if j.lost() {
 		j.log.Info("attempt ended by the control plane; not reporting", slog.String("machine", machineState))
 		return
@@ -215,7 +277,7 @@ func (j *job) execute(dir string) (string, string) {
 	}
 
 	seedFile := filepath.Join(share, "seed.bundle")
-	if err := j.fetchSeed(ctx, seedFile); err != nil {
+	if err := j.releaseIfGone(j.fetchSeed(ctx, seedFile)); err != nil {
 		return failed("workspace seed: %v", err)
 	}
 
@@ -277,6 +339,11 @@ func (j *job) execute(dir string) (string, string) {
 	code, runErr := j.runAgent(ctx, m)
 	if ctx.Err() != nil {
 		return failed("%v", context.Cause(ctx))
+	}
+	if errors.Is(runErr, errStdioNotServed) {
+		// The attempt is not open on the control plane: it would take
+		// neither usage nor a result.
+		return failed("agent: %v", runErr)
 	}
 	// Usage goes before the result: once the control plane has the
 	// result it finishes the attempt, and a later report could find the
@@ -488,32 +555,147 @@ func (j *job) setup(ctx context.Context, m machine.Machine, script string) error
 
 // runAgent runs the agent with its standard streams on the stdio flow
 // until it exits, and then sends its exit status, the stream's last
-// frame.
+// frame. A stream that breaks before the control plane closed the
+// agent's input, as when Sortie restarts, does not end the job: the
+// daemon stops the agent, keeps the machine, dials the stream again
+// until the control plane serves it, for at most a lease, and starts the
+// agent again in the same workspace, where the restarted control plane
+// resumes the agent's session.
 func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
-	run := j.offer.Run
-	if run.Command == "" {
+	if j.offer.Run.Command == "" {
 		return -1, errors.New("the run names no command")
 	}
 	conn, err := j.flows.DialStdio(ctx)
 	if err != nil {
-		return -1, err
+		return -1, j.releaseIfGone(err)
 	}
+	for {
+		code, broken, err := j.runAgentOnce(ctx, m, conn)
+		if !broken || ctx.Err() != nil {
+			return code, err
+		}
+		j.log.Warn("stdio stream broke before the agent's input closed: keeping the machine and dialing the stream again")
+		if conn, err = j.redialStdio(ctx); err != nil {
+			return -1, err
+		}
+		j.log.Info("stdio stream open again; starting the agent again")
+	}
+}
+
+// errStdioNotServed is a stdio stream the control plane did not serve
+// again after it broke.
+var errStdioNotServed = errors.New("the stdio stream was not served again")
+
+// redialStdio dials the stdio stream until the control plane serves it.
+// It gives up when the job ends, as at a lost lease, when the control
+// plane refuses the job's token or answers that it no longer wants the
+// job, or after a lease of tries.
+func (j *job) redialStdio(ctx context.Context) (*stdio.Conn, error) {
+	var conn *stdio.Conn
+	err := j.retry(ctx, "stdio stream", func() (bool, error) {
+		c, err := j.flows.DialStdio(ctx)
+		if err != nil {
+			refused, ok := errors.AsType[*stdio.RefusedError](err)
+			return !ok || retryable(refused.Status), err
+		}
+		conn = c
+		return false, nil
+	})
+	if err != nil && ctx.Err() == nil {
+		err = fmt.Errorf("%w: %w", errStdioNotServed, err)
+	}
+	return conn, err
+}
+
+// retryable reports whether a control plane's answer may change once a
+// restarting Sortie is back: an attempt it has not opened yet, a stream
+// it still holds, or a proxy in front of it.
+func retryable(status int) bool {
+	switch status {
+	case http.StatusNotFound, http.StatusConflict, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// retryableFlow reports whether a flow request may succeed once a
+// restarting control plane is back: it never reached it, or it was
+// answered as [retryable] says.
+func retryableFlow(err error) bool {
+	if se, ok := errors.AsType[*flows.StatusError](err); ok {
+		return retryable(se.Status) && se.Status != http.StatusConflict
+	}
+	return err != nil
+}
+
+// retry calls try until it succeeds, reports its failure final, the
+// job ends, or a lease has passed since the first try, waiting longer
+// between tries up to a heartbeat interval. A failure that says the
+// control plane no longer wants the job releases it.
+func (j *job) retry(ctx context.Context, what string, try func() (again bool, err error)) error {
+	wait := 100 * time.Millisecond
+	deadline := time.Now().Add(j.d.leaseDuration())
+	for {
+		again, err := try()
+		if err == nil {
+			return nil
+		}
+		if gone(err) {
+			j.release(err)
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		if !again {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: not served within a lease (%s): %w", what, j.d.leaseDuration(), err)
+		}
+		j.log.Debug("retrying", slog.String("what", what), slog.String("error", err.Error()), slog.Duration("in", wait))
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %w (%w)", what, context.Cause(ctx), err)
+		case <-time.After(wait):
+		}
+		wait = min(2*wait, j.d.heartbeatInterval())
+	}
+}
+
+// runAgentOnce runs the agent over conn, and reports whether the stream
+// broke before the control plane closed the agent's input.
+func (j *job) runAgentOnce(ctx context.Context, m machine.Machine, conn *stdio.Conn) (int, bool, error) {
+	run := j.offer.Run
 	defer func() { _ = conn.Close() }()
+	agentCtx, stopAgent := context.WithCancel(ctx)
+	defer stopAgent()
+	var broken atomic.Bool
 	stdin, stdinW := io.Pipe()
 	go func() {
-		if err := pumpStdin(conn, stdinW); err != nil && ctx.Err() == nil {
-			j.log.Warn("stdio input ended", slog.String("error", err.Error()))
+		closed, err := pumpStdin(conn, stdinW)
+		if !closed {
+			broken.Store(true)
+			stopAgent()
 		}
+		if err != nil {
+			stdinW.CloseWithError(err)
+			if ctx.Err() == nil {
+				j.log.Warn("stdio input ended", slog.String("error", err.Error()))
+			}
+			return
+		}
+		_ = stdinW.Close()
 	}()
 	var stderr bytes.Buffer
 	j.log.Info("agent starting", slog.String("command", run.Command))
-	code, err := m.Exec(ctx, machine.Exec{
+	code, err := m.Exec(agentCtx, machine.Exec{
 		Argv: append([]string{run.Command}, run.Args...), Env: j.agentEnv(m), Workdir: machine.GuestWorkspace,
 		Stdin:  stdin,
 		Stdout: stdio.Writer{C: conn, Type: stdio.Stdout},
 		Stderr: io.MultiWriter(&limited{w: &stderr, n: 64 << 10}, lenient{stdio.Writer{C: conn, Type: stdio.Stderr}}),
 	})
 	_ = stdin.Close()
+	if broken.Load() {
+		return -1, true, nil
+	}
 	if err == nil {
 		j.log.Info("agent exited", slog.Int("status", code), slog.Int64("egress_requests", j.egress.Requests()))
 	}
@@ -525,30 +707,28 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 			j.log.Warn("the agent's exit did not reach the stdio flow", slog.String("error", xerr.Error()))
 		}
 	}
-	return code, err
+	return code, false, err
 }
 
 // pumpStdin feeds the agent's standard input from the stream's I frames
-// and closes it at C, at the stream's end, or at a frame the control
-// plane does not send.
-func pumpStdin(c *stdio.Conn, w *io.PipeWriter) error {
+// until C, the stream's end, or a frame the control plane does not send,
+// and reports whether the input closed: C, or an agent that stopped
+// reading. A stream that ends without C is broken; the caller closes w.
+func pumpStdin(c *stdio.Conn, w *io.PipeWriter) (bool, error) {
 	for {
 		typ, payload, err := c.ReadFrame()
 		switch {
-		case errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed):
-			return w.Close()
+		case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed):
+			return false, nil
 		case err != nil:
-			w.CloseWithError(err)
-			return err
+			return false, err
 		case typ == stdio.StdinClosed:
-			return w.Close()
+			return true, nil
 		case typ != stdio.Stdin:
-			err := fmt.Errorf("unexpected stdio frame type %q from the control plane", typ)
-			w.CloseWithError(err)
-			return err
+			return true, fmt.Errorf("unexpected stdio frame type %q from the control plane", typ)
 		}
 		if _, err := w.Write(payload); err != nil {
-			return nil
+			return true, nil
 		}
 	}
 }
@@ -562,18 +742,20 @@ func (l lenient) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// guestPRFile is the agent's pull request suggestion, returned beside
-// the bundle.
-const guestPRFile = machine.GuestWorkspace + "/.sortie/pr.json"
+// guestSortieDir is the agent's control directory, whose pull request
+// suggestion, status and criteria verdict are returned beside the bundle.
+const guestSortieDir = machine.GuestWorkspace + "/.sortie/"
 
 // returnResult returns the issue branch on the bundles flow: a bundle of
 // refs/heads/<branch> that leaves out the seed's commits (a branch with
 // nothing new is bundled as its tip alone), and the agent's
-// .sortie/pr.json beside it when there is one. The bundle part is left
+// .sortie/pr.json, .sortie/status and .sortie/criteria.json beside it
+// when there are. The bundle part is left
 // out when the machine has no issue branch.
 func (j *job) returnResult(ctx context.Context, m machine.Machine, share string, s seed) (string, error) {
 	ws := machine.GuestWorkspace
 	var res flows.Result
+	bundle := ""
 	note := ""
 	var out bytes.Buffer
 	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"git", "-C", ws, "rev-parse", "-q", "--verify", "refs/heads/" + s.Branch + "^{commit}"},
@@ -604,45 +786,62 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 		if _, err := j.guest(ctx, m, argv...); err != nil {
 			return "", err
 		}
-		f, err := os.Open(filepath.Join(share, "result.bundle")) // #nosec G304 -- the job's own directory
-		if err != nil {
-			return "", err
-		}
-		defer func() { _ = f.Close() }()
-		res.Bundle = f
+		bundle = filepath.Join(share, "result.bundle")
 	}
-	pr, err := j.readPR(ctx, m)
+	pr, err := j.readSortieFile(ctx, m, "pr.json", protocol.MaxPRFile)
 	if err != nil {
 		return "", err
 	}
 	res.PR = pr
-	if err := j.flows.UploadResult(ctx, res); err != nil {
+	if res.Status, err = j.readSortieFile(ctx, m, "status", protocol.MaxStatusFile); err != nil {
 		return "", err
 	}
-	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", res.Bundle != nil), slog.Bool("pr", pr != nil))
-	if pr != nil {
-		note += ", with .sortie/pr.json"
+	if res.Criteria, err = j.readSortieFile(ctx, m, "criteria.json", protocol.MaxCriteriaFile); err != nil {
+		return "", err
+	}
+	// A control plane that restarts takes the result once it is back.
+	if err := j.retry(ctx, "result", func() (bool, error) {
+		res.Bundle = nil
+		if bundle != "" {
+			f, err := os.Open(bundle) // #nosec G304 -- the job's own directory
+			if err != nil {
+				return false, err
+			}
+			defer func() { _ = f.Close() }()
+			res.Bundle = f
+		}
+		err := j.flows.UploadResult(ctx, res)
+		return retryableFlow(err), err
+	}); err != nil {
+		return "", err
+	}
+	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", bundle != ""), slog.Bool("pr", pr != nil),
+		slog.Bool("status", res.Status != nil), slog.Bool("criteria", res.Criteria != nil))
+	for name, data := range map[string][]byte{"pr.json": pr, "status": res.Status, "criteria.json": res.Criteria} {
+		if data != nil {
+			note += ", with .sortie/" + name
+		}
 	}
 	return note, nil
 }
 
-// readPR returns the agent's .sortie/pr.json, or nil when it wrote
-// none. One over 64 KiB fails the return, as the control plane would
-// refuse it.
-func (j *job) readPR(ctx context.Context, m machine.Machine) ([]byte, error) {
+// readSortieFile returns the agent's .sortie/<name>, or nil when it
+// wrote none. One over limit fails the return, as the control plane
+// would refuse it.
+func (j *job) readSortieFile(ctx context.Context, m machine.Machine, name string, limit int) ([]byte, error) {
 	var out bytes.Buffer
 	script := `test -f "$1" || exit 3; exec cat "$1"`
-	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestPRFile},
-		Stdout: &limited{w: &out, n: protocol.MaxPRFile + 1}, Stderr: io.Discard})
+	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestSortieDir + name},
+		Stdout: &limited{w: &out, n: limit + 1}, Stderr: io.Discard})
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("reading .sortie/pr.json: %w", err)
+		return nil, fmt.Errorf("reading .sortie/%s: %w", name, err)
 	case code == 3:
 		return nil, nil
 	case code != 0:
-		return nil, fmt.Errorf("reading .sortie/pr.json: exit status %d", code)
-	case out.Len() > protocol.MaxPRFile:
-		return nil, errors.New(".sortie/pr.json exceeds 64 KiB")
+		return nil, fmt.Errorf("reading .sortie/%s: exit status %d", name, code)
+	case out.Len() > limit:
+		return nil, fmt.Errorf(".sortie/%s exceeds %d bytes", name, limit)
 	}
 	return out.Bytes(), nil
 }
@@ -703,7 +902,10 @@ func (j *job) readUsage(ctx context.Context, m machine.Machine) (protocol.Usage,
 
 func (j *job) reportUsage(ctx context.Context, m machine.Machine) {
 	u, why := j.readUsage(ctx, m)
-	if err := j.flows.PostUsage(ctx, u); err != nil {
+	if err := j.retry(ctx, "usage", func() (bool, error) {
+		err := j.flows.PostUsage(ctx, u)
+		return retryableFlow(err), err
+	}); err != nil {
 		j.log.Error("usage not delivered", slog.String("error", err.Error()))
 		return
 	}

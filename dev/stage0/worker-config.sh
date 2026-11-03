@@ -27,6 +27,25 @@ json_str() {
   printf '"%s"' "$s"
 }
 
+# sortie_agent_cap's default: above every worker's run slots together
+# (p1 5, taichi 7 from their capacity in 2026-11). Raise it when the
+# workers' slots pass it.
+STAGE0_SORTIE_AGENT_CEILING=16
+
+# sortie_agent_cap: Sortie's agent.max_concurrent_agents on p1. Under the
+# remote kind the matcher places a job only on a worker with a free run slot
+# and the CPU, memory and disk the job requires (sortie Matcher.Placeable),
+# so every worker's own limit already holds, and a worker can join or leave
+# without a Sortie restart. The Sortie-wide cap is then only a ceiling above
+# the workers' slots together; a lower one leaves free workers idle while
+# stories wait. STAGE0_SORTIE_MAX_AGENTS overrides it. STAGE0_WORKER_SLOTS
+# is a worker's own run slots, not this cap.
+sortie_agent_cap() {
+  local cap=${STAGE0_SORTIE_MAX_AGENTS:-$STAGE0_SORTIE_AGENT_CEILING}
+  [[ $cap =~ ^[1-9][0-9]*$ ]] || { echo "STAGE0_SORTIE_MAX_AGENTS is $cap; want a positive whole number" >&2; return 1; }
+  echo "$cap"
+}
+
 # The setup every image runs first: the egress CA's certificate, from
 # ORTUS_EGRESS_CA (env_files), into the system's trust store.
 guest_ca_setup() {
@@ -43,11 +62,21 @@ EOF
 #   URL   the control plane as this host reaches it: its edge port on p1,
 #         or the tunnel's end on a worker host
 #   CA    the egress CA's certificate on this host
-# Reads STAGE0_PACK and STAGE0_MAX_AGENTS, and, when homelab_inputs ran,
+# Reads STAGE0_PACK and STAGE0_WORKER_SLOTS, and, when homelab_inputs ran,
 # STAGE0_HOMELAB_PACK and STAGE0_HOMELAB_IMAGE_JSON. Without them the worker
 # does not declare nested: it has no image that needs it.
+# Without STAGE0_WORKER_SLOTS the file has no run_slots, so the daemon
+# declares as many smallest jobs as the host's CPUs and memory hold above
+# the reserve, read at each check-in (worker-daemon's operator guide, "Run
+# slots"): a host that gains memory gets more slots without a deploy. The
+# live free CPU, memory and disk still bound each job.
 render_worker_config() {
-  local out=$1 name=$2 url=$3 ca=$4 packs images nested=false
+  local out=$1 name=$2 url=$3 ca=$4 packs images nested=false slots=''
+  if [[ -n ${STAGE0_WORKER_SLOTS:-} ]]; then
+    [[ $STAGE0_WORKER_SLOTS =~ ^[1-9][0-9]*$ ]] || { echo "STAGE0_WORKER_SLOTS is $STAGE0_WORKER_SLOTS; want a positive whole number, or unset to follow the host" >&2; return 1; }
+    slots="
+  \"run_slots\": $STAGE0_WORKER_SLOTS,"
+  fi
   packs="$(json_str "$STAGE0_AGENT_IMAGE"): $(json_str "$STAGE0_PACK")"
   images="$(json_str "$STAGE0_AGENT_IMAGE"): {
         \"env\": {\"NODE_EXTRA_CA_CERTS\": $(json_str "$STAGE0_GUEST_CA"), \"IS_SANDBOX\": \"1\"},
@@ -64,8 +93,7 @@ render_worker_config() {
   (umask 077; cat > "$out.tmp" <<EOF
 {
   "worker_id": $(json_str "$name"),
-  "control_plane": {"url": $(json_str "$url")},
-  "run_slots": ${STAGE0_MAX_AGENTS:-1},
+  "control_plane": {"url": $(json_str "$url")},$slots
   "reserve": {"mem_gib": $STAGE0_WORKER_RESERVE_MEM_GIB, "cpu": $STAGE0_WORKER_RESERVE_CPU},
   "floor": {"disk_gib": $STAGE0_WORKER_FLOOR_DISK_GIB},
   "smallest_job": {"cpu": 4, "mem_gib": 8, "disk_gib": 20},
@@ -81,6 +109,28 @@ render_worker_config() {
 EOF
   )
   mv "$out.tmp" "$out"
+}
+
+# STAGE0_MAX_AGENTS is retired: it held a worker's run slots as a number
+# the kit wrote once (p1 3, a worker host 2). migrate_max_agents FILE
+# drops it from stage0.env when it holds the default the kit wrote there,
+# so the slots follow the host, and keeps any other value as
+# STAGE0_WORKER_SLOTS, a person's choice, in the file and in this shell.
+# Does nothing once it is gone.
+migrate_max_agents() {
+  local f=$1 line value
+  line=$(grep -m1 '^STAGE0_MAX_AGENTS=' "$f") || return 0
+  value=${line#STAGE0_MAX_AGENTS=}
+  if [[ $value == 2 || $value == 3 || -z $value ]]; then
+    say "Dropping STAGE0_MAX_AGENTS=$value, the kit's old default, from $f: the worker's run slots follow its CPUs and memory now (STAGE0_WORKER_SLOTS overrides)"
+    # The comment the kit wrote above it, then the line.
+    sed -i -e '/^# \(Agents\|Jobs\|p1'"'"'s own worker'"'"'s jobs\) at once/{N;/\nSTAGE0_MAX_AGENTS=/d;}' -e '/^STAGE0_MAX_AGENTS=/d' "$f"
+  else
+    say "Renaming STAGE0_MAX_AGENTS=$value to STAGE0_WORKER_SLOTS in $f: it is this worker's run slots"
+    sed -i 's/^STAGE0_MAX_AGENTS=/STAGE0_WORKER_SLOTS=/' "$f"
+    STAGE0_WORKER_SLOTS=$value
+  fi
+  unset STAGE0_MAX_AGENTS
 }
 
 # worker_jobs: how many jobs the worker daemon runs now (one directory each).

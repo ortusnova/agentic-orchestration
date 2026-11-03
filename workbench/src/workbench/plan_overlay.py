@@ -9,9 +9,10 @@ A story is, in order of precedence:
 - ``needs_rereview``: a person must look again (a cancelled blocker, or an
   unverified no-change claim);
 - ``frozen``: an agent started it, so its content can no longer change;
-- ``building`` and ``preview``: a started ``review: ui`` story, before and
-  after its pull request is deployed as a preview, which reads "ready for
-  you to look";
+- ``building``, ``in_review``, ``click_proofs`` and ``merging``: a started
+  ``review: ui`` story, while agents build it, while its review runs, once
+  its review passed and Sortie waits for the click-proofs on its preview,
+  and once they are recorded and Sortie merges it (see :func:`ui_status`);
 - ``needs_spec``: no approval matches, it covers no requirement, and it is
   not delivered: it cannot be approved until it has a spec;
 - ``draft``: no approval matches its current content;
@@ -23,10 +24,11 @@ A story is, in order of precedence:
 A story that names its pull requests is never the agents' work: no sync
 creates or releases it.
 
-A ``review: ui`` story that covers a requirement needs no approval: it is
-built first, and the operator's merge of its pull request is its approval.
-It reads as approved stories do (``ready``, ``held``, ``released``) until
-it starts. No one approves it, so it never reads ``draft``.
+A ``review: ui`` story that covers a requirement needs no approval here: the
+operator approved its design prototype before it was written, and Sortie
+merges its pull request once its review, CI and click-proofs pass. It reads
+as approved stories do (``ready``, ``held``, ``released``) until it starts.
+No one approves it, so it never reads ``draft``.
 """
 
 from __future__ import annotations
@@ -92,6 +94,28 @@ def built_unapproved(node: dict[str, Any], review: str | None) -> bool:
     return node.get("kind") == "story" and review == "ui" and bool(node.get("covers"))
 
 
+def ui_status(t: dict[str, Any] | None, phase: str | None, preview: dict[str, Any] | None, merge_waits: bool) -> str:
+    """Where a started ui story is on its way to Sortie's merge. ``phase`` is
+    that of its run, when one runs or waits to run again; ``merge_waits``
+    whether Sortie's merge watch holds its pull request, which it does once
+    the review passed. Nothing in it waits on a person:
+
+    - ``building``: its build runs;
+    - ``in_review``: its review runs, a fix run of the review rule runs, or
+      the build is over and the review is next;
+    - ``click_proofs``: the review passed, and Sortie's merge waits for the
+      click-proofs on its preview, recorded for its head;
+    - ``merging``: the record names its head, and Sortie merges it.
+    """
+    if (t or {}).get("runtime"):
+        return "in_review" if phase in ("review", "fix") else "building"
+    if preview and preview.get("click_proofs"):
+        return "merging"
+    if merge_waits or preview:
+        return "click_proofs"
+    return "in_review"
+
+
 def delivery(refs: list[str] | None, pulls: dict[str, dict[str, Any]] | None) -> dict[str, Any] | None:
     """Whether the pull requests a story names delivered it, and each one's state."""
     if not refs:
@@ -104,10 +128,13 @@ def delivery(refs: list[str] | None, pulls: dict[str, dict[str, Any]] | None) ->
 def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: dict[str, dict],
             rereviews: dict[str, dict], tracker: dict[str, Any] | None,
             pulls: dict[str, dict[str, Any]] | None = None,
-            previews: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+            previews: dict[str, dict[str, Any]] | None = None, phases: dict[str, str] | None = None,
+            merge_waits: set[str] | None = None) -> dict[str, dict[str, Any]]:
     """The plan fields of each story node, by plan key. ``pulls`` holds what
-    GitHub reported of each pull request a story names, and ``previews``
-    the preview of each ``review: ui`` story's pull request, by tracker
+    GitHub reported of each pull request a story names, ``previews`` the
+    preview of each ``review: ui`` story's pull request, ``phases`` the
+    phase of each story's run in Sortie's state, and ``merge_waits`` the
+    stories whose pull request Sortie's merge watch holds, all by tracker
     identifier."""
     if not graph:
         return {}
@@ -158,7 +185,8 @@ def overlay(graph: dict[str, Any] | None, stories: dict[str, dict], approvals: d
             fields["plan_status"] = "needs_rereview"
             fields["rereview"] = {"reason": "unverified_no_change", "ref": t.get("unverified_reason") or ""}
         elif fields["frozen"] and key in ui and not (t or {}).get("terminal"):
-            fields["plan_status"] = "preview" if fields["preview"] else "building"
+            fields["plan_status"] = ui_status(t, (phases or {}).get(ident or ""), fields["preview"],
+                                              bool(ident) and ident in (merge_waits or set()))
         elif fields["frozen"]:
             fields["plan_status"] = "frozen"
         elif key not in approved and key not in ui:
@@ -202,7 +230,7 @@ def sync_graph(graph: dict[str, Any], fields: dict[str, dict[str, Any]]) -> dict
         elif n["kind"] == "story" and f is not None:
             n["release"] = f["plan_status"] in ("ready", "released")
             n["review"] = f["review"]
-            # A ui story carries no approver: the merge of its pull request is its approval.
+            # A ui story carries no approver: its approval is its design prototype's.
             if n["approval"] == "approved" and f["approved_by"] and f["review"] != "ui":
                 n["approved_by"] = f["approved_by"]
                 n["approved_at"] = _rfc3339(f["approved_at"])

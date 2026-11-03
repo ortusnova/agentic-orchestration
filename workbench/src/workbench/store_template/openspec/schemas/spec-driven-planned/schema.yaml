@@ -215,11 +215,18 @@ artifacts:
         request once that review and CI pass. Write acceptance criteria that
         an agent can check with evidence; a criterion the review cannot settle
         becomes a question for a person on the workbench. `ui` is for a story
-        a person wants to see built before approving it (design D8): once it
-        covers a requirement it is built with no approval, passes the same
-        review, and its pull request is deployed as a preview; Sortie never
-        merges it, and the person's merge is its approval. Do not change it on
-        a started story.
+        that changes an interface (agent-platform/run-supervision, "A UI is
+        approved as a prototype, and the built story merges after its
+        review"): the operator approves the interface as a design prototype
+        before the story is written, and the story's acceptance criteria name
+        that approved prototype and the actions to click. Once it covers a
+        requirement it is built with no further approval, passes the same
+        review, and its pull request is deployed as a preview, where a review
+        clicks every action its criteria name; Sortie merges it once those
+        click-proofs are recorded, with no person asked. A UI change with no
+        approved prototype is not a story yet: it goes to prototyping first,
+        and the operator is asked on the decision board, not on a pull
+        request. Do not change it on a started story.
       - `supersedes`: only for a replacement of a story that has already
         started: the id (or `<change>/<id>`) of the story it replaces. Its
         dependents move to the replacement.

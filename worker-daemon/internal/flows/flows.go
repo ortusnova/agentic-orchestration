@@ -104,9 +104,21 @@ func (j *Job) request(ctx context.Context, flow, method, path string, body io.Re
 	return resp, nil
 }
 
+// StatusError is a flow request the control plane answered with a
+// status that is not a success.
+type StatusError struct {
+	Flow, Path string
+	Status     int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("flows: %s %s: HTTP %d: %s", e.Flow, e.Path, e.Status, e.Body)
+}
+
 func statusError(flow, path string, resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("flows: %s %s: HTTP %d: %s", flow, path, resp.StatusCode, bytes.TrimSpace(b))
+	return &StatusError{Flow: flow, Path: path, Status: resp.StatusCode, Body: string(bytes.TrimSpace(b))}
 }
 
 // FetchSeed writes the workspace seed at seedPath on the bundles flow
@@ -141,11 +153,16 @@ type Result struct {
 	Bundle io.Reader
 	// PR is the agent's .sortie/pr.json; nil leaves the part out.
 	PR []byte
+	// Status is the agent's .sortie/status; nil leaves the part out.
+	Status []byte
+	// Criteria is a criteria review's .sortie/criteria.json; nil leaves
+	// the part out.
+	Criteria []byte
 }
 
 // UploadResult returns the result on the bundles flow: POST
 // /jobs/{job}/attempts/{attempt}/result, multipart/form-data with the
-// part bundle and the optional part pr.
+// part bundle and the optional parts pr, status and criteria.
 func (j *Job) UploadResult(ctx context.Context, res Result) error {
 	path := protocol.ResultPath(j.ID, j.Attempt)
 	pr, pw := io.Pipe()
@@ -181,12 +198,22 @@ func writeResult(mw *multipart.Writer, res Result) error {
 			return err
 		}
 	}
-	if res.PR != nil {
-		w, err := part(protocol.ResultPRPart, "pr.json", "application/json")
+	for _, f := range []struct {
+		name, file, contentType string
+		data                    []byte
+	}{
+		{protocol.ResultPRPart, "pr.json", "application/json", res.PR},
+		{protocol.ResultStatusPart, "status", "text/plain", res.Status},
+		{protocol.ResultCriteriaPart, "criteria.json", "application/json", res.Criteria},
+	} {
+		if f.data == nil {
+			continue
+		}
+		w, err := part(f.name, f.file, f.contentType)
 		if err != nil {
 			return err
 		}
-		if _, err := w.Write(res.PR); err != nil {
+		if _, err := w.Write(f.data); err != nil {
 			return err
 		}
 	}

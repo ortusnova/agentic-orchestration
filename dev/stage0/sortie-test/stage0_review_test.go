@@ -33,10 +33,10 @@ const reviewHuman = "sortie-review:human"
 
 // stage0Values stand in for what stage0.sh renders into the workflow.
 var stage0Values = map[string]string{
-	"STAGE0_SORTIE_PORT":    "7680",
-	"STAGE0_MAX_AGENTS":     "3",
-	"STAGE0_HOMELAB_MOUNTS": "[]",
-	"STAGE0_HULY_URL":       "http://127.0.0.1:8087",
+	"STAGE0_SORTIE_PORT":       "7680",
+	"STAGE0_SORTIE_MAX_AGENTS": "16",
+	"STAGE0_HOMELAB_MOUNTS":    "[]",
+	"STAGE0_HULY_URL":          "http://127.0.0.1:8087",
 	// No operator channel; stage0_notify_test.go renders each kind.
 	"STAGE0_NOTIFY_ENTRY": "",
 	// The remote kind's flow URLs need a real port.
@@ -87,6 +87,12 @@ func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	path := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	// The supervisor's prompt, beside the workflow, as stage0.sh installs it.
+	if prompt, err := os.ReadFile(filepath.Join(kit, "supervisor.md")); err == nil {
+		if err := os.WriteFile(filepath.Join(dir, "supervisor.md"), prompt, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	mgr, err := workflow.NewManager(path, discardLogger())
 	if err != nil {
@@ -187,6 +193,17 @@ func TestStage0_ReviewPrompt(t *testing.T) {
 			"stop with `blocked`",
 			"conflicts with a documented design rule",
 			"Sortie keeps the pull request open",
+			"record your verdict on every acceptance criterion in `.sortie/criteria.json`",
+			`"verdict": "met", "evidence":`,
+			"`not-met`: it does not hold, and you could not meet it.",
+			"`live-proof`: only a live run this machine cannot do settles it.",
+			"`unsettled`: it conflicts with a documented design rule",
+			"A criterion you could not prove here is not `met`",
+			"a step that timed out, or the builder's claim is not evidence",
+			"Sortie merges the pull request only when every criterion is `met`",
+			"no `.sortie/criteria.json`, keeps the pull request open",
+			"record it `not-met` with what you ran and what failed",
+			"record it `unsettled` and stop with `blocked`",
 		} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("%s: review prompt lacks %q", name, want)
@@ -216,7 +233,20 @@ func reviewExit(t *testing.T, cfg config.ServiceConfig, review config.DispatchRu
 	f.params.SCMAdapter = &scmAdapterStubExit{}
 	f.params.AutoMergeReactionConfigured = true
 	f.params.MergeCompletionReactionConfigured = true
+	// The review records every criterion met, as the kit's review prompt
+	// asks a passing review to.
+	f.result.CriteriaFile = []byte(stage0AllMet)
+	f.params.Store = &verdictExitStore{mockExitStore: f.store, verdictStore: &verdictStore{}}
 	return f
+}
+
+// stage0AllMet is the .sortie/criteria.json of a review that found every
+// criterion met.
+const stage0AllMet = `{"criteria": [{"criterion": "make test passes", "verdict": "met", "evidence": "make test: 12 passed"}]}`
+
+// verdictsOf is the verdict store a review exit recorded into.
+func verdictsOf(f *hopExitFixture) *verdictStore {
+	return f.params.Store.(*verdictExitStore).verdictStore
 }
 
 // Scenario: A pull request that meets its criteria. Its review passes, CI
@@ -239,7 +269,8 @@ func TestStage0_APullRequestThatMeetsItsCriteria(t *testing.T) {
 		}
 		for _, value := range []string{reviewHuman, config.ReviewCriteriaLabel} {
 			t.Run(name+"/"+value, func(t *testing.T) {
-				// The review run ends normally: no status file.
+				// The review run ends normally: no status file, and every
+				// criterion recorded met.
 				f := reviewExit(t, cfg, review, []string{value})
 				f.exit()
 				pending := f.state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]
@@ -271,7 +302,7 @@ func TestStage0_APullRequestThatMeetsItsCriteria(t *testing.T) {
 					params := autoMergeParams(&reviewReconcileStore{}, scm, &reviewTrackerStub{})
 					params.AutoMergeConfig = amCfg
 					params.NowFunc = func() time.Time { return time.Now().Add(time.Hour) }
-					params.ReviewGate = planReviewGate(cfg, &labelTracker{labels: []string{value, review.Stage}})
+					params.ReviewGate = planReviewGate(cfg, &labelTracker{labels: []string{value, review.Stage}}, verdictsOf(f))
 					reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
 					state.TrackerOpsWg.Wait()
 					if merged != (ci == "success") {
@@ -309,7 +340,7 @@ func TestStage0_TheBuildDoesNotMerge(t *testing.T) {
 		cfg := loadStage0(t, name)
 		review := stage0Review(t, cfg)
 		for _, value := range []string{reviewHuman, config.ReviewCriteriaLabel} {
-			gate := planReviewGate(cfg, &labelTracker{labels: []string{value}})
+			gate := planReviewGate(cfg, &labelTracker{labels: []string{value}}, allMet{})
 			for _, builder := range []string{"build", "claude-label", "claude-title"} {
 				ok, _, err := gate(context.Background(), &PendingReaction{IssueID: "i", RuleName: builder})
 				if ok || err != nil {
@@ -357,6 +388,48 @@ func TestStage0_ACriterionTheReviewCannotSettle(t *testing.T) {
 					t.Errorf("comments = %+v, want one naming criterion 2", f.tracker.commentCalls)
 				}
 			})
+		}
+	}
+}
+
+// Scenario: A criterion the review found not met (ONS-19). The review ran
+// what it could, found the full vm chain not proven, and ended normally,
+// with no status file, recording the criterion not-met: Sortie does not
+// merge the pull request, and parks the story with the criterion as the
+// supervisor's question. A review that records no verdict at all is held
+// the same way.
+func TestStage0_ACriterionTheReviewFoundNotMet(t *testing.T) {
+	const unmet = `{"criteria": [
+		{"criterion": "Run by the one Sortie on taichi's worker, the full vm chain in its machine ends DONE with every step at exit code 0", "verdict": "not-met", "evidence": "seed-vm-recreate timed out after 30 min: the nested VMs have no network"},
+		{"criterion": "make test passes", "verdict": "met", "evidence": "make test: 4846 passed, 24 skipped"}]}`
+	for _, name := range stage0Workflows {
+		cfg := loadStage0(t, name)
+		review := stage0Review(t, cfg)
+		for _, file := range []string{unmet, ""} {
+			for _, value := range []string{reviewHuman, config.ReviewCriteriaLabel} {
+				t.Run(name+"/"+value, func(t *testing.T) {
+					f := reviewExit(t, cfg, review, []string{value})
+					f.state.Running[hopExitIssueID].LastAgentMessage = "No acceptance criterion is fully proven yet. I added no commits and wrote no `.sortie/status`."
+					f.result.CriteriaFile = []byte(file)
+					f.exit()
+
+					if _, ok := f.state.PendingReactions[ReactionKey(hopExitIssueID, ReactionKindAutoMerge)]; ok {
+						t.Error("auto-merge seeded after a review that found a criterion not met")
+					}
+					want := "no verdict per criterion"
+					if file != "" {
+						want = "seed-vm-recreate timed out"
+					}
+					parked := RuntimeSnapshot(f.state, time.Now()).Parked
+					if len(parked) != 1 || !strings.Contains(parked[0].Statement, want) {
+						t.Errorf("parked = %+v, want the story parked with %q as the question", parked, want)
+					}
+					gate := planReviewGate(cfg, &labelTracker{labels: []string{value, review.Stage}}, verdictsOf(f))
+					if ok, why, err := gate(context.Background(), &PendingReaction{IssueID: hopExitIssueID, RuleName: review.Name}); ok || err != nil {
+						t.Errorf("gate = %v (%s), %v; want the merge refused", ok, why, err)
+					}
+				})
+			}
 		}
 	}
 }

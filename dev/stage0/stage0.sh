@@ -34,7 +34,7 @@
 # Needs (control): smolvm 1.32.4 or later, podman, Go, uv, npm, the openspec CLI, gh signed in,
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
-# planning sessions.
+# planning sessions and the supervisor.
 # Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's tunnel; for
 # homelab jobs, python3 and homelab's dev host (`make dev-host` in homelab).
 set -euo pipefail
@@ -106,8 +106,9 @@ STAGE0_PROFILE=worker
 STAGE0_KIT_ROOT=$ROOT
 # The worker's name; p1's edge names it by its tunnel anyway (worker-host.sh).
 STAGE0_WORKER_NAME=$(hostname -s)
-# Jobs at once (the daemon's run_slots).
-STAGE0_MAX_AGENTS=2
+# Jobs at once (the daemon's run_slots): unset, as many as this host's CPUs
+# and memory hold (worker-config.sh).
+STAGE0_WORKER_SLOTS=
 # The operator's homelab checkout, for homelab jobs: the kit adds its own
 # detached worktree of origin/master under \$STAGE0_HOME/homelab and builds the
 # homelab pack from it. Without it, this worker takes no homelab job.
@@ -141,12 +142,18 @@ STAGE0_HOMELAB_REPO_URL=https://github.com/ortusnova/homelab.git
 STAGE0_HOMELAB_REPO_BASE=master
 STAGE0_HOMELAB_REPO_PROJECT=ortusnova/homelab
 STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
-# Agents at once; each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
-STAGE0_MAX_AGENTS=3
+# p1's own worker's jobs at once: unset, as many as p1's CPUs and memory
+# hold (worker-config.sh); each VM takes 4 vCPU and 8 GiB (WORKFLOW.md).
+STAGE0_WORKER_SLOTS=
+# Sortie's cap on agents at once, on every worker together: unset, a ceiling
+# above the workers' slots, which the matcher holds (worker-config.sh).
+STAGE0_SORTIE_MAX_AGENTS=
 # The stage-1 edge (README.md): nono's port on p1, and the port each worker
 # host's tunnel ends on, on that host's loopback.
 STAGE0_NONO_PORT=7690
 STAGE0_EDGE_WORKER_PORT=7700
+# The live-proof nono, the egress of a live-proof job that runs (README.md).
+STAGE0_NONO_LIVE_PROOF_PORT=7691
 # The operator's channel for every question (README.md): slack, discord, telegram or
 # webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
 # where people reach the workbench, for the link in each question.
@@ -168,7 +175,6 @@ fi
 # A stage0.env written before a setting existed gets its default here.
 STAGE0_PROFILE=${STAGE0_PROFILE:-control}
 case $STAGE0_PROFILE in control|worker) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or worker" ;; esac
-STAGE0_MAX_AGENTS=${STAGE0_MAX_AGENTS:-3}
 STAGE0_PACK=${STAGE0_PACK:-$STAGE0_HOME/stage0.smolmachine}
 STAGE0_EDGE_WORKER_PORT=${STAGE0_EDGE_WORKER_PORT:-7700}
 STAGE0_WORKER_NAME=${STAGE0_WORKER_NAME:-$(hostname -s)}
@@ -184,7 +190,7 @@ if [[ $STAGE0_KIT_ROOT != "$ROOT" ]]; then
   sed -i "s|^STAGE0_KIT_ROOT=.*|STAGE0_KIT_ROOT=$ROOT|" "$ENV_FILE"
   STAGE0_KIT_ROOT=$ROOT
 fi
-export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT STAGE0_MAX_AGENTS \
+export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
   STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT STAGE0_EDGE_WORKER_PORT
@@ -194,7 +200,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH ;; esac
   needed=(smolvm go git curl sha256sum)
 else
-  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh)
+  # opencode: the planning sessions and the supervisor run the host's.
+  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh opencode)
 fi
 for cmd in "${needed[@]}"; do
   command -v "$cmd" >/dev/null || die "$cmd is not on PATH"
@@ -206,7 +213,17 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+migrate_max_agents "$ENV_FILE"
+# shellcheck source=unit-restart.sh
+. "$KIT/unit-restart.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
+# The worker daemon's machines carry the runs: it restarts only when its
+# source, its configuration or its unit changed (unit-restart.sh). Its
+# source, not its binary, which Go stamps with the kit's commit.
+restart_worker() {
+  restart_changed ortus-stage0-worker.service "$ROOT/worker-daemon" \
+    "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service"
+}
 
 # The pack is built again when its inputs change (the kit's pack/,
 # smol-builder's source, which embeds its layers, and smolvm), so a merged
@@ -268,7 +285,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
   fi
   systemctl --user enable -q ortus-stage0-worker.service
-  systemctl --user restart ortus-stage0-worker.service
+  restart_worker
   sleep 2
   systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT/" || true)
@@ -312,8 +329,9 @@ say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-
 export PATH=$STAGE0_HOME/bin:$PATH
 # shellcheck source=nono-version.sh
 . "$KIT/nono-version.sh"
-say "Building the stage-1 edge and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
+say "Building the stage-1 edge and stage0-live-proofs, and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
 (cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
+(cd "$KIT/live-proofs" && go build -o "$STAGE0_HOME/bin/stage0-live-proofs" .)
 nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
 
 say "Installing workbench dependencies and building the frontend"
@@ -346,6 +364,11 @@ print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-
 fi
 secret "$STAGE0_HOME/sortie-token"
 secret "$STAGE0_HOME/viewer-token"
+# The supervisor's token and prompt (supervisor.sh), which the workflow's
+# supervisor section reads.
+# shellcheck source=supervisor.sh
+. "$KIT/supervisor.sh"
+supervisor_install "$STAGE0_HOME" "$KIT" || die "could not install the supervisor"
 # The edge reaches nono with this; nono intercepts TLS for the credential
 # hosts with the egress CA, whose certificate each worker gets (worker-host.sh,
 # worker-config.sh) and whose key never leaves this host.
@@ -380,6 +403,8 @@ render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://12
   || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
 say "Rendering Sortie's workflow"
+STAGE0_SORTIE_MAX_AGENTS=$(sortie_agent_cap) || die "the Sortie-wide agent cap is wrong ($ENV_FILE)"
+export STAGE0_SORTIE_MAX_AGENTS
 STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
 validated=$("$KIT/run-sortie.sh" validate 2>&1) || die "Sortie refused the workflow ($KIT/run-sortie.sh validate): $validated"
 # A key Sortie does not know is one it ignores: the workflow would not do
@@ -394,7 +419,8 @@ mkdir -p "$UNITS"
 units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
   ortus-stage0-store.service ortus-stage0-store.timer
   ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
-  ortus-stage0-nono.service ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
+  ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
+  ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
 deploy=''
@@ -409,21 +435,35 @@ else
   systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
-  ortus-stage0-edge.service ortus-stage0-worker.service
+  ortus-stage0-nono-live-proof.service ortus-stage0-edge.service ortus-stage0-worker.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
 # The ui stories' previews follow their pull requests (run-previews.sh).
 systemctl --user enable -q --now ortus-stage0-previews.timer
+# The supervisor's live-proof requests become jobs (run-live-proofs.sh).
+systemctl --user enable -q --now ortus-stage0-live-proofs.timer
+# Sortie restarts at once, whatever runs: it re-adopts each run whose lease a
+# worker still holds (spec store agent-platform/run-supervision). nono, the
+# edge and the worker daemon carry the runs, so each restarts only when what
+# it runs changed (unit-restart.sh): a kit change that leaves them as they
+# are cuts no run's egress, stream or machine.
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
-systemctl --user restart ortus-stage0-nono.service ortus-stage0-edge.service
+nono_inputs=("$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" "$KIT/anthropic-token.py"
+  "$KIT/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
+restart_changed ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stage0-nono.service"
+# The live-proof nono also runs stage0-live-proofs (its source, not its
+# binary, which Go stamps with the kit's commit) on egress-live-proof.json.
+restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/egress-live-proof.json" \
+  "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
+restart_changed ortus-stage0-edge.service "$KIT/edge" "$STAGE0_HOME/edge.json" "$UNITS/ortus-stage0-edge.service"
 for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
-systemctl --user restart ortus-stage0-worker.service
+restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
-for unit in ortus-stage0-nono ortus-stage0-edge ortus-stage0-worker; do
+for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-edge ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
 say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker(s), p1's own and $(tunnel_workers | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"

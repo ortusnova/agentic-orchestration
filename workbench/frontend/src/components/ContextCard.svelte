@@ -53,7 +53,14 @@
   }
 
   const approver = $derived(!!actions && can("approver"));
-  const REVIEW_LABEL: Record<string, string> = { criteria: "acceptance criteria", human: "a person", ui: "you, on a preview" };
+  const REVIEW_LABEL: Record<string, string> = { criteria: "acceptance criteria", human: "a person", ui: "acceptance criteria and click-proofs on a preview" };
+  // A started ui story on its way to Sortie's merge: nothing in it waits on a person.
+  const UI_TEXT: Record<string, string> = {
+    building: "Agents are building it. It needs no approval: its design prototype was approved before it was written. A review checks its criteria, then clicks the actions they name on its preview, and Sortie merges it.",
+    in_review: "Its review runs: an agent session checks its acceptance criteria, or clicks the actions they name on its preview. Sortie merges it once its review, CI and click-proofs pass.",
+    click_proofs: "Its review passed. Sortie merges it once the click-proofs on its preview are recorded on its pull request for its head commit.",
+    merging: "Its click-proofs passed on its preview, recorded for its head commit: Sortie merges it.",
+  };
   const epicStories = $derived(view.epic ? model.storiesOf(view.epic) : []);
   const drafts = $derived(epicStories.filter((n) => n.plan_status === "draft"));
   const epicNeverApproved = (epic: GraphNode) => model.storiesOf(epic.plan_key).every((n) => n.approval !== "approved");
@@ -185,10 +192,11 @@
           <p class="why warn" data-why="delivery">{deliveryText(node.delivery)}</p>
         {:else if node.plan_status === "needs_spec"}
           <p class="why" data-why="needs-spec">It covers no requirement, so it cannot be approved. Plan its spec first.</p>
-        {:else if node.plan_status === "building"}
-          <p class="why" data-why="building">Agents are building it, with no approval: a review checks its criteria, then its pull request is deployed as a preview for you to look at. Merging the pull request approves it.</p>
-        {:else if node.plan_status === "preview" && node.preview}
-          <p class="why" data-why="preview">Ready for you to look: <a href={node.preview.url} target="_blank" rel="noopener">{node.preview.url}</a>. Comment on <a href={node.preview.pull_url || undefined} target="_blank" rel="noopener">{node.preview.pull}</a> to ask for a change, and merge it to approve the story.</p>
+        {:else if node.plan_status && UI_TEXT[node.plan_status]}
+          <p class="why" data-why={node.plan_status}>{UI_TEXT[node.plan_status]}{#if node.plan_status === "click_proofs" && !node.preview} Its preview is deployed once CI passes on its head.{/if}</p>
+          {#if node.preview}
+            <p class="why" data-why="preview">Preview: <a href={node.preview.url} target="_blank" rel="noopener">{node.preview.url}</a>, of <a href={node.preview.pull_url || undefined} target="_blank" rel="noopener">{node.preview.pull}</a>{#if node.preview.sha} at <code>{node.preview.sha.slice(0, 12)}</code>{/if}.</p>
+          {/if}
         {:else if node.plan_status === "frozen"}
           <p class="why" data-why="frozen">Agents have started it, so its content is fixed. Change scope with a new story that depends on it, or one that supersedes it.</p>
         {/if}
@@ -360,7 +368,7 @@
   .why.warn { color: var(--amber-ink); }
   .approver { font-size: 12px; color: var(--mute); }
   .chip.plan.ready, .chip.plan.released { color: var(--done); }
-  .chip.plan.needs_rereview, .chip.plan.delivery_unconfirmed, .chip.plan.preview { color: var(--amber-ink); }
+  .chip.plan.needs_rereview, .chip.plan.delivery_unconfirmed { color: var(--amber-ink); }
   .chip.plan.delivered { color: var(--done); }
   dd.pulls { flex-direction: column; gap: 4px; }
   .pull { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }

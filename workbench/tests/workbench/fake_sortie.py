@@ -90,6 +90,8 @@ class FakeSortie:
         self.grants: list[dict[str, Any]] = []
         self.grants_supported = True
         self.history: dict[str, dict[str, Any]] = {}
+        # Finished runs, as GET /api/v1/runs serves them, newest first.
+        self.runs: list[dict[str, Any]] = []
         # The supervisor session's status (supervisor-session), or None for a
         # Sortie that serves none; the actions its token took, as
         # supervisor_actions (sortie#40), or None for a Sortie without them;
@@ -149,6 +151,17 @@ class FakeSortie:
         """Release the park, as a person's gesture in the tracker does."""
         self.parked = [p for p in self.parked if p["issue_identifier"] != identifier]
         self.park_details.pop(identifier, None)
+
+    def hold(self, identifier: str, reason: str, evidence: str, *, by: str = "supervisor",
+             renewed_at: str = "2026-11-03T13:00:00Z", until: str = "2026-11-03T14:00:00Z",
+             expired: bool = False) -> None:
+        """Place the supervisor's lease on the issue, as ``holds`` in the
+        state lists it; ``expired`` as Sortie serves it once it ran out."""
+        holds = [h for h in self.extra_state.get("holds") or [] if h["issue_identifier"] != identifier]
+        holds.append({"issue_id": f"id-{identifier}", "issue_identifier": identifier, "by": by, "reason": reason,
+                      "evidence": evidence, "held_since": renewed_at, "renewed_at": renewed_at, "until": until,
+                      "expired": expired, "expired_at": until if expired else None})
+        self.extra_state["holds"] = holds
 
     def issue(self, plan_key, kind="story", state="Todo", parent=None, runtime=None, terminal=False, **extra):
         node = {
@@ -283,6 +296,14 @@ class FakeSortie:
                                              "used_sessions": entry.get("used_sessions", 0),
                                              "budget_sessions": budget + add if isinstance(budget, int) else None,
                                              "granted_sessions": granted})
+        if path == "/api/v1/runs":
+            q = request.url.params
+            runs = sorted(self.runs, key=lambda r: r["started_at"], reverse=True)
+            if q.get("since"):
+                runs = [r for r in runs if r["started_at"] >= q["since"]]
+            if q.get("status"):
+                runs = [r for r in runs if r["status"] == q["status"]]
+            return httpx.Response(200, json={"runs": runs[: int(q.get("limit") or 50)], "next_cursor": None})
         if path.startswith("/api/v1/runs/") and path.endswith("/events"):
             dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
             run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)

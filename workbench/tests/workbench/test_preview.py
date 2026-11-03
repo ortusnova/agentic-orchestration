@@ -1,7 +1,7 @@
 """The preview of each review: ui story's pull request
-(agent-platform/run-supervision#A UI story is built before it is approved,
-and its merge is the approval), against the fake Sortie and the fake GitHub.
-The deployer stands in for the kit's deploy command."""
+(agent-platform/run-supervision#A UI is approved as a prototype, and the
+built story merges after its review), against the fake Sortie and the fake
+GitHub. The deployer stands in for the kit's deploy command."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ import pytest
 
 from tests.workbench.fake_github import FakeGitHub
 from tests.workbench.fake_sortie import FakeSortie
-from workbench.preview import (MARKER, CommandDeployer, PreviewError, PreviewSync, Settings, preview_address,
-                               read_previews, write_previews)
+from workbench.preview import (CLICK_PROOFS, MARKER, CommandDeployer, PreviewError, PreviewSync, Settings,
+                               click_proofs_record, preview_address, read_previews, write_previews)
 
 REPO = "ortusnova/agentic-orchestration"
 PULL = f"{REPO}#80"
@@ -79,7 +79,10 @@ def test_a_reviewed_green_pull_request_is_deployed_and_its_address_commented(tmp
     address = "https://workbench-t-1.ortus.example/"
     assert kit.deployer.calls == [("up", "T-1", "sortie/T-1", "1" * 40, 8800, address)]
     [comment] = kit.kit_comments()
-    assert address in comment["body"]
+    assert address in comment["body"] and "1" * 40 in comment["body"]
+    # It starts the review on the preview, and asks no one to approve or merge.
+    assert CLICK_PROOFS in comment["body"] and "approve" not in comment["body"]
+    assert click_proofs_record(comment["body"]) is None
     assert record["T-1"]["url"] == address and record["T-1"]["pull"] == PULL and record["T-1"]["plan_key"] == KEY
     # The live workbench reads the record.
     assert read_previews(kit.record)["T-1"]["url"] == address
@@ -148,8 +151,12 @@ def test_the_preview_follows_the_branch(tmp_path):
 
     assert kit.deployer.calls[-1] == ("up", "T-1", "sortie/T-1", "2" * 40, 8800, "https://workbench-t-1.ortus.example/")
     assert record["T-1"]["sha"] == "2" * 40
-    # The address did not change, so the pull request gets no second comment.
-    assert len(kit.kit_comments()) == 1
+    # The new head gets its own comment, which starts the review on it.
+    first, second = kit.kit_comments()
+    assert "1" * 40 in first["body"] and "2" * 40 in second["body"]
+    assert "https://workbench-t-1.ortus.example/" in second["body"] and record["T-1"]["commented"] == "2" * 40
+    kit.run()
+    assert len(kit.kit_comments()) == 2
 
 
 # Scenario: The operator is satisfied. The merge takes the preview down.
@@ -207,11 +214,60 @@ def test_a_failed_deploy_is_tried_again_next_pass(tmp_path):
 def test_a_comment_already_on_the_pull_request_is_not_repeated(tmp_path):
     kit = Kit(tmp_path)
     kit.open_pull()
-    kit.github.say(PULL, f"{MARKER}\nPreview of T-1: https://workbench-t-1.ortus.example/", login="kit")
+    kit.github.say(PULL, f"{MARKER}\nPreview of T-1 at `{'1' * 40}`: https://workbench-t-1.ortus.example/", login="kit")
 
     kit.run()
 
-    assert len(kit.kit_comments()) == 1 and read_previews(kit.record)["T-1"]["commented"] is True
+    assert len(kit.kit_comments()) == 1 and read_previews(kit.record)["T-1"]["commented"] == "1" * 40
+
+
+# Scenario: A built UI story. The review on the preview records its
+# click-proofs for the head, which Sortie waits for; the record keeps it, so
+# the workbench shows the story as merging.
+def test_the_click_proofs_record_for_the_head_is_kept_with_the_preview(tmp_path):
+    kit = Kit(tmp_path)
+    kit.open_pull()
+    kit.run()
+    assert read_previews(kit.record)["T-1"]["click_proofs"] is None
+
+    kit.github.say(PULL, f"Clicked every action on the preview.\n\n`{CLICK_PROOFS} {'1' * 12}`")
+    record = kit.run()
+
+    assert record["T-1"]["click_proofs"] == "1" * 40
+    assert read_previews(kit.record)["T-1"]["click_proofs"] == "1" * 40
+
+    # A fix pushed after the click-proofs needs them again.
+    kit.node.update(state="In Progress", runtime={"status": "running"})
+    kit.github.push(PULL, "2" * 40)
+    record = kit.run()
+    assert record["T-1"]["click_proofs"] is None and record["T-1"]["sha"] == "1" * 40
+
+
+@pytest.mark.parametrize("body,login,kind", [
+    (f"{CLICK_PROOFS} {'9' * 40}", "operator", "User"),  # another commit's
+    (f"{CLICK_PROOFS} {'1' * 40}", "github-actions[bot]", "Bot"),  # a bot's, which Sortie does not read
+    (f"{CLICK_PROOFS} 111", "operator", "User"),  # too short a prefix
+    (f"Run the click-proofs, then: {CLICK_PROOFS} {'1' * 40}", "operator", "User"),  # not a line of its own
+])
+def test_what_is_not_a_click_proofs_record_for_the_head(tmp_path, body, login, kind):
+    kit = Kit(tmp_path)
+    kit.open_pull()
+    kit.run()
+    kit.github.say(PULL, body, login=login)
+    kit.github.comments[PULL][-1]["user"]["type"] = kind
+
+    assert kit.run()["T-1"]["click_proofs"] is None
+
+
+@pytest.mark.parametrize("body,want", [
+    (f"{CLICK_PROOFS} ABCDEF1", "abcdef1"),
+    (f"> **{CLICK_PROOFS} abcdef1234.**", "abcdef1234"),
+    (f"notes\n  `{CLICK_PROOFS} abcdef1`  \nmore", "abcdef1"),
+    (f"{CLICK_PROOFS} not-a-sha", None),
+    ("sortie:click-proofs failed abcdef1", None),
+])
+def test_a_click_proofs_record_is_read_as_sortie_reads_it(body, want):
+    assert click_proofs_record(body) == want
 
 
 def test_each_preview_gets_its_own_port(tmp_path):

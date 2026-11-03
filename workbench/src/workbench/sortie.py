@@ -121,6 +121,12 @@ class SortieClient:
         """The agent events Sortie kept of one run, oldest first."""
         return await self._request("GET", f"/api/v1/runs/{quote(dispatch_id, safe='')}/events")
 
+    async def runs(self, *, since: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Finished runs, newest first: those that started at ``since`` or
+        later, of ``status`` only when given."""
+        params = {"limit": str(limit), **({"since": since} if since else {}), **({"status": status} if status else {})}
+        return await self._request("GET", "/api/v1/runs", params=params)
+
     def bind(self, project: str, name: str = "sortie") -> "ProjectSortie":
         return ProjectSortie(self, project, name)
 
@@ -178,3 +184,6 @@ class ProjectSortie:
 
     async def run_events(self, dispatch_id: str) -> dict[str, Any]:
         return await self.client.run_events(dispatch_id)
+
+    async def runs(self, *, since: str | None = None, status: str | None = None, limit: int = 50) -> dict[str, Any]:
+        return await self.client.runs(since=since, status=status, limit=limit)

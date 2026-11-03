@@ -3,8 +3,9 @@
 # source), so it never needs a restart for it. nono holds the same token for
 # the edge's egress flow and reads it only at start, and an OAuth login's
 # token lasts hours. So every 10 minutes (ortus-stage0-token.timer): when a
-# fresher token exists and nono's expires within 90 minutes, restart nono
-# alone, but only while no agent runs, so no session's egress is cut off.
+# fresher token exists and nono's expires within 90 minutes, restart both
+# nonos (the kit's and the live-proof one) alone, but only while no agent
+# runs, so no session's egress is cut off.
 # Once nono's token has expired, no egress can work with it, so it restarts
 # at once. A `claude setup-token` token never needs this.
 set -euo pipefail
@@ -29,4 +30,4 @@ if (( running <= now )); then
 else
   echo "restarting nono onto a fresher Claude token" >&2
 fi
-systemctl --user restart ortus-stage0-nono.service
+systemctl --user restart ortus-stage0-nono.service ortus-stage0-nono-live-proof.service

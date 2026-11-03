@@ -250,6 +250,27 @@ func TestResultWithoutIssueBranch(t *testing.T) {
 	}
 }
 
+// The agent's .sortie/status and a review's .sortie/criteria.json are
+// returned beside pr, so a review that stops blocked or finds a
+// criterion not met in the machine reaches Sortie; a run that wrote
+// neither leaves both parts out.
+func TestResultCarriesTheStatusAndCriteria(t *testing.T) {
+	const verdict = `{"criteria": [{"criterion": "the chain ends DONE", "verdict": "not-met", "evidence": "seed-vm-recreate timed out"}]}`
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, map[string]string{"AGENT_STATUS": "blocked\nWhich host list?\n", "AGENT_CRITERIA": verdict})
+	res := resultOf(t, h)
+	if string(res.Status) != "blocked\nWhich host list?\n" || string(res.Criteria) != verdict || string(res.PR) != testPR {
+		t.Errorf("status %q, criteria %q, pr %q; want the agent's files", res.Status, res.Criteria, res.PR)
+	}
+
+	h = newHarness(t, defaults())
+	h.offer("ONS-8", 1, nil)
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-8", 1) > 0 })
+	if res, ok := h.fake.Result("ONS-8", 1); !ok || res.Status != nil || res.Criteria != nil {
+		t.Errorf("result = %+v, %v; want no status and no criteria part", res, ok)
+	}
+}
+
 // The X frame carries the agent's exit status, a failure too, and the
 // result is still returned before the failure report.
 func TestExitStatusOnTheStream(t *testing.T) {
@@ -302,6 +323,29 @@ func TestMemoryBelowTheReserve(t *testing.T) {
 	}
 	if d.RunSlots != 1 || d.Running != 0 || d.OS != "linux" || len(d.Backends) != 1 || d.Backends[0] != "smolvm" {
 		t.Errorf("declaration = %+v", d)
+	}
+}
+
+// Scenario: the slots follow the host. Without run_slots the daemon
+// declares the slots the host's CPUs and memory hold, from the snapshot
+// of each check-in, so a host that loses memory declares fewer at its
+// next check-in; free memory is still the host's MemAvailable.
+func TestSlotsFollowTheHost(t *testing.T) {
+	s := defaults()
+	s.autoSlots = true
+	s.reserveMem = 8
+	s.smallest = config.Size{CPU: 4, MemGiB: 8, DiskGiB: 20}
+	s.host.CPUs, s.host.MemTotalGiB, s.host.MemAvailableGiB = 32, 64, 30
+	h := newHarness(t, s)
+	h.waitFor("a check-in", 5*time.Second, func() bool { _, ok := h.fake.Declaration("taichi"); return ok })
+	d, _ := h.fake.Declaration("taichi")
+	if d.RunSlots != 7 || d.Free.MemGiB != 22 {
+		t.Errorf("run_slots %d, free.mem_gib %g; want 7 slots and MemAvailable less the reserve, 22", d.RunSlots, d.Free.MemGiB)
+	}
+	less := s.host
+	less.MemTotalGiB = 40
+	if got := h.d.Declaration(less).RunSlots; got != 4 {
+		t.Errorf("with 40 GiB the daemon declares %d slots, want 4", got)
 	}
 }
 
