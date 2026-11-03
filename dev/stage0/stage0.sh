@@ -209,7 +209,16 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+# shellcheck source=unit-restart.sh
+. "$KIT/unit-restart.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
+# The worker daemon's machines carry the runs: it restarts only when its
+# source, its configuration or its unit changed (unit-restart.sh). Its
+# source, not its binary, which Go stamps with the kit's commit.
+restart_worker() {
+  restart_changed ortus-stage0-worker.service "$ROOT/worker-daemon" \
+    "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service"
+}
 
 # The pack is built again when its inputs change (the kit's pack/,
 # smol-builder's source, which embeds its layers, and smolvm), so a merged
@@ -271,7 +280,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
   fi
   systemctl --user enable -q ortus-stage0-worker.service
-  systemctl --user restart ortus-stage0-worker.service
+  restart_worker
   sleep 2
   systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT/" || true)
@@ -420,11 +429,19 @@ systemctl --user enable -q --now ortus-stage0-token.timer
 systemctl --user enable -q --now ortus-stage0-store.timer
 # The ui stories' previews follow their pull requests (run-previews.sh).
 systemctl --user enable -q --now ortus-stage0-previews.timer
+# Sortie restarts at once, whatever runs: it re-adopts each run whose lease a
+# worker still holds (spec store agent-platform/run-supervision). nono, the
+# edge and the worker daemon carry the runs, so each restarts only when what
+# it runs changed (unit-restart.sh): a kit change that leaves them as they
+# are cuts no run's egress, stream or machine.
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
-systemctl --user restart ortus-stage0-nono.service ortus-stage0-edge.service
+restart_changed ortus-stage0-nono.service "$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" \
+  "$KIT/anthropic-token.py" "$KIT/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" \
+  "$STAGE0_HOME/github-token" "$ENV_FILE" "$UNITS/ortus-stage0-nono.service"
+restart_changed ortus-stage0-edge.service "$KIT/edge" "$STAGE0_HOME/edge.json" "$UNITS/ortus-stage0-edge.service"
 for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
-systemctl --user restart ortus-stage0-worker.service
+restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
