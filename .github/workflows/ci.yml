@@ -90,6 +90,32 @@ jobs:
       - run: make -C workbench lint
       - run: make -C workbench wheel
 
+  stage0:
+    name: Stage-0 kit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    env:
+      # test-review-gate.sh builds against the sortie/ submodule; with it
+      # checked out the test must run, not skip. test-egress-live.sh needs
+      # nono and api.anthropic.com on p1: `make test` leaves it to test-live.
+      STAGE0_TEST_NO_SKIP: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "*/go.sum"
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          install-only: true
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends shellcheck jq
+      - run: make -C dev/stage0 test
+      - run: make -C dev/stage0 lint
+
   repo:
     name: Licenses and specs
     runs-on: ubuntu-26.04
