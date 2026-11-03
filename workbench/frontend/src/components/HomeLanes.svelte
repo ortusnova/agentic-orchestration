@@ -3,7 +3,7 @@
     ACTION_TEXT, boxGeometry, capacityText, duration, hourTicks, laneText, laneWindow, missingText, WORKER_VERDICT_TEXT,
     type Lanes, type Missing, type Reason, type Stuck, type Worker,
   } from "../lib/fleet";
-  import { VERDICT_TEXT, type Health, type HomeQuestion } from "../lib/home";
+  import { VERDICT_TEXT, waitWhat, type Health, type HomeQuestion } from "../lib/home";
   import { graphHref, watchHref, workersHref } from "../lib/router";
   import QuestionBox from "./QuestionBox.svelte";
 
@@ -41,6 +41,8 @@
   const tone = $derived(!verdict ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
   const word = (v: string | null) => (!v ? "No verdict" : (VERDICT_TEXT as Record<string, string>)[v] ?? v);
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
+  // What the released stories wait on while slots are free, and who acts on each.
+  const waits = $derived(health?.reasons.some((r) => r.code === "waiting") ? (health?.waits ?? []) : []);
 
   // The stuck box whose action is open in place: its key and what it does.
   let open: { key: string; kind: "answer" | "sessions" } | null = $state(null);
@@ -127,6 +129,13 @@
         </li>
       {/each}
     </ul>
+    {#if waits.length}
+      <ul class="waits" aria-label="What the stories wait on">
+        {#each waits as w (w.kind + (w.pr?.ref ?? w.stories[0]?.key))}
+          <li data-wait={w.kind}>{#if w.pr}{#if w.pr.url}<a href={w.pr.url} target="_blank" rel="noreferrer">{w.pr.ref}</a>{:else}{w.pr.ref}{/if}{" "}{/if}{waitWhat(w)}, for {#each w.stories as s, i (s.key)}{i === 0 ? "" : i === w.stories.length - 1 ? " and " : ", "}<a href={storyHref(s.key)}>{s.key}</a>{/each}: <b data-who>{w.who}</b> {w.does}</li>
+        {/each}
+      </ul>
+    {/if}
   </div>
   {#if note}<p class="ok-note" role="status">{note}</p>{/if}
   {#each missingBySortie as [name, ms] (name)}
@@ -207,6 +216,9 @@
   .reasons li span { min-width: 0; overflow-wrap: anywhere; }
   .reasons li.ask span { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .reasons a { color: inherit; }
+  .waits { grid-column: 2; padding-left: 16px; font-size: 12.5px; color: #6f1c16; }
+  .waits a { color: inherit; }
+  .waits b { font-weight: 600; }
   .ok-note { margin-top: 8px; font-size: 12.5px; color: var(--done); }
   .missing { margin-top: 8px; font-size: 12px; color: var(--amber-ink); }
 

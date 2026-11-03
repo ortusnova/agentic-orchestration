@@ -28,13 +28,13 @@ The top of the home SHALL be a timeline across the page from the first milestone
 ### Requirement: Execution health
 The home SHALL show a verdict on whether the agents will stay busy, the first that applies of:
 
-1. **stuck**: Sortie is unreachable, the last sync failed, or a run is held;
+1. **stuck**: Sortie is unreachable, the last sync failed, a run is held, or an agent slot is free while no released story is ready and released stories wait on reviews, merges, deploys, questions or held budgets;
 2. **done**: no planned story is left to run;
 3. **idle now**: an agent slot is free and no released, unstarted story waits;
 4. **will idle**: every slot is busy and fewer released, unstarted stories wait than there are slots;
 5. **healthy**: every slot is busy and at least as many released, unstarted stories wait as there are slots.
 
-With the verdict it SHALL show its reasons (each held run and why, the failed sync and why, or the free slots against the stories waiting), the agent slots in use and free, the stories running, and the runway: the count of released, unstarted stories, beside the slot count. Agent slots SHALL be Sortie's concurrency cap.
+With the verdict it SHALL show its reasons (each held run and why, the failed sync and why, how many stories wait on how many of each thing, or the free slots against the stories waiting), the agent slots in use and free, the stories running, and the runway: the count of released, unstarted stories, beside the slot count. Agent slots SHALL be Sortie's concurrency cap.
 
 #### Scenario: Free slots and nothing ready
 - **WHEN** Sortie runs 3 agents at most, none is running, and no released story waits
@@ -43,6 +43,10 @@ With the verdict it SHALL show its reasons (each held run and why, the failed sy
 #### Scenario: A held run
 - **WHEN** a run is held on a permission request
 - **THEN** the verdict is "stuck", naming that story and "permission request"
+
+#### Scenario: Every story waits on a review
+- **WHEN** 3 slots are free and 6 released stories wait on 5 open pull requests
+- **THEN** the verdict is "stuck", with the reason "6 stories wait on 5 pull requests in review", each pull request with the stories that wait on it and who acts on it
 
 #### Scenario: Healthy
 - **WHEN** 3 slots are busy and 4 released stories wait

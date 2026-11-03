@@ -247,3 +247,12 @@ def test_a_story_parked_for_a_failure_is_not_said_to_ask():
                "statement": "push sortie/ONS-50: branch moved upstream"}]
     s = worker(build_fleet([("p1", p1_state(parked=parked), None)], NODES, now=NOW), "p1")["stuck"][0]
     assert s["reason"] == "stopped (repeated failure): push sortie/ONS-50: branch moved upstream" and s["action"] == "answer"
+
+
+def test_the_lanes_keep_what_released_stories_wait_on_beside_a_stuck_worker():
+    parked = [{"issue_identifier": "ONS-50", "reason": "agent_blocked", "parked_at": iso(NOW - 10), "statement": "Which disk?"}]
+    fleet = build_fleet([("p1", p1_state(parked=parked), None)], NODES, now=NOW)
+    health = {"verdict": "stuck", "reasons": [{"code": "waiting", "text": "2 stories wait on 1 pull request in review"}]}
+    summary = lanes_summary(fleet, health)
+    assert summary["verdict"] == "stuck"
+    assert [r["code"] for r in summary["reasons"]] == ["question", "waiting"]

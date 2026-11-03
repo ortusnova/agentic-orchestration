@@ -558,8 +558,9 @@ def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[
             for r in w["reasons"]:
                 reasons.append({**r, "worker": w["name"], "text": f"{w['name']} {r['text']}"})
     for r in (health or {}).get("reasons") or []:
-        # Sortie and sync failures are the project's; the held runs the lanes already say.
-        if r.get("code") in ("sync_failed", "state_unavailable") or (r.get("code") == "sortie_unreachable" and not fleet.get("sorties")):
+        # Sortie and sync failures are the project's, and so are the stories
+        # that wait on people while slots are free; the held runs the lanes already say.
+        if r.get("code") in ("sync_failed", "state_unavailable", "waiting") or (r.get("code") == "sortie_unreachable" and not fleet.get("sorties")):
             reasons.append({**r, "worker": None, "identifier": None, "action": None})
     busy = sum(w["busy"] for w in workers)
     slots = sum(w["slots"] for w in workers if w["slots_known"]) or None

@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import Harness from "./HomeHarness.svelte";
 import { graph, synced } from "./fixtures";
 import {
-  changedStories, mapShare, slackText, slackWidth, visualSpans,
-  type HomeDoc, type HomeMilestone, type NotReadyItem,
+  changedStories, mapShare, slackText, slackWidth, visualSpans, waitWhat,
+  type Health, type HomeDoc, type HomeMilestone, type NotReadyItem, type Wait, type WaitKind,
 } from "../src/lib/home";
+import waitingOnReview from "./fixtures/waiting-on-review.json";
 import { parseRoute } from "../src/lib/router";
 import type { MergedGraph } from "../src/lib/types";
 
@@ -317,6 +318,54 @@ describe("home: live", () => {
     expect(slackWidth(0)).toBeLessThan(slackWidth(1));
     expect(slackWidth(1)).toBeLessThan(slackWidth(4));
     expect(slackWidth(40)).toBe(100);
+  });
+});
+
+describe("home: waiting is reported as stuck", () => {
+  // The health the backend serves when every story waits on a review, from
+  // its scenario against the fake Sortie (tests/workbench/test_home.py).
+  const waiting = waitingOnReview as Health;
+
+  it("scenario: every story waits on a review", async () => {
+    await render(doc(homeDoc({ health: waiting })));
+    expect($("[data-verdict]")!.dataset.verdict).toBe("stuck");
+    expect(`${text("[data-verdict] .big").toLowerCase()}: ${text("[data-verdict] .reasons")}`)
+      .toBe("stuck: 6 stories wait on 5 pull requests in review");
+    const waits = $$("[data-verdict] .waits [data-wait]");
+    expect(waits).toHaveLength(5);
+    expect(waits.map((w) => w.textContent!.replace(/\s+/g, " ").trim())).toEqual(waiting.waits!.map((w) => w.text));
+    expect(waits.map((w) => w.querySelector("a")!.getAttribute("href"))).toEqual([91, 92, 93, 94].map(
+      (n) => `https://github.com/ortusnova/homelab/pull/${n}`).concat("https://github.com/ortusnova/sortie/pull/30"));
+    const shared = waits[3];
+    expect([...shared.querySelectorAll("a")].slice(1).map((a) => a.textContent)).toEqual(["ons/s4", "ons/s5"]);
+    expect(parseRoute(shared.querySelectorAll("a")[1].getAttribute("href")!)).toMatchObject({ page: "graph", view: { selected: "ons/s4" } });
+    expect(text("[data-wait] [data-who]")).toBe("a reviewer");
+    expect(text("[data-summary]")).toBe("0 of 3 slots busy");
+  });
+
+  it("names every kind of wait and who acts on it", async () => {
+    const w = (kind: WaitKind, extra: Partial<Wait>): Wait => ({
+      kind, pr: null, reason: null, stories: [{ key: `ons/${kind}`, identifier: null }], who: "a person", does: "acts", text: "", ...extra,
+    });
+    const waits = [
+      w("merge", { pr: { ref: "o/r#2", url: "https://github.com/o/r/pull/2" }, who: "a maintainer", does: "merges it" }),
+      w("deploy", { pr: { ref: "o/r#3", url: null }, who: "the operator", does: "deploys it" }),
+      w("question", { does: "answers it" }),
+      w("budget", { reason: "token budget", who: "the operator", does: "raises the budget" }),
+    ];
+    await render(doc(homeDoc({ health: { ...waiting, reasons: [{ code: "waiting", text: "4 stories wait" }], waits } })));
+    expect($$("[data-wait]").map((e) => e.textContent!.replace(/\s+/g, " ").trim())).toEqual([
+      "o/r#2 to merge, for ons/merge: a maintainer merges it",
+      "o/r#3 to deploy, for ons/deploy: the operator deploys it",
+      "a question, for ons/question: a person answers it",
+      "a held budget (token budget), for ons/budget: the operator raises the budget",
+    ]);
+    expect(waitWhat(w("hold", { reason: "permission request" }))).toBe("a held run (permission request)");
+  });
+
+  it("lists no waits when the verdict is not about them", async () => {
+    await render(doc(homeDoc({ health: { ...waiting, verdict: "healthy", reasons: [{ code: "enough", text: "A runway" }] } })));
+    expect($$("[data-wait]")).toHaveLength(0);
   });
 });
 
