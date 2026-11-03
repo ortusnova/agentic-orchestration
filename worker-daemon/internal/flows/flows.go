@@ -239,7 +239,8 @@ func (j *Job) PostUsage(ctx context.Context, u protocol.Usage) error {
 }
 
 // DialStdio opens the job's stdio stream: GET
-// /jobs/{job}/attempts/{attempt} with Upgrade: sortie-stdio/1. A ws or
+// /jobs/{job}/attempts/{attempt} with Upgrade: sortie-stdio/2, or
+// sortie-stdio/1 from a control plane that knows only that. A ws or
 // wss flow URL is dialled as http or https.
 func (j *Job) DialStdio(ctx context.Context) (*stdio.Conn, error) {
 	a := j.Flows[protocol.FlowStdio]

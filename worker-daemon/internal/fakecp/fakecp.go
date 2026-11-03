@@ -51,6 +51,10 @@ type Job struct {
 	// KeepInputOpen leaves the agent's input open after StdioInput:
 	// no C frame is sent.
 	KeepInputOpen bool
+	// AskFilesAfter, once the agent's standard output holds it, has the
+	// fake ask a sortie-stdio/2 worker for the agent's .sortie files (S),
+	// as Sortie does after a turn; on the answer (F) it closes the input.
+	AskFilesAfter string
 }
 
 type lease struct {
@@ -100,6 +104,8 @@ type attemptData struct {
 	breaks int
 	result *Result
 	usage  []protocol.Usage
+	// sortieFiles is the worker's answer to the files request.
+	sortieFiles map[string][]byte
 }
 
 // Result is what the worker returned on the bundles flow.
@@ -328,6 +334,15 @@ func (f *Fake) Result(job string, attempt int) (Result, bool) {
 		return *r, true
 	}
 	return Result{}, false
+}
+
+// SortieFiles is the worker's answer to the request for the agent's
+// .sortie files, by file name.
+func (f *Fake) SortieFiles(job string, attempt int) (map[string][]byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	files := f.data(key(job, attempt)).sortieFiles
+	return files, files != nil
 }
 
 // Usage is the latest usage the worker reported for the attempt: its
@@ -842,7 +857,7 @@ func (f *Fake) usageReport(w http.ResponseWriter, r *http.Request, job string, a
 	f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 204, Body: b})
 }
 
-// stdio upgrades to sortie-stdio/1, sends the job's StdioInput as I
+// stdio upgrades to sortie-stdio/2 (or 1), sends the job's StdioInput as I
 // frames and then C, unless KeepInputOpen, and reads the worker's O, E
 // and X frames. A stream that ends before X is broken.
 func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt int) {
@@ -885,6 +900,7 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 		f.mu.Unlock()
 		f.record(Event{Kind: "stdio-end", Job: job, Attempt: attempt})
 	}()
+	asked := false
 	for {
 		typ, payload, err := c.ReadFrame()
 		if err != nil {
@@ -892,8 +908,17 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 		}
 		f.mu.Lock()
 		switch typ {
+		case stdio.SortieFiles:
+			files := map[string][]byte{}
+			if json.Unmarshal(payload, &files) == nil {
+				a.sortieFiles = files
+			}
 		case stdio.Stdout:
 			a.stdout.Write(payload)
+			if j.AskFilesAfter != "" && !asked && c.Files() && strings.Contains(a.stdout.String(), j.AskFilesAfter) {
+				asked = true
+				_ = c.WriteFrame(stdio.SortieFilesRequest, nil)
+			}
 		case stdio.Stderr:
 			a.stderr.Write(payload)
 		case stdio.Exit:
@@ -905,6 +930,10 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 		f.record(Event{Kind: "stdio-" + string(typ), Job: job, Attempt: attempt, Body: payload})
 		if typ == stdio.Exit {
 			return
+		}
+		if typ == stdio.SortieFiles && c.Files() {
+			_ = c.WriteFrame(stdio.StdinClosed, nil)
+			continue
 		}
 		if typ != stdio.Stdout && typ != stdio.Stderr {
 			return

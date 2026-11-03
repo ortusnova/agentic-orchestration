@@ -670,7 +670,7 @@ func (j *job) runAgentOnce(ctx context.Context, m machine.Machine, conn *stdio.C
 	var broken atomic.Bool
 	stdin, stdinW := io.Pipe()
 	go func() {
-		closed, err := pumpStdin(conn, stdinW)
+		closed, err := pumpStdin(conn, stdinW, func() []byte { return j.sortieFiles(ctx, m) })
 		if !closed {
 			broken.Store(true)
 			stopAgent()
@@ -714,7 +714,9 @@ func (j *job) runAgentOnce(ctx context.Context, m machine.Machine, conn *stdio.C
 // until C, the stream's end, or a frame the control plane does not send,
 // and reports whether the input closed: C, or an agent that stopped
 // reading. A stream that ends without C is broken; the caller closes w.
-func pumpStdin(c *stdio.Conn, w *io.PipeWriter) (bool, error) {
+// On sortie-stdio/2 it answers each S frame with files, as an F frame,
+// without holding up the input.
+func pumpStdin(c *stdio.Conn, w *io.PipeWriter, files func() []byte) (bool, error) {
 	for {
 		typ, payload, err := c.ReadFrame()
 		switch {
@@ -724,6 +726,9 @@ func pumpStdin(c *stdio.Conn, w *io.PipeWriter) (bool, error) {
 			return false, err
 		case typ == stdio.StdinClosed:
 			return true, nil
+		case typ == stdio.SortieFilesRequest && c.Files():
+			go func() { _ = c.WriteFrame(stdio.SortieFiles, files()) }()
+			continue
 		case typ != stdio.Stdin:
 			return true, fmt.Errorf("unexpected stdio frame type %q from the control plane", typ)
 		}
@@ -823,6 +828,26 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 		}
 	}
 	return note, nil
+}
+
+// sortieFiles is the answer to sortie-stdio/2's S frame: the agent's
+// .sortie files the result returns, as they are now, by file name. A
+// file that cannot be read is left out, as one the agent has not written;
+// the result reads it again.
+func (j *job) sortieFiles(ctx context.Context, m machine.Machine) []byte {
+	files := map[string][]byte{}
+	for name, limit := range map[string]int{"pr.json": protocol.MaxPRFile, "status": protocol.MaxStatusFile, "criteria.json": protocol.MaxCriteriaFile} {
+		data, err := j.readSortieFile(ctx, m, name, limit)
+		if err != nil {
+			j.log.Warn("a .sortie file asked for between turns is left out", slog.String("file", name), slog.String("error", err.Error()))
+			continue
+		}
+		if data != nil {
+			files[name] = data
+		}
+	}
+	b, _ := json.Marshal(files)
+	return b
 }
 
 // readSortieFile returns the agent's .sortie/<name>, or nil when it
