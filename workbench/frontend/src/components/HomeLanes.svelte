@@ -39,6 +39,7 @@
   const ticks = $derived(hourTicks(win, now));
   const nowAt = $derived(boxGeometry(now, now, win).left);
   // Waiting on the supervisor asks nothing of the operator: no alarm colour.
+  // Full is Sortie's cap at work, every agent it allows busy: no alarm either.
   const tone = $derived(!verdict || verdict === "waiting" ? "none" : verdict === "stuck" || verdict === "idle_now" ? "alert" : verdict === "will_idle" ? "warn" : "ok");
   const word = (v: string | null) => (!v ? "No verdict" : (VERDICT_TEXT as Record<string, string>)[v] ?? v);
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
@@ -118,7 +119,7 @@
       <h2 id="lanes-h">Workers<span><a href={workersHref(slug)}>all workers</a></span></h2>
       <p class="big">{word(verdict)}</p>
       <p class="sum" data-summary>
-        {#if lanes}{`${lanes.busy}${lanes.slots != null ? ` of ${lanes.slots}` : ""} slots busy${lanes.runway != null ? ` · ${lanes.runway} ${lanes.runway === 1 ? "story" : "stories"} ready` : ""}`}
+        {#if lanes}{`${lanes.busy}${lanes.slots != null ? ` of ${lanes.slots}` : ""} slots busy${lanes.cap != null && (lanes.slots == null || lanes.cap < lanes.slots) ? ` · Sortie cap ${lanes.cap}` : ""}${lanes.runway != null ? ` · ${lanes.runway} ${lanes.runway === 1 ? "story" : "stories"} ready` : ""}`}
         {:else if health?.slots != null}{health.busy} of {health.slots} slots busy{/if}
       </p>
     </div>

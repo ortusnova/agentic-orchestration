@@ -166,6 +166,9 @@ class _Worker:
         self.waits: list[dict[str, Any]] = []
         self.reasons: list[dict[str, Any]] = []
         self.draining: dict[str, Any] | None = None
+        # Its Sortie's cap on agents at once, every worker's together:
+        # {"limit", "running"}, or None when the Sortie does not report it.
+        self.cap: dict[str, int] | None = None
         # Whether its Sortie serves its use, its unmanaged machines and its jobs' steps.
         self.known = {"use": used is not None, "unmanaged": unmanaged is not None, "steps": True}
 
@@ -230,6 +233,25 @@ def _workers_of(name: str, state: dict[str, Any], now: float) -> list[_Worker]:
                     last_seen=ts(state.get("generated_at")) or now, unmanaged=host.get("unmanaged"))]
 
 
+def _cap_of(state: dict[str, Any], running: list[dict[str, Any]]) -> dict[str, int] | None:
+    """A Sortie's cap on agents at once and how many run now, every
+    project's and worker's together, as its dispatch counts them."""
+    limit = ((state.get("config") or {}).get("agent") or {}).get("max_concurrent_agents")
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+        return None
+    return {"limit": limit, "running": len(running)}
+
+
+def _cap_room(cap: dict[str, int] | None) -> int | None:
+    """How many more agents a Sortie's cap lets start; None when unknown."""
+    return None if cap is None else max(0, cap["limit"] - cap["running"])
+
+
+def _cap_text(n: int, cap: dict[str, int]) -> str:
+    return (f"{_plural(n, 'story', 'stories')} wait for a slot: Sortie runs {cap['running']} agents, "
+            f"its cap of {cap['limit']} at once (agent.max_concurrent_agents)")
+
+
 def _pick(workers: list[_Worker], name: str | None) -> _Worker:
     if name:
         for w in workers:
@@ -269,9 +291,12 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             sorties.append({"name": name, "reachable": False, "error": error, "missing": []})
             continue
         missing = missing_fields(state)
-        sorties.append({"name": name, "reachable": True, "error": None, "missing": missing})
-        mine = _workers_of(name, state, now)
         running = [r for r in state.get("running") or [] if isinstance(r, dict)]
+        cap = _cap_of(state, running)
+        sorties.append({"name": name, "reachable": True, "error": None, "missing": missing, "cap": cap})
+        mine = _workers_of(name, state, now)
+        for w in mine:
+            w.cap = cap
         if running and not any(r.get("step") for r in running):
             for w in mine:
                 w.known["steps"] = False
@@ -383,9 +408,13 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
                                     "kind": "drain", "reason": x.get("reason") or "waits for the host to drain",
                                     "release": x.get("release") or None, "since": ts(x.get("since"))})
                     continue
-            w.waits.append({**stories.ref(ident), "sortie": name, "kind": x.get("kind") or "slot",
-                            "reason": x.get("reason") or x.get("reason_text") or _words(x.get("kind")),
-                            "release": x.get("release") or x.get("release_text") or None, "since": ts(x.get("since"))})
+            kind = x.get("kind") or "slot"
+            # A slot wait that names no worker waits for any of them, as a
+            # queued job does: each worker's free lane could take it.
+            for t in mine if kind == "slot" and not x.get("worker") else [w]:
+                t.waits.append({**stories.ref(ident), "sortie": name, "kind": kind,
+                                "reason": x.get("reason") or x.get("reason_text") or _words(x.get("kind")),
+                                "release": x.get("release") or x.get("release_text") or None, "since": ts(x.get("since"))})
         for h in [] if served_waits else state.get("held") or []:
             ident = h.get("issue_identifier")
             hold = h.get("hold") or {}
@@ -527,10 +556,15 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
                         "text": f"{s['label']} {s['reason']}", "action": s["action"]})
     slot_waits = [x for x in w.waits if x["kind"] == "slot"]
     idle_lanes = [lane for lane in lanes if lane["job"] is None and lane["stuck"] is None and not lane["extra"]]
-    if slot_waits and idle_lanes and not w.draining:
+    # A free lane takes a story only while its Sortie's cap has room: at
+    # the cap the stories wait on the cap, not on a stuck worker.
+    room = _cap_room(w.cap)
+    free_slots = len(idle_lanes) if room is None else min(len(idle_lanes), room)
+    capped = bool(slot_waits and idle_lanes and room == 0 and not w.draining)
+    if slot_waits and free_slots and not w.draining:
         reasons.append({"code": "slot_idle", "identifier": slot_waits[0]["identifier"], "key": slot_waits[0]["key"],
                         "text": f"{_plural(len(slot_waits), 'story', 'stories')} wait for a slot while "
-                                f"{_plural(len(idle_lanes), 'slot')} {'is' if len(idle_lanes) == 1 else 'are'} free", "action": "story"})
+                                f"{_plural(free_slots, 'slot')} {'is' if free_slots == 1 else 'are'} free", "action": "story"})
     if reasons:
         verdict = "stuck"
     elif w.draining:
@@ -546,6 +580,9 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         verdict = "idle"
         reasons.append({"code": "idle", "identifier": None, "key": None, "action": None,
                         "text": "nothing runs and nothing waits" if not w.waits else f"nothing runs; {_plural(len(w.waits), 'item')} waiting"})
+    if capped and verdict != "stuck" and w.cap is not None:
+        reasons.append({"code": "cap_full", "identifier": None, "key": None, "action": None,
+                        "text": _cap_text(len(slot_waits), w.cap)})
     order = {"slot": 0, "capability": 1, "live_proof": 2, "supervisor": 3, "drain": 4}
     waits = sorted(w.waits, key=lambda x: (order.get(x["kind"], 9), x["since"] or 0.0, x["identifier"] or ""))
     nxt = [x for x in waits if x["kind"] in ("slot", "live_proof") and x["identifier"]]
@@ -562,6 +599,7 @@ def _worker_doc(w: _Worker, now: float) -> dict[str, Any]:
         "capacity": w.capacity, "used": w.used,
         "verdict": verdict, "reasons": reasons, "lanes": lanes, "jobs": jobs, "stuck": sorted(w.stuck, key=lambda s: s["slot"] or 99),
         "waits": waits, "next": nxt[:3], "unmanaged": unmanaged, "draining": w.draining, "known": dict(w.known),
+        "capped": capped,
     }
 
 
@@ -586,13 +624,27 @@ def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[
             reasons.append({**r, "worker": None, "identifier": None, "action": None})
     busy = sum(w["busy"] for w in workers)
     slots = sum(w["slots"] for w in workers if w["slots_known"]) or None
+    # A Sortie at its cap with stories waiting for a slot is full: the cap
+    # holds them, not a stuck worker, even where a worker's lane is free.
+    full = []
+    for s in fleet.get("sorties") or []:
+        cap = s.get("cap")
+        waiting = {x["identifier"] for w in workers if w["sortie"] == s["name"] for x in w["waits"] if x["kind"] == "slot"}
+        if s["reachable"] and cap and _cap_room(cap) == 0 and waiting:
+            full.append({"code": "cap_full", "text": f"{s['name']}: " + _cap_text(len(waiting), cap),
+                         "worker": None, "key": None, "identifier": None, "action": None})
     if reasons:
         verdict = "stuck"
+    elif full:
+        verdict = "full"
+        reasons = full + [{**r, "worker": None, "identifier": None, "action": None} for r in (health or {}).get("reasons") or []
+                          if r.get("code") not in ("enough", "short", "idle")]
     else:
         verdict = (health or {}).get("verdict") or ("healthy" if busy else None)
         reasons = [{**r, "worker": None, "identifier": None, "action": None} for r in (health or {}).get("reasons") or []]
     missing = [{**m, "sortie": s["name"]} for s in fleet.get("sorties") or [] for m in s.get("missing") or []]
-    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots, "missing": missing,
+    caps = [s["cap"]["limit"] for s in fleet.get("sorties") or [] if s.get("cap")]
+    return {"verdict": verdict, "reasons": reasons, "busy": busy, "slots": slots, "cap": sum(caps) if caps else None, "missing": missing,
             "runway": (health or {}).get("runway"), "generated_at": fleet.get("generated_at")}
 
 

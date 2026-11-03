@@ -29,7 +29,7 @@ export interface HomeMilestone {
   progress: MilestoneProgress;
 }
 
-export type Verdict = "stuck" | "done" | "idle_now" | "will_idle" | "healthy" | "waiting";
+export type Verdict = "stuck" | "full" | "done" | "idle_now" | "will_idle" | "healthy" | "waiting";
 
 export interface Health {
   /** Null when the sources cannot support a verdict. */
@@ -179,6 +179,7 @@ export const REASON_TEXT: Record<Reason, string> = {
 
 export const VERDICT_TEXT: Record<Verdict, string> = {
   stuck: "Stuck",
+  full: "Full",
   done: "Done",
   idle_now: "Idle now",
   will_idle: "Will idle",

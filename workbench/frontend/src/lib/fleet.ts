@@ -118,6 +118,8 @@ export interface Worker {
   draining: { reason: string | null; since: number | null } | null;
   /** Whether its Sortie serves its use, its unmanaged machines and its jobs' steps; absent from an older backend. */
   known?: { use: boolean; unmanaged: boolean; steps: boolean };
+  /** Whether stories wait for a slot while its lanes are free because its Sortie's cap is reached; absent from an older backend. */
+  capped?: boolean;
 }
 
 export interface Pull extends StoryRef {
@@ -138,7 +140,7 @@ export interface Missing { field: string; text: string; sortie?: string }
 
 export interface Fleet {
   generated_at?: number;
-  sorties: { name: string; reachable: boolean; error: string | null; missing?: Missing[] }[];
+  sorties: { name: string; reachable: boolean; error: string | null; missing?: Missing[]; cap?: { limit: number; running: number } | null }[];
   workers: Worker[];
   pulls: Pull[];
   error?: string;
@@ -150,6 +152,8 @@ export interface Lanes {
   reasons: Reason[];
   busy: number;
   slots: number | null;
+  /** Sortie's cap on agents at once, every worker's together; absent from an older backend. */
+  cap?: number | null;
   runway: number | null;
   missing?: Missing[];
   generated_at?: number;

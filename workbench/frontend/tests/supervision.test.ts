@@ -395,3 +395,57 @@ describe("the lanes' geometry and words", () => {
     expect([duration(40), duration(1500), duration(7200), duration(null)]).toEqual(["40 s", "25 min", "2.0 h", "—"]);
   });
 });
+
+describe("Scenario: Sortie's agent cap is reached", () => {
+  /** p1's one Sortie, cap 3: three jobs on p1, taichi's two lanes free, two stories waiting for a slot,
+   * as the backend serves it (tests/workbench/test_agent_cap.py). */
+  function capped(cap: number): Fleet {
+    const jobs = ["ONS-34", "ONS-52", "ONS-48"].map((id, i) => job(id, `homelab/j${i}`, { sortie: "p1", worker: "p1", slot: i + 1 }));
+    const waits: Wait[] = ["ONS-70", "ONS-71"].map((id) => ({ ...ref(id, `agentic/${id}`), sortie: "p1", kind: "slot",
+      reason: `No free agent slot: 3 of ${cap} running`, release: "Released when a running session ends.", since: NOW - 30 }));
+    const full = cap === 3;
+    const taichiReason = full
+      ? { code: "cap_full", text: "2 stories wait for a slot: Sortie runs 3 agents, its cap of 3 at once (agent.max_concurrent_agents)", identifier: null, key: null, action: null }
+      : { code: "slot_idle", text: "2 stories wait for a slot while 2 slots are free", identifier: "ONS-70", key: "agentic/ONS-70", action: "story" as const };
+    return {
+      generated_at: NOW,
+      sorties: [{ name: "p1", reachable: true, error: null, cap: { limit: cap, running: 3 } }],
+      workers: [
+        worker("p1", { sortie: "p1", remote: true, slots: 3, busy: 3, verdict: "moving", jobs, waits, next: waits,
+          reasons: [{ code: "moving", text: "3 jobs running in 3 slots, 2 items waiting", identifier: null, key: null, action: null }],
+          lanes: jobs.map((j, i) => ({ slot: i + 1, job: j, stuck: null, extra: false })) }),
+        worker("taichi", { sortie: "p1", remote: true, verdict: full ? "idle" : "stuck", waits, next: waits, capped: full, reasons: [taichiReason] }),
+      ],
+      pulls: [],
+    };
+  }
+  function doc(cap: number): MergedGraph {
+    const f = capped(cap);
+    const full = cap === 3;
+    const reasons = full
+      ? [{ code: "cap_full", text: "p1: 2 stories wait for a slot: Sortie runs 3 agents, its cap of 3 at once (agent.max_concurrent_agents)", identifier: null, key: null, action: null }]
+      : [{ code: "slot_idle", text: "taichi 2 stories wait for a slot while 2 slots are free", identifier: "ONS-70", key: "agentic/ONS-70", action: "story" as const }];
+    const home = { ...homeDoc(f), questions: [], lanes: { verdict: full ? "full" : "stuck", reasons, busy: 3, slots: 5, cap, runway: 2, generated_at: NOW, workers: f.workers } };
+    return graph([synced("homelab"), synced("homelab/question")], [], { home, fleet: f });
+  }
+
+  it("reads full, not stuck, with the cap as the reason", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: doc(3) } });
+    await settle();
+    expect($("[data-verdict]")!.dataset.verdict).toBe("full");
+    expect(text("[data-verdict] .big")).toBe("Full");
+    expect($("[data-verdict]")!.classList.contains("alert")).toBe(false);
+    expect(text("[data-summary]")).toBe("3 of 5 slots busy · Sortie cap 3 · 2 stories ready");
+    expect(text("[data-verdict] .reasons")).toContain("its cap of 3 at once");
+    expect($("[data-worker='taichi']")!.dataset.workerVerdict).toBe("idle");
+  });
+
+  it("reads stuck when a slot under the cap is free and work waits", async () => {
+    app = mount(HomeHarness, { target: document.body, props: { initial: doc(16) } });
+    await settle();
+    expect(text("[data-verdict] .big")).toBe("Stuck");
+    expect($("[data-verdict]")!.classList.contains("alert")).toBe(true);
+    expect(text("[data-summary]")).toBe("3 of 5 slots busy · 2 stories ready");
+    expect(text("[data-verdict] .reasons")).toContain("2 slots are free");
+  });
+});
