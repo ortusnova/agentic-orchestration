@@ -207,6 +207,20 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    because once Sortie has the result it finishes the attempt and closes
    its flows.
 
+A restart of Sortie ends no job. When the `stdio` stream breaks before
+the control plane closed the agent's input, as it does when Sortie
+stops, the daemon keeps the machine, stops the agent, and dials the
+stream again until Sortie serves it; it then starts the agent again in
+the same `/workspace`, and the restarted Sortie resumes the agent's
+session there (Sortie's `docs/workflow-reference.md`, "A restart keeps
+the remote runs"). A failed heartbeat that is not a `409` is retried at
+the next beat. Usage and the result are sent again while Sortie answers
+`404`, `502`, `503` or `504`, or cannot be reached, until it takes them
+or the job ends, and the report while Sortie answers a `5xx` or cannot
+be reached, until the lease would have run out. A stream refused `401`,
+which a Sortie that no longer knows the job answers, ends the attempt as
+failed.
+
 When a heartbeat answers `409`, the daemon stops the machine at once,
 within the heartbeat interval, and sends no result, usage or report for
 that attempt. When the daemon is stopped (SIGTERM or SIGINT), it stops

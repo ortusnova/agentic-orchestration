@@ -361,7 +361,7 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 		case errors.Is(err, cp.ErrLeaseLost):
 			log.Warn("report refused: the lease is gone", slog.String("outcome", r.Outcome))
 			return
-		case errors.As(err, &se):
+		case errors.As(err, &se) && se.Status < 500:
 			log.Error("report refused", slog.String("error", err.Error()))
 			return
 		}
