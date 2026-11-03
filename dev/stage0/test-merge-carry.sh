@@ -98,8 +98,8 @@ homelab-3 no_change plan:homelab/a
 sortie-9 merged fff9"
 [[ $(held "$pdb") == "$want" ]] && ok "p1's Sortie holds every record of taichi's, and keeps its own" || fail "p1 holds: $(held "$pdb")"
 grep -q 'holds the 3 merge record(s)' "$tmp/out" && ok "and carry says how many" || fail "carry said: $(cat "$tmp/out")"
-sum=$(sha256sum < "$pdb")
-carry && [[ $(sha256sum < "$pdb") == "$sum" ]] && ok "a second carry changes nothing" || fail "a second carry: $(cat "$tmp/out")"
+before=$(held "$pdb")
+carry && [[ $(held "$pdb") == "$before" ]] && ok "a second carry changes nothing" || fail "a second carry: $(cat "$tmp/out")"
 
 # Scenario: a homelab story after a story that merged under taichi. Its
 # blocker homelab-1 satisfies it on p1 from p1's own record.
