@@ -23,6 +23,7 @@ src=$(cd "$src" && pwd)
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# Every test file of sortie-test/, as if it were in the orchestrator package.
 replace=
 for f in "$KIT"/sortie-test/*_test.go; do
   replace+=${replace:+,}$(printf '"%s":"%s"' "$src/internal/orchestrator/${f##*/}" "$f")

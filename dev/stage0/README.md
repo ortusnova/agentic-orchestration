@@ -22,7 +22,8 @@ dev/stage0/test-deploy.sh             # check what each kind of merge does to th
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # drain this host, apply a setup change (homelab: make dev-host), run stage0.sh, dispatch again
-dev/stage0/test-review-gate.sh        # check the review gate and the fix runs against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
+dev/stage0/test-notify-channel.sh     # check the operator's channel, with stubs
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
@@ -256,10 +257,63 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
+| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
+
+## The operator's channel
+
+Every question for a person reaches the workbench, wherever the story
+runs (p1 or a worker host such as taichi), and can reach the operator's
+channel (spec store `agent-platform/run-supervision`, "A
+person is alerted, wherever the question is held"). The channel and its
+credential are the operator's choice: any kind Sortie's notifications have.
+The channel is optional: with no `STAGE0_NOTIFY_KIND`, the default, no
+channel is configured and `stage0.sh`, `run-sortie.sh` and the workbench
+start without one.
+
+| Where | What it sends |
+| --- | --- |
+| The workflow, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
+| The workbench on p1, which reads the questions of p1's Sortie and of each other Sortie in `WORKBENCH_SORTIES` | each open question within one poll, with the story, the Sortie that holds it, and a link to the project's home on `STAGE0_WORKBENCH_PUBLIC_URL`, where it is answered; then again every 4 hours while it stays open, and never once it is answered or released |
+
+To set the channel, on p1 (a worker host runs no Sortie and needs none):
+
+1. Choose the kind in `$STAGE0_HOME/stage0.env`:
+
+   ```sh
+   STAGE0_NOTIFY_KIND=slack        # slack, discord, telegram or webhook
+   STAGE0_NOTIFY_CHAT_ID=          # telegram only: the chat id, or @channel
+   STAGE0_WORKBENCH_PUBLIC_URL=https://workbench.homelab.dev   # the links in each question
+   ```
+
+2. Write the credential, and nothing else, into `$STAGE0_HOME/notify-credential`
+   yourself; no script writes it:
+
+   ```sh
+   (umask 077; printf '%s\n' 'https://hooks.slack.com/services/…' > ~/.local/share/ortus-nova/stage0/notify-credential)
+   ```
+
+   | Kind | The file holds |
+   | --- | --- |
+   | `slack` | the incoming webhook URL |
+   | `discord` | the channel webhook URL |
+   | `telegram` | the bot's token (and `STAGE0_NOTIFY_CHAT_ID` names the chat) |
+   | `webhook` | the URL that receives Sortie's and the workbench's JSON |
+
+3. Run `dev/stage0/stage0.sh` again. It renders the entry into the
+   workflow and refuses a credential file that is missing, not yours, or
+   not mode 0600; `run-sortie.sh` and the workbench refuse it too. Sortie
+   reads it into its own environment only (`SORTIE_NOTIFY_SECRET`); the
+   workbench reads the file itself. With no `STAGE0_NOTIFY_KIND`, the
+   questions show on the workbench only, and `stage0.sh` says so.
+
+Each question names the Sortie that holds it, and an answer goes to that
+Sortie. To check it, park a story that runs on taichi: within one refresh it
+is first under **Needs a person** on the workbench, and the channel, when
+one is set, has it with the link.
 
 ## The stage-1 edge (p1)
 
