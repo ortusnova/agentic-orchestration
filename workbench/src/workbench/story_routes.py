@@ -219,7 +219,7 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
                                                           "message": f"{body.key} is not held by its session budget"})
         # Sortie grants sessions to any issue it holds; the workbench offers
         # them only to a story its session budget holds.
-        if not any(s["identifier"] == ident and s["kind"] == "budget"
+        if not any(s["identifier"] == ident and s["kind"] == "budget" and (s.get("budget") or {}).get("session_budget")
                    for w in rt.hub.fleet.get("workers") or [] for s in w.get("stuck") or []):
             raise not_held
         sortie = rt.hub.sortie_for(ident)

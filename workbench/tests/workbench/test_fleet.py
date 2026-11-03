@@ -193,7 +193,8 @@ def test_the_fields_a_sortie_does_not_serve_are_named_not_shown_empty():
 
     older = {"running": [{"issue_identifier": "ONS-34", "started_at": iso(NOW - 10)}], "config": {"agent": {"max_concurrent_agents": 2}}}
     fleet = build_fleet([("p1", older, None)], NODES, now=NOW)
-    assert [m["field"] for m in fleet["sorties"][0]["missing"]] == ["host", "running[].step", "waits", "pulls"]
+    # Sortie serves a job's step only under kind remote: on its own host there is none to miss.
+    assert [m["field"] for m in fleet["sorties"][0]["missing"]] == ["host", "waits", "pulls"]
     assert all(m["text"] for m in fleet["sorties"][0]["missing"])
     assert worker(fleet, "p1")["known"] == {"use": False, "unmanaged": False, "steps": False}
     summary = lanes_summary(fleet, None)
@@ -203,3 +204,46 @@ def test_the_fields_a_sortie_does_not_serve_are_named_not_shown_empty():
     fleet = build_fleet([("p1", remote, None)], NODES, now=NOW)
     assert [m["field"] for m in fleet["sorties"][0]["missing"]] == ["workers[].declaration.used", "workers[].declaration.unmanaged"]
     assert worker(fleet, "mac")["known"] == {"use": False, "unmanaged": False, "steps": True}
+
+
+def test_a_sortie_that_serves_waits_is_not_read_twice_from_its_holds():
+    # Sortie's waits[] already holds what held[] keeps for a slot (sortie#35).
+    held = [{"issue_identifier": "ONS-71", "hold": {"reason": "agent_slots_full", "held_since": iso(NOW - 60),
+                                                    "reason_text": "No free agent slot: 2 of 2 running"}}]
+    waits = [{"issue_identifier": "ONS-71", "worker": "taichi", "kind": "slot", "reason": "No free agent slot: 2 of 2 running",
+              "release": "Released when a running session ends.", "since": iso(NOW - 60)}]
+    t = worker(build_fleet([("taichi", taichi_state(held=held, waits=waits, pulls=[]), None)], NODES, now=NOW), "taichi")
+    assert [(x["identifier"], x["kind"]) for x in t["waits"]] == [("ONS-71", "slot")]
+    assert t["waits"][0]["release"] == "Released when a running session ends."
+    # An older Sortie, without waits[]: the hold is read instead.
+    t = worker(build_fleet([("taichi", taichi_state(held=held, pulls=[]), None)], NODES, now=NOW), "taichi")
+    assert [(x["identifier"], x["kind"]) for x in t["waits"]] == [("ONS-71", "slot")]
+
+
+def test_a_drain_sortie_serves_drains_the_worker_once():
+    paused = {"by": "operator", "reason": "deploy", "since": iso(NOW - 120)}
+    waits = [{"worker": "taichi", "kind": "drain", "reason": "dispatch is paused by operator: deploy",
+              "release": "1 run here end", "since": iso(NOW - 120)}]
+    t = worker(build_fleet([("taichi", taichi_state(dispatch_paused=paused, waits=waits, pulls=[]), None)], NODES, now=NOW), "taichi")
+    assert [x["kind"] for x in t["waits"]] == ["drain"]
+    assert t["waits"][0]["reason"] == "dispatch is paused by operator: deploy" and t["draining"]
+
+
+def test_only_a_session_budget_offers_more_sessions():
+    def budget(reason):
+        return [{"issue_identifier": "ONS-68", "reason": reason, "used_sessions": 32, "budget_sessions": 32,
+                 "exhausted_at": iso(NOW - 30), "status_text": "Token budget used"}]
+    p1 = worker(build_fleet([("p1", p1_state(budget_exhausted=budget("session_budget")), None)], NODES, now=NOW), "p1")
+    assert p1["stuck"][0]["action"] == "sessions" and p1["stuck"][0]["reason"] == "used 32 of its 32 sessions"
+    assert p1["stuck"][0]["budget"]["session_budget"] is True
+    fleet = build_fleet([("p1", p1_state(budget_exhausted=budget("token_budget")), None)], NODES, now=NOW)
+    s = worker(fleet, "p1")["stuck"][0]
+    assert s["action"] == "story" and s["budget"]["session_budget"] is False
+    assert story_states(fleet)["ONS-68"]["release"] == "a larger budget in its workflow"
+
+
+def test_a_story_parked_for_a_failure_is_not_said_to_ask():
+    parked = [{"issue_identifier": "ONS-50", "reason": "repeated_failure", "parked_at": iso(NOW - 10),
+               "statement": "push sortie/ONS-50: branch moved upstream"}]
+    s = worker(build_fleet([("p1", p1_state(parked=parked), None)], NODES, now=NOW), "p1")["stuck"][0]
+    assert s["reason"] == "stopped (repeated failure): push sortie/ONS-50: branch moved upstream" and s["action"] == "answer"

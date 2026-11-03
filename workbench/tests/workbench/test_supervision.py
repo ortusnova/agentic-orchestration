@@ -160,8 +160,11 @@ def test_more_sessions_in_p1s_lane_reach_p1s_sortie(store):
         r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
         assert r.status_code == 200, r.text
         assert r.json()["sortie"] == "p1"
-        # In Sortie's words: POST /api/v1/{identifier}/sessions takes {"add", "by"}.
-        assert p1.grants == [{"identifier": "T-3", "add": 4, "by": "Local operator"}] and taichi.grants == []
+        # In Sortie's words: POST /api/v1/{identifier}/sessions takes {"add", "by", "reason"}.
+        assert p1.grants == [{"identifier": "T-3", "add": 4, "by": "Local operator", "reason": "granted from the plan workbench"}]
+        assert taichi.grants == []
+        assert r.json()["result"] == {"issue_identifier": "T-3", "issue_id": "id-T-3", "used_sessions": 32,
+                                      "budget_sessions": 36, "granted_sessions": 4}
         # p1's Sortie runs it again: the lane is no longer stuck.
         assert workers(client)["p1"]["lanes"][0]["stuck"] is None
         rows = client.get(f"{P}/workers/T-3/messages").json()["commands"]
@@ -184,6 +187,18 @@ def test_a_story_sortie_no_longer_holds_is_not_held_by_its_budget(store):
         settle(client)
         # Sortie released it between the workbench's poll and the grant: it answers 404 issue_not_found.
         p1.budget_exhausted = []
+        r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "not_budget_held"
+        assert p1.grants == []
+
+
+def test_a_token_budget_is_not_offered_sessions(store):
+    app, p1, _ = fleet_app(store)
+    p1.budget_exhausted = [{"issue_identifier": "T-3", "reason": "token_budget", "used_sessions": 3, "budget_sessions": 32}]
+    with TestClient(app) as client:
+        sign_in(client)
+        settle(client)
+        assert node(app, "billing/b2")["run_state"]["action"] == "story"
         r = client.post(f"{P}/stories/sessions", json={"key": "billing/b2", "sessions": 4})
         assert r.status_code == 409 and r.json()["error"]["code"] == "not_budget_held"
         assert p1.grants == []
@@ -262,7 +277,7 @@ def test_a_field_a_sortie_lacks_is_named_on_the_workers_and_the_home(store):
         doc = client.get(f"{P}/workers").json()
         missing = {s["name"]: [m["field"] for m in s["missing"]] for s in doc["sorties"]}
         # p1's fake serves none of the new fields; taichi's serves them all.
-        assert missing == {"p1": ["host", "running[].step", "waits", "pulls"], "taichi": []}
+        assert missing == {"p1": ["host", "waits", "pulls"], "taichi": []}
         p1_row = next(w for w in doc["workers"] if w["name"] == "p1")
         assert p1_row["known"] == {"use": False, "unmanaged": False, "steps": False}
         lanes = client.get(f"{P}/home").json()["lanes"]

@@ -196,7 +196,9 @@ def missing_fields(state: dict[str, Any]) -> list[dict[str, str]]:
         out.append("host")
     running = [r for r in state.get("running") or [] if isinstance(r, dict)]
     leases = [x for x in (remote.get("leases") or []) if isinstance(x, dict)] if isinstance(remote, dict) else []
-    if running and not any("step" in r for r in running) and not any("step" in x for x in leases):
+    # Sortie serves a job's step only from a worker daemon's heartbeat
+    # (kind remote): on its own host there is no step to serve.
+    if listed and running and not any("step" in r for r in running) and not any("step" in x for x in leases):
         out.append("running[].step")
     for key in ("waits", "pulls"):
         if key not in state:
@@ -262,12 +264,17 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
         missing = missing_fields(state)
         sorties.append({"name": name, "reachable": True, "error": None, "missing": missing})
         mine = _workers_of(name, state, now)
-        if any(m["field"] == "running[].step" for m in missing):
+        running = [r for r in state.get("running") or [] if isinstance(r, dict)]
+        if running and not any(r.get("step") for r in running):
             for w in mine:
                 w.known["steps"] = False
         workers += mine
         leases = {l.get("job"): l for l in ((state.get("workers") or {}).get("leases") or []) if isinstance(l, dict)}
-        if isinstance(state.get("dispatch_paused"), dict):
+        # Sortie's waits[] already holds its slot holds, its queue and its
+        # drain; built again from held[], workers.queue[] and dispatch_paused
+        # they would show twice. Those are read only from a Sortie without it.
+        served_waits = isinstance(state.get("waits"), list)
+        if isinstance(state.get("dispatch_paused"), dict) and not served_waits:
             for w in mine:
                 w.draining = {"reason": state["dispatch_paused"].get("reason") or None,
                               "since": ts(state["dispatch_paused"].get("paused_at") or state["dispatch_paused"].get("since"))}
@@ -307,9 +314,12 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             where[ident] = name
             w = _pick(mine, p.get("worker"))
             q = statements.get(ident) or p.get("statement") or ""
+            asks = p.get("reason") in (None, "", "agent_blocked")
+            stopped = _words(p.get("reason")) or "parked"
             w.stuck.append({**stories.ref(ident, p.get("issue_title")), "sortie": name, "worker": w.name,
                             "kind": "question", "since": ts(p.get("parked_at")), "phase": phase_of(p),
-                            "reason": f"asks: {q}" if q else "stopped for a person without saying why",
+                            "reason": (f"asks: {q}" if asks else f"stopped ({stopped}): {q}") if q
+                                      else "stopped for a person without saying why",
                             "question": q or None, "action": "answer"})
         for b in state.get("budget_exhausted") or []:
             ident = b.get("issue_identifier")
@@ -318,14 +328,19 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             where[ident] = name
             w = _pick(mine, b.get("worker"))
             used, budget = b.get("used_sessions"), b.get("budget_sessions")
+            # Sortie's reason: session_budget, token_budget or money_budget.
+            # A grant of sessions releases a session budget only.
+            sessions = b.get("reason") == "session_budget"
             reason = _words(b.get("reason")) or "budget exhausted"
-            if isinstance(used, int) and isinstance(budget, int):
-                reason = f"used {used} of its {budget} sessions" if "session" in reason else f"{reason}: {used} of {budget} sessions"
+            if sessions and isinstance(used, int) and isinstance(budget, int):
+                reason = f"used {used} of its {budget} sessions"
+            elif not sessions:
+                reason = f"{reason} exhausted" + (f": {b['status_text']}" if b.get("status_text") else "")
             w.stuck.append({**stories.ref(ident, b.get("issue_title")), "sortie": name, "worker": w.name,
                             "kind": "budget", "since": ts(b.get("exhausted_at")), "phase": phase_of(b),
                             "reason": reason, "budget": {"used_sessions": used, "budget_sessions": budget,
-                                                         "session_budget": "session" in _words(b.get("reason")) or budget is not None},
-                            "action": "sessions"})
+                                                         "session_budget": sessions},
+                            "action": "sessions" if sessions else "story"})
         for r in state.get("retrying") or []:
             ident = r.get("issue_identifier")
             if ours(ident):
@@ -338,10 +353,18 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             if ident and not ours(ident):
                 continue
             w = _pick(mine, x.get("worker"))
+            if x.get("kind") == "drain":
+                # A paused dispatch: the jobs on the worker end, and it takes no new one.
+                w.draining = {"reason": x.get("reason") or None, "since": ts(x.get("since"))}
+                if not ident:
+                    w.waits.append({"identifier": None, "key": None, "label": "deploy", "title": "A deploy", "sortie": name,
+                                    "kind": "drain", "reason": x.get("reason") or "waits for the host to drain",
+                                    "release": x.get("release") or None, "since": ts(x.get("since"))})
+                    continue
             w.waits.append({**stories.ref(ident), "sortie": name, "kind": x.get("kind") or "slot",
                             "reason": x.get("reason") or x.get("reason_text") or _words(x.get("kind")),
                             "release": x.get("release") or x.get("release_text") or None, "since": ts(x.get("since"))})
-        for h in state.get("held") or []:
+        for h in [] if served_waits else state.get("held") or []:
             ident = h.get("issue_identifier")
             hold = h.get("hold") or {}
             if not ours(ident) or hold.get("reason") != "agent_slots_full":
@@ -351,7 +374,7 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             w.waits.append({**stories.ref(ident, h.get("issue_title")), "sortie": name, "kind": "slot",
                             "reason": hold.get("reason_text") or f"waits for an agent slot ({slot.get('used')} of {slot.get('limit')} busy)",
                             "release": hold.get("release_text") or "a slot frees", "since": ts(hold.get("held_since"))})
-        for q in ((state.get("workers") or {}).get("queue") or []):
+        for q in [] if served_waits else ((state.get("workers") or {}).get("queue") or []):
             job = q.get("job") or {}
             ident = (job.get("issue") or {}).get("identifier") or job.get("id")
             if not ours(ident):
@@ -419,7 +442,7 @@ def build_fleet(states: list[tuple[str, dict[str, Any] | None, str | None]], nod
             if x["kind"] == "live_proof" and "pull" not in x:
                 p = next((p for p in pulls if p["identifier"] == x["identifier"]), None)
                 x["pull"] = _pr_ref(p) if p else None
-        if w.draining:
+        if w.draining and not any(x["kind"] == "drain" for x in w.waits):
             w.waits.append({"identifier": None, "key": None, "label": "deploy", "title": "A deploy", "sortie": w.sortie,
                             "kind": "drain", "since": w.draining["since"], "release": "the jobs running here end",
                             "reason": "waits for the host to drain" + (f": {w.draining['reason']}" if w.draining["reason"] else "")
@@ -550,6 +573,13 @@ def lanes_summary(fleet: dict[str, Any], health: dict[str, Any] | None) -> dict[
             "runway": (health or {}).get("runway"), "generated_at": fleet.get("generated_at")}
 
 
+def _release(s: dict[str, Any]) -> str | None:
+    """What releases a stuck story."""
+    if s["kind"] == "budget":
+        return "more sessions" if s.get("action") == "sessions" else "a larger budget in its workflow"
+    return {"question": "your answer", "permission": "a person in its session"}.get(s["kind"])
+
+
 def story_states(fleet: dict[str, Any], held: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
     """Each story's run state, by tracker identifier: where it runs or why it
     waits, what releases it, its pull request and what that waits on, and
@@ -569,13 +599,12 @@ def story_states(fleet: dict[str, Any], held: dict[str, dict[str, Any]] | None =
             s = lane["stuck"]
             if s:
                 put(s["identifier"], {"status": "stuck", "worker": w["name"], "sortie": s["sortie"], "slot": lane["slot"],
-                                      "why": s["reason"], "release": {"question": "your answer", "budget": "more sessions",
-                                                                       "permission": "a person in its session"}.get(s["kind"]),
+                                      "why": s["reason"], "release": _release(s),
                                       "kind": s["kind"], "action": s["action"], "phase": s.get("phase"), "step": None})
         for s in w["stuck"]:
             if s["slot"] is None:
                 put(s["identifier"], {"status": "stuck", "worker": w["name"], "sortie": s["sortie"], "slot": None, "why": s["reason"],
-                                      "release": "your answer" if s["kind"] == "question" else "more sessions",
+                                      "release": _release(s),
                                       "kind": s["kind"], "action": s["action"], "phase": s.get("phase"), "step": None})
         for j in w["jobs"]:
             put(j["identifier"], {"status": "running", "worker": w["name"], "sortie": j["sortie"], "slot": j.get("slot"),

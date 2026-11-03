@@ -82,7 +82,7 @@
       onclick={() => toggle(s)}>{ACTION_TEXT[s.action]}</button>
   {:else if s.action === "pull" && "url" in s && s.url}
     <a class="btn" data-act="pull" href={s.url} target="_blank" rel="noopener">{ACTION_TEXT.pull}</a>
-  {:else if s.key && s.action === "story" && !inLane}
+  {:else if s.key && s.action === "story"}
     <a class="btn" data-act="story" href={storyHref(s.key)}>{ACTION_TEXT.story}</a>
   {/if}
 {/snippet}

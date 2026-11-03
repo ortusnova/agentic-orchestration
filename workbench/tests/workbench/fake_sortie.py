@@ -218,10 +218,17 @@ class FakeSortie:
             held = any(b["issue_identifier"] == ident for b in self.budget_exhausted)
             if not held and ident not in self.running and ident not in self.retrying and ident not in self.park_details:
                 return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": f"issue {ident} is not known"}})
-            self.grants.append({"identifier": ident, "add": add, "by": body.get("by") or "operator"})
+            self.grants.append({"identifier": ident, "add": add, "by": body.get("by") or "operator",
+                                "reason": body.get("reason") or ""})
             # Sortie raises the issue's budget and dispatches it again.
+            entry = next((b for b in self.budget_exhausted if b["issue_identifier"] == ident), {})
             self.budget_exhausted = [b for b in self.budget_exhausted if b["issue_identifier"] != ident]
-            return httpx.Response(200, json={"issue_identifier": ident, "granted_sessions": add})
+            granted = sum(g["add"] for g in self.grants if g["identifier"] == ident)
+            budget = entry.get("budget_sessions")
+            return httpx.Response(200, json={"issue_identifier": ident, "issue_id": f"id-{ident}",
+                                             "used_sessions": entry.get("used_sessions", 0),
+                                             "budget_sessions": budget + add if isinstance(budget, int) else None,
+                                             "granted_sessions": granted})
         if path.startswith("/api/v1/runs/") and path.endswith("/events"):
             dispatch = path.removeprefix("/api/v1/runs/").removesuffix("/events")
             run = next((h for h in self.history.values() if h["dispatch_id"] == dispatch), None)
