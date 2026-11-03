@@ -3,12 +3,28 @@
 
 export type Phase = "build" | "review" | "fix" | "live_proof" | "deploy";
 export type WorkerVerdict = "stuck" | "moving" | "idle" | "draining";
-export type HoldKind = "question" | "budget" | "permission";
-export type WaitKind = "slot" | "capability" | "live_proof" | "drain";
+export type HoldKind = "question" | "budget" | "permission" | "hold_expired";
+export type WaitKind = "slot" | "capability" | "live_proof" | "supervisor" | "drain";
 export type PullWait = "review" | "ci" | "conflict" | "live_proof" | "person" | "none";
 export type Action = "answer" | "sessions" | "open" | "pull" | "story" | null;
 
 export interface Size { cpu?: number; mem_gib?: number; disk_gib?: number }
+
+/** A lease the supervisor holds on a story in Sortie: the story waits on the
+ * supervisor until it releases it, as long as it renews the lease with new
+ * evidence before it runs out. Times in Unix seconds. */
+export interface Lease {
+  identifier: string;
+  sortie: string;
+  by: string | null;
+  reason: string | null;
+  evidence: string | null;
+  held_since: number | null;
+  renewed_at: number | null;
+  until: number | null;
+  expired: boolean;
+  expired_at: number | null;
+}
 
 export interface StoryRef {
   identifier: string | null;
@@ -50,7 +66,9 @@ export interface Stuck extends StoryRef {
   action: Action;
   question?: string | null;
   slot?: number | null;
-  phase?: Phase;
+  phase?: Phase | null;
+  /** The supervisor's lease that ran out, for a hold_expired story. */
+  lease?: Lease | null;
 }
 
 export interface Lane { slot: number; job: Job | null; stuck: Stuck | null; extra: boolean }
@@ -62,6 +80,8 @@ export interface Wait extends StoryRef {
   release: string | null;
   since: number | null;
   pull?: PullRef | null;
+  /** The supervisor's lease, for a story that waits on the supervisor. */
+  lease?: Lease | null;
 }
 
 export interface Reason {
@@ -150,6 +170,8 @@ export interface RunState {
   step: string | null;
   started_at?: number;
   pull: (PullRef & { waits_text: string; reason: string | null; stuck: boolean }) | null;
+  /** The supervisor's lease on it, live or expired; absent from an older backend. */
+  lease?: Lease | null;
 }
 
 export const WORKER_VERDICT_TEXT: Record<WorkerVerdict, string> = {
@@ -157,8 +179,27 @@ export const WORKER_VERDICT_TEXT: Record<WorkerVerdict, string> = {
 };
 
 export const WAIT_TEXT: Record<WaitKind, string> = {
-  slot: "a slot", capability: "a capability", live_proof: "a live proof", drain: "the host to drain",
+  slot: "a slot", capability: "a capability", live_proof: "a live proof", supervisor: "the supervisor", drain: "the host to drain",
 };
+
+/** A time in UTC, to the minute: "14:00 UTC", with the date when it is not today's. */
+export function clockText(t: number, now: number): string {
+  const iso = new Date(t * 1000).toISOString();
+  const day = iso.slice(0, 10) === new Date(now * 1000).toISOString().slice(0, 10) ? "" : `${iso.slice(0, 10)} `;
+  return `${day}${iso.slice(11, 16)} UTC`;
+}
+
+/** What a live lease says beside its reason: the evidence, when it was last
+ * renewed and when it runs out. */
+export function leaseText(lease: Lease, now: number): string {
+  const parts = [`evidence: ${lease.evidence ?? "none given"}`];
+  if (lease.renewed_at != null) parts.push(`renewed ${duration(now - lease.renewed_at)} ago`);
+  if (lease.until != null) {
+    parts.push(lease.until > now ? `runs out at ${clockText(lease.until, now)}, in ${duration(lease.until - now)}`
+      : `ran out at ${clockText(lease.until, now)}`);
+  }
+  return parts.join(" · ");
+}
 
 /** A duration in words: "40 s", "25 min", "2.0 h". */
 export function duration(seconds: number | null | undefined): string {

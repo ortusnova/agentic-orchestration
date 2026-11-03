@@ -116,6 +116,17 @@ class FakeSortie:
         self.parked = [p for p in self.parked if p["issue_identifier"] != identifier]
         self.park_details.pop(identifier, None)
 
+    def hold(self, identifier: str, reason: str, evidence: str, *, by: str = "supervisor",
+             renewed_at: str = "2026-11-03T13:00:00Z", until: str = "2026-11-03T14:00:00Z",
+             expired: bool = False) -> None:
+        """Place the supervisor's lease on the issue, as ``holds`` in the
+        state lists it; ``expired`` as Sortie serves it once it ran out."""
+        holds = [h for h in self.extra_state.get("holds") or [] if h["issue_identifier"] != identifier]
+        holds.append({"issue_id": f"id-{identifier}", "issue_identifier": identifier, "by": by, "reason": reason,
+                      "evidence": evidence, "held_since": renewed_at, "renewed_at": renewed_at, "until": until,
+                      "expired": expired, "expired_at": until if expired else None})
+        self.extra_state["holds"] = holds
+
     def issue(self, plan_key, kind="story", state="Todo", parent=None, runtime=None, terminal=False, **extra):
         node = {
             "id": f"id-{len(self.nodes) + 1}", "identifier": f"T-{len(self.nodes) + 1}", "plan_key": plan_key,
