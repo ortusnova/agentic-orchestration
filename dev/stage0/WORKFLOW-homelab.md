@@ -171,6 +171,8 @@ environment:
     # chain needed (homelab-pilot).
     allow_hosts:
       - models.opencode.ai
+      # opencode's websearch (pack/opencode.json): Firecrawl's keyless MCP.
+      - mcp.firecrawl.dev
       - registry.npmjs.org
       - github.com
       - codeload.github.com

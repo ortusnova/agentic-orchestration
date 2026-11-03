@@ -8,6 +8,7 @@
       "api.anthropic.com",
       "api.github.com",
       "github.com",
+      "mcp.firecrawl.dev",
       "models.opencode.ai",
       "proxy.golang.org",
       "registry.npmjs.org",

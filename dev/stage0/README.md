@@ -115,6 +115,11 @@ the pull request merges, Sortie moves the story to `Done`.
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
+- **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
+  (`websearch.provider` in `pack/opencode.json`), so the workflows allow
+  `mcp.firecrawl.dev` and no credential is bound. With no provider set,
+  opencode asks the user to pick one on the first search, and Sortie
+  refuses that prompt.
 - **What the agent reads.** The VM has no copy of the spec store and no
   network beyond the workflow's hosts, so the prompt carries everything:
   the story's Huly description holds its notes, its acceptance criteria,

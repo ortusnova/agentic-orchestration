@@ -172,6 +172,8 @@ environment:
     storage_gib: 20
     allow_hosts:
       - models.opencode.ai
+      # opencode's websearch (pack/opencode.json): Firecrawl's keyless MCP.
+      - mcp.firecrawl.dev
       - registry.npmjs.org
       - proxy.golang.org
       - sum.golang.org
