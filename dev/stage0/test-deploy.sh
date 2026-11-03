@@ -23,6 +23,9 @@ printf '#!/bin/sh\necho "npx $*" >> "%s/calls"\n[ -z "$FAIL_BUILD" ]\n' "$tmp" >
 # could leave it). Like Sortie, it dispatches queued stories into free slots
 # whenever it is asked anything, unless paused. Every request is logged to
 # requests, and a pause or resume, which needs the control token, to log.
+# lost, a count, is the runs whose worker stopped while Sortie restarted:
+# once their leases expire (the next request), Sortie puts them back in the
+# queue as retries, logged to retries, and dispatches them like any story.
 # stage0.sh's stub logs each restart of Sortie to restarts; as Sortie
 # re-adopts the runs its workers hold, a restart leaves the running runs
 # running.
@@ -48,6 +51,10 @@ dispatch() {
 }
 case "$method $path" in
   "GET /api/v1/state")
+    if [[ -e $s/lost ]]; then
+      echo $(( $(n running) - $(n lost) )) > "$s/running"; echo $(( $(n queued) + $(n lost) )) > "$s/queued"
+      echo "$(n lost)" >> "$s/retries"; rm -f "$s/lost"
+    fi
     dispatch
     paused=false; [[ -e $s/paused ]] && paused=true
     printf '{"running": [%s], "dispatch_paused": %s}\n' "$(seq -s, 1 "$(n running)")" "$paused" ;;
@@ -173,6 +180,16 @@ check "busy p1: a kit merge applies at once" main "stage0.sh;"
 never_drained "busy p1: with no drain"
 want "busy p1: both runs go on" "running 2, queued 9, dispatching"
 finish 1; want "busy p1: a run ends and the next is dispatched" "running 2, queued 8, dispatching"
+# A worker gone during the restart (agent-platform/run-supervision): of 2
+# runs, one's worker stops while the deploy restarts Sortie. Its lease
+# expires and it is retried at once, as for any lost lease: no pause holds
+# the retry back; the other run goes on.
+setup; sortie 2 0 2; merge dev/stage0/units; run; echo 1 > "$SORTIE_STUB/lost"
+check "a worker gone: the kit merge applies at once" main "stage0.sh;"
+never_drained "a worker gone: with no drain"
+finish 0
+if [[ $(cat "$SORTIE_STUB/retries" 2> /dev/null) == 1 ]]; then echo "ok: a worker gone: its run is retried"; else echo "FAIL: a worker gone: retries '$(cat "$SORTIE_STUB/retries" 2> /dev/null)'"; failed=1; fi
+want "a worker gone: and dispatched again beside the run that went on" "running 2, queued 0, dispatching"
 setup; sortie 1 4 1; merge dev/stage0/units; FAIL_STAGE0=1 run
 check "a failed apply during a run goes back" main~1 "stage0.sh;"
 never_drained "and drains nothing either"
