@@ -182,7 +182,7 @@ run; check "and runs once the lock is free" main "stage0.sh;"
 # The dev-host apply after a smolvm bump drains the host the same way, then
 # runs stage0.sh so the pack and Sortie follow the new smolvm.
 mkdir -p "$tmp/dkit"
-cp "$KIT/dev-host-apply.sh" "$KIT/drain.sh" "$tmp/dkit/"
+cp "$KIT/dev-host-apply.sh" "$KIT/drain.sh" "$KIT/worker-config.sh" "$tmp/dkit/"
 # shellcheck disable=SC2016 # expanded by the stub, not here
 printf '#!/bin/sh\necho stage0.sh >> "%s/calls"\n[ -z "$FAIL_STAGE0" ]\n' "$tmp" > "$tmp/dkit/stage0.sh"
 chmod +x "$tmp/dkit/stage0.sh"
@@ -204,10 +204,21 @@ want "and dispatches again" "running 1, queued 3, dispatching"
 sortie 0; FAIL_STAGE0=1 apply true; applied "a failed stage0.sh after the apply fails it" 1 "stage0.sh;"
 want "and dispatches again" "running 0, queued 0, dispatching"
 sortie 0; apply; applied "the control profile has no default apply" 1 ""
+# A worker host (taichi): no Sortie to pause. The apply waits for the worker
+# daemon's jobs, with the daemon stopped, and is make dev-host by default.
 mkdir -p "$tmp/homelab"; printf 'dev-host:\n\techo make dev-host >> %s/calls\n' "$tmp" > "$tmp/homelab/Makefile"
 cp "$STAGE0_HOME/stage0.env" "$tmp/env"
-printf 'STAGE0_PROFILE=homelab\nSTAGE0_SORTIE_PORT=1\nSTAGE0_HOMELAB_SRC=%s\n' "$tmp/homelab" > "$STAGE0_HOME/stage0.env"
-sortie 0; apply; applied "the homelab profile's apply is make dev-host in its homelab checkout" 0 "make dev-host;stage0.sh;"
+printf 'STAGE0_PROFILE=worker\nSTAGE0_HOMELAB_SRC=%s\n' "$tmp/homelab" > "$STAGE0_HOME/stage0.env"
+sortie 0; apply; applied "a worker host's apply is make dev-host in its homelab checkout" 0 "systemctl --user stop ortus-stage0-worker.service;make dev-host;stage0.sh;systemctl --user start ortus-stage0-worker.service;"
+mkdir -p "$STAGE0_HOME/worker/jobs/ONS-9-1"
+rm -f "$tmp/calls"; rc=0; STAGE0_DRAIN_POLL=0.2 timeout 1 "$tmp/dkit/dev-host-apply.sh" > /dev/null 2> "$tmp/err" || rc=$?
+if (( rc == 124 )) && grep -q "waiting for the worker daemon's 1 job" "$tmp/err" && ! grep -q 'stop ortus-stage0-worker' "$tmp/calls" 2> /dev/null; then
+  echo "ok: on a worker host the apply waits while a job runs, the daemon still up"
+else echo "FAIL: a worker host with a job: exit $rc, calls '$(calls)', $(cat "$tmp/err")"; failed=1; fi
+rm -rf "$STAGE0_HOME/worker/jobs/ONS-9-1"
+apply false; applied "a failed apply on a worker host starts its daemon again" 1 "systemctl --user stop ortus-stage0-worker.service;systemctl --user start ortus-stage0-worker.service;"
+printf 'STAGE0_PROFILE=worker\n' > "$STAGE0_HOME/stage0.env"
+apply; applied "a worker host without homelab has no default apply" 1 ""
 cp "$tmp/env" "$STAGE0_HOME/stage0.env"
 exec 8> "$STAGE0_HOME/stage0.lock"; flock 8
 rc=0; timeout 3 "$tmp/dkit/dev-host-apply.sh" true 2> "$tmp/err" || rc=$?

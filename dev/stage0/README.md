@@ -19,11 +19,13 @@ STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daem
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, and the drain
-dev/stage0/test-worker.sh             # check the workers' configuration, the merge carry-over and the retired Sortie
+dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
+dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # drain this host, apply a setup change (homelab: make dev-host), run stage0.sh, dispatch again
 dev/stage0/test-review-gate.sh        # check the review gate and the fix runs against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
+dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
 make -C dev/stage0 test               # the edge's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
 ```
@@ -83,11 +85,11 @@ by the same Sortie, like any other.
   Sortie's own loader, exit and merge code: it needs the `sortie/`
   submodule, or `SORTIE_SRC` naming a Sortie checkout.
 
-- **CI failures and merge conflicts.** Both workflows turn on Sortie's
+- **CI failures and merge conflicts.** The workflow turns on Sortie's
   `ci_failure` and `merge_conflicts` reactions (spec store
   `agent-platform/run-supervision`). A pull request whose CI fails, or that
   conflicts with its base after another merge, gets a fix run on the
-  `review` rule with the workflows' fix prompt: it merges `origin/<base>`
+  `review` rule with the workflow's fix prompt: it merges `origin/<base>`
   in, never rebases or rewrites a pushed commit, fixes the cause on the
   branch, including a CI or toolchain setting the change exposed (an old Go
   is raised to the latest stable release), and checks the criteria again.
@@ -99,10 +101,9 @@ by the same Sortie, like any other.
   story, and runs no further fix until a new commit lands or a person
   answers it. Neither watch has a window. Sortie's CI provider reads the
   checks of one repository, `github.project`: on p1 that is
-  `agentic-orchestration`, so a `sortie` pull request gets no CI fix run
-  (its CI reads fail and back off, and its failing CI only holds its
-  merge) until Sortie reads each pull request's own repository; the homelab
-  profile reads `homelab`.
+  `agentic-orchestration`, so a `sortie` or `homelab` pull request gets no
+  CI fix run (its CI reads fail and back off, and its failing CI only holds
+  its merge) until Sortie reads each pull request's own repository.
   `test-review-gate.sh` checks the fix runs too.
 
 - **Operator comments.** On p1 `review_comments` is on: a comment on a ui
@@ -204,19 +205,24 @@ A change that must not land under a running agent drains the host first
 host"): Sortie stops dispatching new runs, the runs already going finish,
 the change applies, and Sortie dispatches again. The change waits for the
 runs that were going when it arrived, never behind the queue of stories.
-On a busy taichi running 2 stories with 9 waiting, a kit merge starts no
-third run, applies when the 2 finish, and then the 9 are dispatched.
+On a busy p1 running 2 stories with 9 waiting, a kit merge starts no
+third run, applies when the 2 finish, and then the 9 are dispatched. A
+worker host runs no Sortie to pause: there the change waits until its
+worker daemon runs no job.
 
 - **Deploys.** `deploy.sh` pauses dispatch each minute a kit or Sortie
   change waits, and resumes it once `stage0.sh` has run, or once the change
   has failed and been put back.
 - **Host setup changes**, such as a smolvm bump. Run
   `dev/stage0/dev-host-apply.sh` on the host instead of applying the change
-  by hand. It pauses dispatch, waits for the running runs (every
+  by hand. On p1 it pauses dispatch, waits for the running runs (every
   `STAGE0_DRAIN_POLL` seconds, default 15), runs the apply, runs
   `stage0.sh` so that the pack and Sortie follow the new smolvm, and
-  resumes dispatch, also when a step fails. On taichi the apply is
-  homelab's `make dev-host` in `STAGE0_HOMELAB_SRC`; elsewhere, name it:
+  resumes dispatch, also when a step fails. On a worker host it waits until
+  the worker daemon runs no job, stops the daemon for the apply, runs
+  `stage0.sh`, and starts it again, also when a step fails. On a worker host
+  with homelab (taichi) the apply is homelab's `make dev-host` in
+  `STAGE0_HOMELAB_SRC`; elsewhere, name it:
   `dev/stage0/dev-host-apply.sh <command>`. It holds stage0.sh's lock
   throughout, so no deploy runs in between.
 
@@ -282,9 +288,11 @@ What the edge does with a request on a worker's port:
   `Proxy-Authorization` (Bearer, or Basic as in
   `HTTPS_PROXY=http://job:<token>@127.0.0.1:7700`). Once admitted, the
   edge tunnels it through nono, which allows only the hosts in
-  `egress-profile.json`: the workflow's `allow_hosts` and the hosts of the
-  credentials nono holds (`edge/profile_test.go` keeps them equal to
-  `WORKFLOW.md`'s). For a credential's host nono intercepts TLS with the
+  `egress-profile.json`, the one list of the hosts a job of any repository
+  may reach, with the forge's and those of the credentials nono holds
+  (`edge/profile_test.go` checks it holds each credential `WORKFLOW.md`
+  binds). The remote kind takes no `allow_hosts`, so the workflow has none;
+  add a host a chain needs to `egress-profile.json`. For a credential's host nono intercepts TLS with the
   kit's egress CA and replaces the placeholder Sortie gives the machine
   (`sortie-credential-<name>`) with the credential. A refusal is recorded in
   the edge's journal with the worker, job, attempt and host:
@@ -382,19 +390,33 @@ evidence is no longer needed.
 A host on the retired homelab profile keeps its Sortie until a person moves
 it: `stage0.sh`, the deploy timer's too, refuses the homelab profile and
 says how. Once p1 runs this kit's `main` (its Sortie lists homelab open to
-dispatch) and `worker-host.sh add` has run for the host:
+dispatch, and p1 has closed the Huly tunnel taichi's Sortie polled through,
+`ortus-stage0-huly-tunnel@taichi`, so that Sortie dispatches nothing more)
+and `worker-host.sh add` has run for the host:
 
 ```sh
-STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on taichi
+dev/stage0/worker-host.sh carry brian@taichi   # on p1: taichi's merge records into p1's Sortie
+STAGE0_PROFILE=worker dev/stage0/stage0.sh     # on taichi
 ```
 
-It rewrites `stage0.env` to the worker profile, stops taichi's Sortie and
-removes its unit, and starts the worker daemon. The homelab Sortie's
-workspaces stay in `$STAGE0_HOME/workspaces`; delete each `sortie-*`
-machine it left with `smolvm machine delete --name <name>`. Its two
-credential files, `github-token` and `claude-oauth-token`, are no longer
-read: delete them and revoke the tokens. p1's `stage0.sh` closes the Huly
-tunnel it kept for taichi's Sortie (`ortus-stage0-huly-tunnel@taichi`).
+Sortie lets a planned story start only from its own record that each
+blocker merged (spec store `sortie/blocker-satisfaction`), the rows of its
+`plan_satisfaction` table, and p1's Sortie has none for the stories that
+merged under taichi's. `carry` reads every row of taichi's Sortie's
+database (`$STAGE0_HOME/sortie/.sortie.db` there) over SSH, adds each one
+p1's Sortie lacks to its database (`merges.py`), keeping p1's own, and
+leaves the list it carried on taichi (`merges-carried.json`). A second
+carry changes nothing; `test-merge-carry.sh` checks all of this.
+
+`stage0.sh` on taichi then rewrites `stage0.env` to the worker profile and,
+only once p1's Sortie holds every record taichi's holds, stops taichi's
+Sortie, removes its unit, and starts the worker daemon. While a record is
+missing, it says how many, leaves the Sortie running and fails: carry and
+run it again. The homelab Sortie's database and workspaces stay in
+`$STAGE0_HOME`; delete each `sortie-*` machine it left with
+`smolvm machine delete --name <name>`. Its two credential files,
+`github-token` and `claude-oauth-token`, are no longer read: delete them
+and revoke the tokens.
 
 To remove a worker host: on the host, `systemctl --user disable --now
 ortus-stage0-worker ortus-stage0-deploy.timer`, then
