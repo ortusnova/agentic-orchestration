@@ -24,7 +24,8 @@ huly:
   story_type: Story
 
 # Sortie merges a story's pull request once its review (the review rule
-# below) has passed and CI has passed (agent-platform/run-supervision). A
+# below) has passed, recording every acceptance criterion met in
+# .sortie/criteria.json, and CI has passed (agent-platform/run-supervision). A
 # review: ui story (sortie-review:ui), whose interface the operator approved
 # as a design prototype before it was written, goes through the same review,
 # then the kit deploys its pull request as a preview (preview.sh) and
@@ -129,6 +130,29 @@ ${STAGE0_NOTIFY_ENTRY}
 server:
   port: ${STAGE0_SORTIE_PORT}
   control_token: $STAGE0_SORTIE_TOKEN
+  # The supervisor's token (supervisor.sh): Sortie accepts it only on the
+  # supervisor's routes, and records each request with its evidence.
+  supervisor_token: $STAGE0_SUPERVISOR_TOKEN
+
+# The supervisor (agent-platform/run-supervision, design D9): one agent
+# session at a time, for what the rules above cannot settle. Sortie starts
+# it on a park, on a stopped failure in no fault class, on a pull request
+# reaction with no progress for an hour, on a free slot with nothing to
+# dispatch while stories are held, and on a sweep every 30 minutes. It runs
+# on p1, in a slot of its own beside the stories' (never one of
+# max_concurrent_agents), with the host's opencode and the kit's settings
+# for it, model included (run-sortie.sh, supervisor-opencode.json: Sortie
+# warns of an opencode block here as an unknown key, since no story runs
+# that kind), the prompt the kit installs beside this file (supervisor.md),
+# and its own
+# daily budget: the sweeps take 48 sessions a day, the events the rest. The
+# operator pauses it with POST /api/v1/supervisor/pause (README.md).
+supervisor:
+  agent: opencode
+  prompt: supervisor.md
+  sweep_interval_ms: 1800000
+  max_sessions_per_day: 96
+  max_tokens_per_day: 3000000
 
 polling:
   interval_ms: 15000
@@ -168,10 +192,12 @@ agent:
 # review rule, whatever its review label (sortie-review:human,
 # sortie-review:criteria or sortie-review:ui). The hop to review is a new run
 # with a new agent session, so the review never shares a session with the
-# build. A review that passes lets auto_merge merge the pull request, a ui
-# story's once its click-proofs on the preview are recorded; one that stops
-# `blocked` keeps it open and parks the story, so its question shows on the
-# workbench.
+# build. A review that passes, recording every criterion met, lets
+# auto_merge merge the pull request, a ui story's once its click-proofs on
+# the preview are recorded; one that records a criterion not-met or
+# unsettled, or no verdict, or that stops `blocked`, keeps it open and parks
+# the story, so its question shows on the workbench. One that records a
+# criterion live-proof keeps it open for the supervisor's live proof.
 dispatch:
   rules:
     - name: claude-label
@@ -440,9 +466,9 @@ story's branch as it is in this workspace:
    commit.
 
 Sortie pushes your commits after the run. The kit reads your comment and
-sets the pull request's `live-proof` status, which Sortie's merge requires:
-`proven` at the pull request's head lets it merge once CI passes, and
-`unproven` keeps it open. This machine reaches GitHub's API only for that
+sets the pull request's `live-proof` status, which the merge requires:
+`proven` at the pull request's head lets the supervisor merge it once CI
+passes, and `unproven` keeps it open. This machine reaches GitHub's API only for that
 comment and those issues: do not fetch, push, or comment anything else.
 {{- else }}
 
@@ -537,12 +563,13 @@ write no such record in this run.
 A criterion that needs a live run this machine cannot do, such as a host
 its egress refuses, a sandbox, or another repository, is settled by a live
 proof, not by reasoning about it. Run every part of it this machine can,
-then name it in your last message after `live proof needed:`, with what
-this machine refused. Do not stop `blocked` for it: the supervisor requests
-a live-proof job, which runs the criterion from this branch on a worker
-whose profile allows it, and Sortie does not merge the pull request until
-that job's result comment proves the criterion at its head (the
-`live-proof` status).
+record its verdict `live-proof`, and name it in your last message after
+`live proof needed:`, with what this machine refused. Do not stop
+`blocked` for it: Sortie does not merge the pull request; the supervisor
+requests a live-proof job, which runs the criterion from this branch on a
+worker whose profile allows it, and merges the pull request only once that
+job's result comment proves the criterion at its head (the `live-proof`
+status).
 
 When a criterion is not met and you can meet it, fix it: add commits on top
 of the branch, in conventional commits, with no AI attribution, and run the
@@ -551,14 +578,48 @@ rebase, squash, reset, or drop any commit that `origin/<branch>` holds. Do
 not push and do not open a pull request: Sortie pushes your new commits
 after the run. Only committed work leaves this machine.
 
-When every criterion holds, end your last message with each criterion, its
-verdict, and its evidence, and write no `.sortie/status`: the review passes,
-and Sortie merges the pull request once CI passes{{ if $ui }} and the
-click-proofs on its preview are recorded{{ end }}.
+Before you end, record your verdict on every acceptance criterion in
+`.sortie/criteria.json`, one entry per criterion, in the order the story
+lists them:
+
+    mkdir -p .sortie && cat > .sortie/criteria.json <<'JSON'
+    {"criteria": [
+      {"criterion": "<the criterion, as the story states it>", "verdict": "met", "evidence": "<the file and line, the test, or the command you ran and its result>"}
+    ]}
+    JSON
+
+Each verdict is one of:
+
+- `met`: the evidence on this branch shows the criterion holds, as the
+  story states it: a test or a command you ran here and its result, or a
+  file and line. Only this verdict lets Sortie merge.
+- `not-met`: it does not hold, and you could not meet it.
+- `live-proof`: only a live run this machine cannot do settles it.
+- `unsettled`: it conflicts with a documented design rule or another
+  criterion, or only a person can decide it.
+
+A criterion you could not prove here is not `met`: a reason it could not
+run, a plan to run it later, a step that timed out, or the builder's claim
+is not evidence. Sortie merges the pull request only when every criterion
+is `met`. Any other verdict, or no `.sortie/criteria.json`, keeps the pull
+request open: a `live-proof` criterion waits for the supervisor's live
+proof, and a `not-met` or `unsettled` one parks the story with your
+verdicts as the supervisor's question.
+
+When every criterion holds, record each `met`, end your last message with
+each criterion, its verdict, and its evidence, and write no
+`.sortie/status`: the review passes, and Sortie merges the pull request
+once CI passes{{ if $ui }} and the click-proofs on its preview are
+recorded{{ end }}.
+
+When a criterion does not hold and you cannot meet it, record it `not-met`
+with what you ran and what failed, end your last message with each
+criterion and its verdict, and write no `.sortie/status`: Sortie parks the
+story with your verdicts as the question.
 
 When a criterion cannot be settled, because it conflicts with a documented
 design rule or with another criterion, or because only a person can decide
-it, stop with `blocked` in `.sortie/status`. Say on the lines after it which
+it, record it `unsettled` and stop with `blocked` in `.sortie/status`. Say on the lines after it which
 criterion, what it conflicts with (name the file or the design decision),
 and the question a person has to answer. Sortie keeps the pull request open,
 and the workbench shows your question. Never write `needs-human-review` or

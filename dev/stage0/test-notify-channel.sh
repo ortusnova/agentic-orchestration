@@ -111,7 +111,7 @@ printf '#!/bin/sh\nenv | grep -E "^(SORTIE_NOTIFY_SECRET|WORKBENCH_)" | sort\n' 
 printf '#!/bin/sh\nenv | grep -E "^SORTIE_(NOTIFY_SECRET|WORKBENCH_NOTIFY_URL)=" | sort\n' > "$home/bin/sortie"
 printf '#!/bin/sh\necho p1\n' > "$home/bin/hostname"
 chmod +x "$tmp/kit/dev/huly_project.py" "$tmp/kit/dev/stage0/anthropic-token.py" "$tmp/kit/workbench/.venv/bin/workbench" "$home/bin/"*
-for f in github-token sortie-token workbench-password-hash workbench-secret; do echo "$f-value" > "$home/$f"; done
+for f in github-token sortie-token supervisor-token workbench-password-hash workbench-secret; do echo "$f-value" > "$home/$f"; done
 cat > "$home/stage0.env" <<EOF
 STAGE0_KIT_ROOT=$tmp/kit
 STAGE0_HULY_URL=x STAGE0_HULY_WORKSPACE=x STAGE0_HULY_EMAIL=x STAGE0_HULY_PASSWORD=x STAGE0_HULY_PROJECT=ONS

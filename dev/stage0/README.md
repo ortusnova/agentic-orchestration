@@ -20,12 +20,17 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
+dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: make dev-host), then run stage0.sh
 dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
 dev/stage0/test-notify-channel.sh     # check the operator's channel, with stubs
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
+dev/stage0/test-supervisor.sh         # check the supervisor's token, prompt, pause and status, with stubs
+dev/stage0/supervisor.sh status       # the supervisor's status, budget, open questions and recent actions with their evidence
+dev/stage0/supervisor.sh pause [WHY]  # pause the supervisor, until resume, across restarts
+dev/stage0/supervisor.sh resume       # resume it; a session starts at once for what waited
 dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
 dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
 make -C dev/stage0 test               # the edge's and stage0-live-proofs' tests and every test-*.sh but the live one
@@ -47,6 +52,7 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Live proofs | unit `ortus-stage0-live-proofs.timer` every minute (`run-live-proofs.sh`, `$STAGE0_HOME/bin/stage0-live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-stage0-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
+| Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
 | Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
@@ -72,12 +78,17 @@ by the same Sortie, like any other.
   (`gate: criteria`, stage label `sortie-stage:review`), a new run in a new
   agent session. The review checks each acceptance criterion with evidence,
   may add fix commits, which Sortie pushes, and never rewrites a pushed
-  commit. When it passes, Sortie's `auto_merge` squashes the pull request
-  once CI passes, and merge completion moves the story to `Done`: no person
-  is involved. A criterion it cannot settle, such as one that conflicts
-  with a design rule, stops it `blocked`: the pull request stays open, and
-  Sortie parks the story with the review's question, which the workbench
-  shows. Branch protection that requires an approving review would keep
+  commit. It records its verdict on each criterion in
+  `.sortie/criteria.json` (`met`, `not-met`, `live-proof` or `unsettled`,
+  with evidence), which the worker returns to Sortie with the branch. Only
+  when every criterion is `met` does Sortie's `auto_merge` squash the pull
+  request, once CI passes, and merge completion move the story to `Done`:
+  no person is involved. A criterion `not-met`, or no verdict, keeps the
+  pull request open and parks the story with those criteria as the
+  supervisor's question. A criterion it cannot settle, such as one that
+  conflicts with a design rule, is `unsettled` and stops it `blocked`: the
+  pull request stays open, and Sortie parks the story with the review's
+  question, which the workbench shows. Branch protection that requires an approving review would keep
   every pull request from merging; the kit's repositories must not require
   one. Sortie merges a `review: human` story after a review only from the
   Sortie commit that lets its gate do so (`planReviewGate`); with an older
@@ -241,6 +252,57 @@ A preview runs the branch's code on this host with the kit's Sortie and
 GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
 tracker, and the branch has passed its criteria review and CI first.
 
+## The supervisor
+
+Sortie runs one supervisor agent session at a time for what its rules
+cannot settle (spec store `agent-platform/run-supervision`, design D9): a
+parked story whose pull request already merged, a question whose premise
+the forge contradicts, a pull request nobody moves, a failure in no fault
+class. The workflow's `supervisor` section starts it on a park, on a
+stopped failure in no class, on a pull request reaction with no progress
+for an hour, on a free slot with nothing to dispatch while stories are
+held, and on a sweep every 30 minutes. It runs on p1, in a slot of its own,
+never one of a story's, with the host's opencode (the stories' model and
+the Anthropic sign-in plugin, from `supervisor-opencode.json`) and `gh`, within 96
+sessions and 3,000,000 tokens a UTC day.
+
+- **Its prompt** is `supervisor.md`. `stage0.sh` installs it beside the
+  rendered workflow, and Sortie reads it at each session's start, so a
+  merged change to it reaches the next session once the deploy has run
+  `stage0.sh`. It states the rules: check the forge before believing a
+  claim; merge only what passed its review and CI and whose live criteria
+  are proven; never rewrite a pushed commit or edit a started story; never
+  merge a UI story before the operator approves it; ask a person for
+  credentials, keys, approvals and decisions, one question per decision;
+  record evidence with every action.
+- **Its token** is `supervisor-token`, which `stage0.sh` mints once.
+  Sortie accepts it only on the supervisor's routes (answer, release,
+  grant sessions, record a merge, start a fix run, draft, merge, file an
+  issue, request a live proof, hold, ask a person); every other control
+  route answers it `403`, and a request without `evidence` is refused.
+- **What it did.** `dev/stage0/supervisor.sh status` prints its status,
+  its budget, its running or last session, the questions it raised that
+  are still open, and its 50 newest actions, each with its result, pull
+  request, merge commit and evidence. They come from Sortie's state
+  (`curl -s http://127.0.0.1:7680/api/v1/state`: `supervisor`,
+  `supervisor_actions`, and `platform_faults` of class
+  `supervisor_question`). Each session's start and end, with its trigger,
+  outcome and tokens, is in `journalctl --user -u ortus-stage0-sortie`
+  (`supervisor session started`, `supervisor session ended`).
+- **Its questions.** For a credential, a key, an approval, a decision, or
+  an action it cannot check, it raises a question naming the action, where
+  to take it, the stories it holds and what it checked. The stories stay
+  out of dispatch until you take the action and mark it done:
+  `POST /api/v1/platform-faults/<id>/action-done` with the control token,
+  after which Sortie checks it again and releases them.
+- **Pause it.** `dev/stage0/supervisor.sh pause [why]` stops its running
+  session and starts no new one; the triggers wait. `dev/stage0/supervisor.sh
+  resume` starts a session at once for what waited. Sortie forgets a pause
+  when it restarts, as on each deploy, so the kit records yours in
+  `$STAGE0_HOME/supervisor.paused` and the Sortie unit pauses it again after
+  each start, until you resume it. Pausing dispatch does not pause the
+  supervisor, and pausing the supervisor does not pause dispatch.
+
 ## Live proofs
 
 Some acceptance criteria need a live run that the story's own machine
@@ -248,8 +310,11 @@ cannot do: a host its egress refuses, a sandbox, another repository (spec
 store `agent-platform/run-supervision`, "A live criterion a story's machine
 cannot run becomes a live-proof job"). For example, homelab's full vm chain
 needs Let's Encrypt staging, which `egress-profile.json` does not allow. The
-review names such a criterion after `live proof needed:` and does not
-settle it. The supervisor then requests a live proof:
+review records such a criterion `live-proof` in `.sortie/criteria.json`
+and names it after `live proof needed:`; Sortie then does not merge the
+pull request and comments the criterion on the story. The supervisor
+requests a live proof, and merges the pull request
+(`POST /api/v1/<identifier>/merge`) once it is proven at its head:
 `POST /api/v1/<identifier>/live-proof`, with the criterion and why the
 machine could not run it as its `evidence`. Every minute
 `ortus-stage0-live-proofs.timer` runs `run-live-proofs.sh`, one pass of
@@ -289,7 +354,7 @@ machine could not run it as its `evidence`. Every minute
   `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
   The pass reads only the kit's own account's comments written since the
   request, and the newest sets the status:
-  - proven at the head: `success`, and Sortie merges once CI passes;
+  - proven at the head: `success`, and the supervisor merges once CI passes;
   - unproven: `failure`;
   - proven at an older commit: `pending` again, until the supervisor
     requests a new proof.
@@ -327,8 +392,12 @@ changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
 live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
-its source, `edge.json` or unit; the worker daemon for its source,
-`worker.json` or unit. A change to one of those ends the jobs that unit
+its source, `edge.json` or unit; the worker daemon for its binary,
+`worker.json` or unit (`worker-build.sh` builds it with `-trimpath
+-buildvcs=false`, so the same code builds the same bytes and a test or
+a document under `worker-daemon/` restarts nothing; a daemon an earlier
+kit started from the source being built keeps running, and its record
+moves to the binary). A change to one of those ends the jobs that unit
 carries, and Sortie retries them. A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
@@ -362,6 +431,7 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | Huly | a login with the dev account in `stage0.env` |
 | The workbench's notifications | `notify-tokens/<host>.token` in the stage-0 home, mode 0600, minted by `stage0.sh`: Sortie posts its notifications to the workbench with it, and the workbench refuses any other; no operator credential. See [below](#the-operators-channel) |
 | The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; optional, see [below](#the-operators-channel) |
+| The supervisor's token | `supervisor-token` in the stage-0 home, mode 0600, minted by `stage0.sh` (`supervisor.sh`); Sortie accepts it only on the supervisor's routes and hands it to the supervisor session only |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no

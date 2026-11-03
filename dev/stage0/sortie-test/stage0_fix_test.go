@@ -89,16 +89,21 @@ func (f *fixForge) scm() *mergeabilitySCM {
 
 // fixScenario runs one story's pull request through the kit's workflow.
 type fixScenario struct {
-	t      *testing.T
-	w      stage0Fix
-	value  string
-	clock  *fixClock
-	forge  *fixForge
-	state  *State
-	store  *statefulFingerprintStore
-	ci     *mockCIProvider
-	issues *opsTracker
-	router *route.Router
+	t     *testing.T
+	w     stage0Fix
+	value string
+	clock *fixClock
+	forge *fixForge
+	state *State
+	store *statefulFingerprintStore
+	// verdicts holds the review's criteria verdict across the scenario's
+	// runs; criteria is the file the review run leaves, every criterion
+	// met unless a test sets it.
+	verdicts *verdictStore
+	criteria string
+	ci       *mockCIProvider
+	issues   *opsTracker
+	router   *route.Router
 }
 
 func newFixScenario(t *testing.T, w stage0Fix, value string) *fixScenario {
@@ -106,14 +111,16 @@ func newFixScenario(t *testing.T, w stage0Fix, value string) *fixScenario {
 	issues := &opsTracker{mockTrackerAdapter: &mockTrackerAdapter{}}
 	stage0Workbench.reset()
 	return &fixScenario{
-		t:      t,
-		w:      w,
-		value:  value,
-		clock:  &fixClock{now: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)},
-		forge:  &fixForge{head: "deadbeef"},
-		store:  newStatefulFingerprintStore(),
-		ci:     &mockCIProvider{},
-		issues: issues,
+		t:        t,
+		w:        w,
+		value:    value,
+		clock:    &fixClock{now: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)},
+		forge:    &fixForge{head: "deadbeef"},
+		store:    newStatefulFingerprintStore(),
+		verdicts: &verdictStore{},
+		criteria: stage0AllMet,
+		ci:       &mockCIProvider{},
+		issues:   issues,
 		// The workflow's own notifications: its tracker_comment entry
 		// posts on the story, its webhook entry to the workbench.
 		router: mustRouter(t, issues, registry.Notifiers.Get, route.Inputs{Entries: w.cfg.Notifications.Backends}),
@@ -134,6 +141,8 @@ func (s *fixScenario) exitRun(reaction string) {
 	f.params.MergeConflictReactionConfigured = s.w.mergeConflicts()
 	f.params.Router = s.router
 	f.params.NowFunc = s.clock.Now
+	f.params.Store = &verdictExitStore{mockExitStore: f.store, verdictStore: s.verdicts}
+	f.result.CriteriaFile = []byte(s.criteria)
 	entry := f.state.Running[hopExitIssueID]
 	entry.ReactionKind = reaction
 	if s.state != nil {
@@ -231,7 +240,7 @@ func (s *fixScenario) autoMerge(ci string) bool {
 	params := autoMergeParams(&reviewReconcileStore{}, scm, &reviewTrackerStub{})
 	params.AutoMergeConfig = s.w.am
 	params.NowFunc = func() time.Time { return s.clock.Now().Add(time.Hour) }
-	params.ReviewGate = planReviewGate(s.w.cfg, &labelTracker{labels: []string{s.value, s.w.review.Stage}})
+	params.ReviewGate = planReviewGate(s.w.cfg, &labelTracker{labels: []string{s.value, s.w.review.Stage}}, s.verdicts)
 	reconcileAutoMerge(state, params, discardLogger(), context.Background(), newAutoMergeMetricsSpy())
 	state.TrackerOpsWg.Wait()
 	return merged

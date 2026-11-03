@@ -250,6 +250,50 @@ func TestResultWithoutIssueBranch(t *testing.T) {
 	}
 }
 
+// The agent's .sortie/status and a review's .sortie/criteria.json are
+// returned beside pr, so a review that stops blocked or finds a
+// criterion not met in the machine reaches Sortie; a run that wrote
+// neither leaves both parts out.
+func TestResultCarriesTheStatusAndCriteria(t *testing.T) {
+	const verdict = `{"criteria": [{"criterion": "the chain ends DONE", "verdict": "not-met", "evidence": "seed-vm-recreate timed out"}]}`
+	h := newHarness(t, defaults())
+	h.offer("ONS-7", 1, map[string]string{"AGENT_STATUS": "blocked\nWhich host list?\n", "AGENT_CRITERIA": verdict})
+	res := resultOf(t, h)
+	if string(res.Status) != "blocked\nWhich host list?\n" || string(res.Criteria) != verdict || string(res.PR) != testPR {
+		t.Errorf("status %q, criteria %q, pr %q; want the agent's files", res.Status, res.Criteria, res.PR)
+	}
+
+	h = newHarness(t, defaults())
+	h.offer("ONS-8", 1, nil)
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-8", 1) > 0 })
+	if res, ok := h.fake.Result("ONS-8", 1); !ok || res.Status != nil || res.Criteria != nil {
+		t.Errorf("result = %+v, %v; want no status and no criteria part", res, ok)
+	}
+}
+
+// Between turns Sortie asks for the agent's .sortie files with an S
+// frame, and the worker answers at once with an F frame holding each file
+// the agent has written, while the agent still runs, so Sortie ends the
+// run after the turn that recorded a status or a criteria verdict.
+func TestSortieFilesBetweenTurns(t *testing.T) {
+	const verdict = `{"criteria": [{"criterion": "the chain ends DONE", "verdict": "met", "evidence": "steps.tsv ends DONE"}]}`
+	h := newHarness(t, defaults())
+	h.offerJob("ONS-7", 1, map[string]string{"AGENT_MODE": "wait-input", "AGENT_CRITERIA": verdict}, func(j *fakecp.Job) {
+		j.KeepInputOpen, j.AskFilesAfter = true, "waiting for input"
+	})
+	res := resultOf(t, h)
+	files, ok := h.fake.SortieFiles("ONS-7", 1)
+	if !ok {
+		t.Fatalf("no files answer: %s", h.describe())
+	}
+	if len(files) != 2 || string(files["criteria.json"]) != verdict || string(files["pr.json"]) != testPR {
+		t.Errorf("files = %q, want the verdict and the pull request suggestion, and no status", files)
+	}
+	if string(res.Criteria) != verdict {
+		t.Errorf("result criteria %q, want the verdict as well", res.Criteria)
+	}
+}
+
 // The X frame carries the agent's exit status, a failure too, and the
 // result is still returned before the failure report.
 func TestExitStatusOnTheStream(t *testing.T) {

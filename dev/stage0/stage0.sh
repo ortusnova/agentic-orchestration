@@ -34,7 +34,7 @@
 # Needs (control): smolvm 1.32.4 or later, podman, Go, uv, npm, the openspec CLI, gh signed in,
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
-# planning sessions.
+# planning sessions and the supervisor.
 # Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's tunnel; for
 # homelab jobs, python3 and homelab's dev host (`make dev-host` in homelab).
 set -euo pipefail
@@ -200,7 +200,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH ;; esac
   needed=(smolvm go git curl sha256sum)
 else
-  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh)
+  # opencode: the planning sessions and the supervisor run the host's.
+  needed=(smolvm podman go uv npm openspec gh git openssl python3 curl sha256sum tar ssh opencode)
 fi
 for cmd in "${needed[@]}"; do
   command -v "$cmd" >/dev/null || die "$cmd is not on PATH"
@@ -219,12 +220,9 @@ migrate_max_agents "$ENV_FILE"
 . "$KIT/unit-restart.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 # The worker daemon's machines carry the runs: it restarts only when its
-# source, its configuration or its unit changed (unit-restart.sh). Its
-# source, not its binary, which Go stamps with the kit's commit.
-restart_worker() {
-  restart_changed ortus-stage0-worker.service "$ROOT/worker-daemon" \
-    "$STAGE0_HOME/worker.json" "$UNITS/ortus-stage0-worker.service"
-}
+# binary, its configuration or its unit changed (worker-build.sh).
+# shellcheck source=worker-build.sh
+. "$KIT/worker-build.sh"
 
 # The pack is built again when its inputs change (the kit's pack/,
 # smol-builder's source, which embeds its layers, and smolvm), so a merged
@@ -254,7 +252,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   STAGE0_EGRESS_CA=$HOME/.config/ortus-nova/egress-ca.crt
   [[ -s $STAGE0_EGRESS_CA ]] || die "$STAGE0_EGRESS_CA is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
   say "Building worker-daemon and smol-builder into $STAGE0_HOME/bin"
-  (cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
+  build_worker_daemon
   (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
   export PATH=$STAGE0_HOME/bin:$PATH
   build_pack
@@ -329,7 +327,7 @@ say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-
 (cd "$STAGE0_SORTIE_SRC" && GOWORK=off go build -o "$STAGE0_HOME/bin/sortie" ./cmd/sortie)
 (cd "$ROOT/acp-broker" && go build -o "$STAGE0_HOME/bin/acp-broker" ./cmd/acp-broker)
 (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
-(cd "$ROOT/worker-daemon" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/worker-daemon" ./cmd/worker-daemon)
+build_worker_daemon
 export PATH=$STAGE0_HOME/bin:$PATH
 # shellcheck source=nono-version.sh
 . "$KIT/nono-version.sh"
@@ -372,6 +370,11 @@ secret "$STAGE0_HOME/sortie-token"
 notify_host=$(notify_host) || die "fix the host name in $ENV_FILE"
 notify_token "$STAGE0_HOME" "$notify_host" || die "could not mint $notify_host's notifications token"
 secret "$STAGE0_HOME/viewer-token"
+# The supervisor's token and prompt (supervisor.sh), which the workflow's
+# supervisor section reads.
+# shellcheck source=supervisor.sh
+. "$KIT/supervisor.sh"
+supervisor_install "$STAGE0_HOME" "$KIT" || die "could not install the supervisor"
 # The edge reaches nono with this; nono intercepts TLS for the credential
 # hosts with the egress CA, whose certificate each worker gets (worker-host.sh,
 # worker-config.sh) and whose key never leaves this host.
