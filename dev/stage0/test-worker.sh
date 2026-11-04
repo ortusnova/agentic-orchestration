@@ -91,7 +91,7 @@ render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 # A worker with homelab's inputs: the homelab pack and what a homelab job needs.
 STAGE0_EGRESS_CA=$tmp/ca.crt
 mounts="{\"host\": \"$tmp/sources\", \"guest\": \"/home/builder/.cache/homelab-sources\", \"read_only\": true}"
-mounts+=", {\"host\": \"$tmp/recorder\", \"guest\": \"/var/log/homelab-recorder\", \"per_job\": true}"
+mounts+=", $(homelab_state_mounts "$tmp/recorder" "$tmp/open-issues")"
 STAGE0_HOMELAB_PACK=$STAGE0_HOME/packs/homelab-0123.smolmachine
 STAGE0_HOMELAB_IMAGE_JSON=$(homelab_image_json /opt/krunfw "$mounts")
 render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
@@ -102,7 +102,14 @@ grep -q '"homelab.smolmachine": "'"$STAGE0_HOMELAB_PACK"'"' "$conf" && grep -q '
 grep -q '"user": "builder"' "$conf" && grep -q '"lib_dir": "/opt/krunfw"' "$conf" && grep -q '"per_job": true' "$conf" \
   && grep -q '"HOMELAB_VM_AGE_KEY": "'"$STAGE0_HOME"'/inputs/vm-age/keys.txt"' "$conf" \
   && ok "the homelab job gets builder, the guest kernel, the shared folders and the vm key" || fail "homelab image: $(cat "$conf")"
-for step in 'sops/age/keys.txt' 'guest-start.sh' 'scripts/vmhost/prepare.sh'; do
+python3 - "$conf" "$tmp/open-issues" <<'PY' && ok "the homelab job reads the host's open-issue evidence, read-only, where homelab looks for it" || fail "open-issues mount: $(cat "$conf")"
+import json, sys
+conf, host = sys.argv[1], sys.argv[2]
+mounts = json.load(open(conf))["smolvm"]["images"]["homelab.smolmachine"]["mounts"]
+want = {"host": host, "guest": "/home/builder/.local/state/homelab/open-issues", "read_only": True}
+sys.exit(0 if want in mounts else 1)
+PY
+for step in 'sops/age/keys.txt' 'guest-start.sh' 'scripts/vmhost/prepare.sh' '/home/builder/.local/state /home/builder/.local/state/homelab'; do
   grep -q "$step" "$conf" && ok "its setup does what the hooks did: $step" || fail "no $step in the setup"
 done
 sum=$(sha256sum < "$conf")
