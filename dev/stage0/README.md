@@ -155,8 +155,9 @@ by the same Sortie, like any other.
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
 - **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
-  (`websearch.provider` in `pack/opencode.json`), so `control-plane/nono/egress-profile.json`
-  allows `mcp.firecrawl.dev` and no credential is bound. With no provider set,
+  (`websearch.provider` in `pack/opencode.json`), so `WORKFLOW.md` declares
+  `mcp.firecrawl.dev` among the harness's hosts (`environment.remote.egress`),
+  which every job's machine reaches directly, and no credential is bound. With no provider set,
   opencode asks the user to pick one on the first search, and Sortie
   refuses that prompt.
 - **What the agent reads.** The VM has no copy of the spec store and no
@@ -249,7 +250,7 @@ per preview, for the proxy in front of the live workbench, and runs
 `STAGE0_WORKBENCH_URL` the address is the preview's loopback port.
 
 The review on the preview runs in a job's machine, so it reaches the preview
-only through the job's egress: `control-plane/nono/egress-profile.json` must allow the
+only through the job's egress: the repository's `.sortie/egress.yaml` must declare the
 preview's name, and the preview must let the review sign in. The kit sets up
 neither by itself.
 
@@ -314,7 +315,7 @@ Some acceptance criteria need a live run that the story's own machine
 cannot do: a host its egress refuses, a sandbox, another repository (spec
 store `agent-platform/run-supervision`, "A live criterion a story's machine
 cannot run becomes a live-proof job"). For example, homelab's full vm chain
-needs Let's Encrypt staging, which `control-plane/nono/egress-profile.json` does not allow. The
+needs Let's Encrypt staging, which a story's own job does not reach. The
 review records such a criterion `live-proof` in `.sortie/criteria.json`
 and names it after `live proof needed:`; Sortie then does not merge the
 pull request and comments the criterion on the story. The supervisor
@@ -508,18 +509,44 @@ What a worker's request meets:
   it and admits it only when it is live and granted for egress; anything
   else gets `407` and never reaches nono. While Sortie cannot answer, as
   while it restarts, the gate answers `503`, which the worker retries. An
-  admitted `CONNECT` goes through nono, which allows only the hosts in
-  `control-plane/nono/egress-profile.json`, the one list of the hosts a
-  job of any repository may reach, with the forge's and those of the
-  credentials nono holds (`workflow/profile_test.go` checks it holds each
-  credential `WORKFLOW.md` binds). The remote kind takes no `allow_hosts`,
-  so the workflow has none; add a host a chain needs to that profile. For
-  a credential's host nono intercepts TLS with the kit's egress CA and
-  replaces the placeholder Sortie gives the machine
-  (`sortie-credential-<name>`) with the credential. A refusal is recorded
-  in the gate's journal with the worker, job, attempt and host:
-  `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
-  A live-proof job that runs goes through the live-proof nono instead.
+  admitted `CONNECT` goes through nono.
+- **Which host goes where.** A job's hosts are split three ways (spec
+  store `agent-platform/credential-egress`):
+  - *Direct hosts*, from the offer's policy (`run.egress`): the harness's
+    hosts, declared once in `WORKFLOW.md` under
+    `environment.remote.egress`, each with its reason (opencode's models,
+    npm, GitHub's downloads, Firecrawl's search), and the repository's
+    own, from its `.sortie/egress.yaml` on its base branch, which Sortie
+    reads and the kit never does (this repository's is
+    [`.sortie/egress.yaml`](../../.sortie/egress.yaml); homelab's is
+    homelab's). The worker's machine reaches each directly, under
+    smolvm's host filter, and never through nono. Add a host a
+    repository's jobs need to that repository's file, and one the agent
+    harness needs in every job to `environment.remote.egress`.
+  - *Credential hosts*, through nono: `control-plane/nono/egress-profile.json`
+    allows exactly the hosts of the credentials `WORKFLOW.md` binds and
+    nono holds, `api.anthropic.com` (`anthropic`) and `api.github.com`
+    (`github_api`), and no other. For them nono intercepts TLS with the
+    kit's egress CA and replaces the placeholder Sortie gives the machine
+    (`sortie-credential-<name>`) with the credential. The worker keeps
+    them on the egress flow even when a policy names them.
+  - *Refusals.* A host the policy does not allow directly is refused by
+    smolvm, and the worker daemon keeps smolvm's events for the job and
+    attempt in `state_dir/refusals/<job>/<attempt>.json` (the [worker
+    daemon's operator guide](../../worker-daemon/docs/operator-guide.md),
+    "The machine's network"). A request through the egress flow to a host
+    nono does not allow, a harness or repository host among them, is
+    refused by nono and recorded in the egress gate's journal with the
+    worker, job, attempt and host:
+    `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=registry.npmjs.org:443 status=403`.
+
+  `workflow/profile_test.go` checks that nono's hosts are exactly the
+  credential hosts, that nono holds each credential `WORKFLOW.md` binds
+  and no other, and the harness's hosts; `workflow/kit_hosts_test.go`
+  checks that no kit script reads a repository's checkout for egress and
+  that the kit holds no host only one repository's jobs need. The remote
+  kind takes no `allow_hosts`, so the workflow has none. A live-proof job
+  that runs goes through the live-proof nono instead.
 
 The workflow names the flows by Pomerium's URL:
 `${STAGE0_CP_PUBLIC_URL}/<flow>` for stdio, mcp, bundles and usage, and
@@ -580,7 +607,7 @@ All on p1 but a worker's own key; no credential is stored on a worker host.
 | What | Where |
 | --- | --- |
 | Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired |
-| Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
+| Forge (`github_api`, `api.github.com`; git over HTTPS needs none in a job: Sortie pushes) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The egress gate's credential to nono | `nono-pass` in the stage-0 home |
 | Egress CA | `egress-ca/ca.key` (mode 0600) and `egress-ca/ca.crt` in the stage-0 home |
@@ -596,7 +623,9 @@ gate's scenarios against a fake Sortie, with a stand-in for nono, and
 `agent-platform/control-plane` against the real Pomerium. `make -C
 dev/stage0 test-live` runs the nono scenarios on p1 through the egress
 gate against the pinned nono, the credentials on p1, `api.anthropic.com`
-and `mcp.firecrawl.dev`, on ports of its own.
+and `api.github.com`, each through its placeholder, and checks that nono
+refuses every other host (`registry.npmjs.org` among them), on ports of
+its own.
 
 ## The operator's channel
 
@@ -731,6 +760,7 @@ machines (spec store `run-homelab-through-sortie`, design D5-D12):
 | Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 60 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
 | Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone; read-only, `~/.local/state/homelab/open-issues` at the same path in the guest (`/home/builder/.local/state/homelab/open-issues`), the open-issue evidence `python3 -m homelab.open_issues capture` keeps on the host, so a job reads the evidence a row of homelab's `docs/open-issues.md` names. A job's own captures go to its recorder folder (`HOMELAB_STATE_HOME=/var/log/homelab-recorder`); the setup gives `~/.local/state` back to `builder`, since the read-only mount leaves its parents to root. Six, beside the daemon's share: on taichi a machine with 8 started (smolvm 1.32.4, nested, 2026-11-04), so one stays spare |
 | vm key | copied alone into `$STAGE0_HOME/inputs/vm-age`; reaches every command in the machine as `HOMELAB_VM_AGE_KEY` (`env_files`), never logged |
+| Egress | not the kit's: a homelab job reaches the harness's hosts and the hosts homelab declares in its own `.sortie/egress.yaml`, which Sortie reads from homelab's base branch and puts in the job's offer; the kit reads no egress list from the checkout and holds none of homelab's hosts ([Worker hosts (p1)](#worker-hosts-p1)) |
 | Setup | what the homelab workflow's hooks did, before the agent starts: the vm key where sops looks, `guest-start.sh` (the flight recorder, and swap at `/storage/swapfile`), and `scripts/vmhost/prepare.sh` |
 
 The recorder folders stay until you delete them:

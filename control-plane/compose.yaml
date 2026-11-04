@@ -39,7 +39,6 @@ secrets:
   cp-egress-ca-cert: {external: true}
   cp-egress-ca-key: {external: true}
   cp-github-token: {external: true}
-  cp-github-basic: {external: true}
   cp-anthropic-token: {external: true}
   cp-huly-token: {external: true}
   cp-workbench-password-hash: {external: true}
@@ -186,7 +185,6 @@ services:
       - {source: cp-nono-pass, type: env, target: NONO_PROXY_PASS}
       - {source: cp-anthropic-token, type: env, target: CP_EGRESS_ANTHROPIC}
       - {source: cp-github-token, type: env, target: CP_EGRESS_GITHUB}
-      - {source: cp-github-basic, type: env, target: CP_EGRESS_GITHUB_BASIC}
       - cp-egress-ca-cert
       - cp-egress-ca-key
     networks: [internal, outside]
