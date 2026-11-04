@@ -22,6 +22,7 @@ import (
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/config"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/cp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/egress"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
@@ -292,6 +293,10 @@ func jobKey(id string, attempt int) string { return fmt.Sprintf("%s#%d", id, att
 
 // refusal says why the daemon will not start an offered job, or "".
 func (d *Daemon) refusal(o *protocol.Offer) string {
+	// A policy that does not parse never runs, so it never widens egress.
+	if _, err := egress.Parse(o.Run.Egress); err != nil {
+		return err.Error()
+	}
 	if o.Run.Backend != d.backend.Name() {
 		return fmt.Sprintf("run.backend %q is not served by this worker (it runs %s)", o.Run.Backend, d.backend.Name())
 	}

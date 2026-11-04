@@ -113,6 +113,9 @@ func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) bool {
 		state := protocol.MachineDeleted
 		if m != nil {
 			dctx, cancel := context.WithTimeout(ctx, d.heartbeatInterval()+time.Minute)
+			if n, _, _ := offerNetwork(o); n != nil {
+				d.keepRefusals(dctx, log, o.Job.ID, o.Job.Attempt, m)
+			}
 			if err := m.Delete(dctx); err != nil {
 				log.Error("deleting the machine failed", slog.String("error", err.Error()))
 				state = protocol.MachineRunning

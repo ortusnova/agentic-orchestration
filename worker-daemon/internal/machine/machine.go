@@ -19,8 +19,8 @@ const (
 )
 
 // Forward joins a guest loopback port to a host Unix socket the daemon
-// serves. It is the machine's only way off the guest: a machine has no
-// network of its own.
+// serves. Without a [Network], it is the machine's only way off the
+// guest.
 type Forward struct {
 	Name       string
 	HostSocket string
@@ -49,6 +49,29 @@ type Spec struct {
 	// HostEnv holds KEY=VALUE entries for every backend command on this
 	// machine, such as SMOLVM_LIB_DIR for an image's guest kernel.
 	HostEnv []string
+	// Network, when not nil, gives the machine a network that reaches
+	// only what it allows; nil gives it none.
+	Network *Network
+}
+
+// Network is a machine's egress allowlist (design D8): smolvm's
+// virtio-net stack with private ranges blocked, reaching only these.
+type Network struct {
+	// Hosts are DNS names, or *. and a domain, matched by name when
+	// the guest resolves them.
+	Hosts []string
+	// UDP entries are cidr:port or cidr:N-M.
+	UDP []string
+	// Private entries are private CIDRs the machine still reaches.
+	Private []string
+}
+
+// EgressEventer is a machine whose egress refusals can be read, as
+// smolvm records them.
+type EgressEventer interface {
+	// EgressEvents returns the machine's egress events as the backend
+	// prints them, in JSON.
+	EgressEvents(ctx context.Context) ([]byte, error)
 }
 
 // Mount is a host folder shared with the machine.

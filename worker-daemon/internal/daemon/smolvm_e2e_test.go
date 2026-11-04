@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/daemon"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
@@ -81,4 +83,100 @@ func TestSmolvmEndToEnd(t *testing.T) {
 	if r := h.reports("ONS-7", 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded || r[0].Machine != protocol.MachineDeleted {
 		t.Errorf("reports = %+v", r)
 	}
+}
+
+// e2eEgressCheck connects to $ALLOWED and to $DENIED on port 443 from
+// the job machine, through its own interface (no proxy), and prints
+// whether each connection was made. A nested script, when given, does
+// the same from a VM nested in the machine.
+const e2eEgressCheck = `read -r line
+probe() { if socat -T10 /dev/null "TCP:$1:443,connect-timeout=10" 2>/dev/null; then echo "$2: reached"; else echo "$2: refused"; fi; }
+probe "$ALLOWED" "machine allowed"
+probe "$DENIED" "machine denied"
+if [ -n "$NESTED_SCRIPT" ]; then printf '%s\n' "$NESTED_SCRIPT" > /tmp/nested-egress.sh && sh /tmp/nested-egress.sh; fi
+git -c user.name=agent -c user.email=agent@example.invalid commit -q --allow-empty -m 'agent work'
+echo done
+`
+
+// The smolvm egress end-to-end run (design D8): a job machine made from
+// the offer's run.egress reaches a declared host and is refused an
+// undeclared one, and so does a VM nested in it, through the machine's
+// interface; the refusals are in the state directory after the machine
+// is deleted. It needs KVM with nested guests, smolvm, a pack with sh,
+// git and socat in WORKER_DAEMON_E2E_PACK, and the network. With
+// WORKER_DAEMON_E2E_NESTED_SCRIPT, a shell script run in the machine
+// that boots a nested VM (libvirt, as homelab's seed) and prints
+// "nested allowed: reached" or "nested allowed: refused", then the same
+// for "nested denied", for the hosts in $ALLOWED and $DENIED, it checks
+// the nested VM too; its pack (homelab's) goes in WORKER_DAEMON_E2E_PACK.
+func TestSmolvmEgressEndToEnd(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		t.Skip("skipped: this host has no /dev/kvm, so smolvm cannot start a machine here")
+	}
+	host, err := hostinfo.Host{}.Snapshot(t.TempDir())
+	if err != nil || !host.Nested {
+		t.Skipf("skipped: this host's KVM offers no nested guests (%v), so a VM cannot nest in the job machine", err)
+	}
+	bin, err := exec.LookPath("smolvm")
+	if err != nil {
+		t.Skip("skipped: /dev/kvm exists but smolvm is not on PATH")
+	}
+	pack := os.Getenv("WORKER_DAEMON_E2E_PACK")
+	if pack == "" {
+		t.Skip("skipped: set WORKER_DAEMON_E2E_PACK to a .smolmachine pack with sh, git and socat (smol-builder's base layer has them)")
+	}
+	allowed, denied := envOr("WORKER_DAEMON_E2E_ALLOWED", "ghcr.io"), envOr("WORKER_DAEMON_E2E_DENIED", "pastebin.com")
+	var nested string
+	if f := os.Getenv("WORKER_DAEMON_E2E_NESTED_SCRIPT"); f != "" {
+		b, err := os.ReadFile(f) // #nosec G304 -- the tester names the file
+		if err != nil {
+			t.Fatal(err)
+		}
+		nested = string(b)
+	}
+	s := defaults()
+	s.backend = &machine.Smolvm{Binary: bin}
+	s.pack = pack
+	s.leaseMS = 30000
+	s.usage = []string{"sh", "-c", `echo '{"input_tokens":7,"output_tokens":2}'`}
+	h := newHarness(t, s)
+	requires := protocol.Requires{CPU: 2, MemGiB: 4, DiskGiB: 10}
+	if nested != "" {
+		requires.Capabilities = []string{daemon.CapabilityNested}
+	}
+	h.fake.Offer(fakecp.Job{
+		ID: "ONS-30", Attempt: 1, Requires: requires,
+		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eEgressCheck},
+			Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": "ONS-30", "ALLOWED": allowed, "DENIED": denied, "NESTED_SCRIPT": nested}},
+		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Version: 1, Hosts: []protocol.EgressHost{{Host: allowed, Reason: "the declared host"}}}},
+		Seed:   seedBundle(t, "sortie/ONS-30"), StdioInput: []string{"go\n"},
+	})
+	h.waitFor("the report", 15*time.Minute, func() bool { return h.fake.Count("report", "ONS-30", 1) > 0 })
+	out := h.fake.StdioOutput("ONS-30", 1)
+	want := []string{"machine allowed: reached", "machine denied: refused"}
+	if nested != "" {
+		want = append(want, "nested allowed: reached", "nested denied: refused")
+	} else {
+		t.Log("WORKER_DAEMON_E2E_NESTED_SCRIPT is not set: the nested VM is not checked")
+	}
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Errorf("stdio output lacks %q: %s", w, out)
+		}
+	}
+	if r := h.reports("ONS-30", 1); len(r) != 1 || r[0].Machine != protocol.MachineDeleted {
+		t.Errorf("reports = %+v, want one with the machine deleted", r)
+	}
+	b, err := os.ReadFile(h.d.RefusalsFile("ONS-30", 1))
+	if err != nil || !strings.Contains(string(b), denied) {
+		t.Errorf("refusal record = %s, %v; want a refusal of %s", b, err, denied)
+	}
+	t.Logf("refusal record:\n%s", b)
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }

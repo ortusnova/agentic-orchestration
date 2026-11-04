@@ -5,6 +5,9 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"time"
@@ -136,6 +139,85 @@ type Run struct {
 	StallTimeoutMS int               `json:"stall_timeout_ms"`
 	SeedPath       string            `json:"seed_path"`
 	Credentials    []RunCredential   `json:"credentials"`
+	// Egress is the job's egress policy (agent-platform/job-egress-policy),
+	// kept as sent so that the daemon checks it strictly; absent, the
+	// machine gets no network. See [Egress].
+	Egress json.RawMessage `json:"egress,omitempty"`
+}
+
+// Egress is run.egress: the policies whose hosts the job's machine
+// reaches directly, apart so that each host's source is known, and the
+// hosts that stay on the egress flow.
+type Egress struct {
+	Source          *EgressSource `json:"source,omitempty"`
+	Harness         *EgressPolicy `json:"harness,omitempty"`
+	Repository      *EgressPolicy `json:"repository,omitempty"`
+	CredentialHosts []string      `json:"credential_hosts,omitempty"`
+}
+
+// EgressSource names where Sortie read the repository's policy.
+type EgressSource struct {
+	Repository string `json:"repository"`
+	Commit     string `json:"commit"`
+}
+
+// EgressPolicy is one policy in the format of .sortie/egress.yaml.
+type EgressPolicy struct {
+	Version int             `json:"version"`
+	Hosts   []EgressHost    `json:"hosts"`
+	UDP     []EgressUDP     `json:"udp,omitempty"`
+	Private []EgressPrivate `json:"private,omitempty"`
+}
+
+// EgressHost is a host the machine reaches by name: a DNS name, or
+// *. and a domain.
+type EgressHost struct {
+	Host   string `json:"host"`
+	Reason string `json:"reason"`
+}
+
+// EgressUDP is UDP to a CIDR on a port or a range of ports.
+type EgressUDP struct {
+	CIDR   string     `json:"cidr"`
+	Port   EgressPort `json:"port"`
+	Reason string     `json:"reason"`
+}
+
+// EgressPrivate is a private range the machine reaches.
+type EgressPrivate struct {
+	CIDR   string `json:"cidr"`
+	Reason string `json:"reason"`
+}
+
+// EgressPort is a UDP port, N, or a range, N-M. On the wire it is a
+// number or a string.
+type EgressPort string
+
+// MarshalJSON writes a single port as a number and a range as a string.
+func (p EgressPort) MarshalJSON() ([]byte, error) {
+	if n, err := strconv.Atoi(string(p)); err == nil {
+		return json.Marshal(n)
+	}
+	return json.Marshal(string(p))
+}
+
+// UnmarshalJSON reads a number or a string.
+func (p *EgressPort) UnmarshalJSON(b []byte) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	var v any
+	if err := d.Decode(&v); err != nil {
+		return err
+	}
+	switch v := v.(type) {
+	case json.Number:
+		*p = EgressPort(v.String())
+	case string:
+		*p = EgressPort(v)
+	default:
+		return fmt.Errorf("port %s is neither a number nor a string", b)
+	}
+	return nil
 }
 
 // FlowAccess is where a job reaches one flow, and the job token that
