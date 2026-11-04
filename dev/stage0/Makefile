@@ -17,7 +17,7 @@ test: ## Run stage0-live-proofs' and the workflow's tests and the kit's script t
 	cd workflow && go test -race -count=1 ./...
 	@set -e; for t in $(filter-out $(LIVE_TESTS),$(KIT_TESTS)); do echo "== $$t"; ./$$t; done
 
-test-live: ## On p1: the egress scenarios against the pinned nono, api.anthropic.com and api.github.com
+test-live: ## On p1: the egress scenarios against the pinned nono, api.anthropic.com and mcp.firecrawl.dev
 	./test-egress-live.sh
 
 lint: ## Lint stage0-live-proofs and the workflow's tests, and shellcheck the kit's scripts

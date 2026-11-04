@@ -313,22 +313,15 @@ func TestModelRequestThroughNono(t *testing.T) {
 	}
 }
 
-// nono allows only the credential hosts: any other host, a harness host
-// such as registry.npmjs.org too (which the worker allows directly), is
-// refused on the egress flow and recorded with the worker, job and attempt.
 func TestHostNotAllowed(t *testing.T) {
-	for _, host := range []string{"pastebin.com", "registry.npmjs.org"} {
-		t.Run(host, func(t *testing.T) {
-			h := newHarness(t)
-			status := h.connect(host+":443", "Bearer "+h.sortie.mint("ONS-7", Flow))
-			if status != http.StatusForbidden {
-				t.Fatalf("status = %d, want nono's 403", status)
-			}
-			want := `msg="egress refused" worker=p1 job=ONS-7 attempt=1 host=` + host + `:443 status=403`
-			if !strings.Contains(h.log.String(), want) {
-				t.Errorf("the refusal is not logged with its job; want %s in:\n%s", want, h.log)
-			}
-		})
+	h := newHarness(t)
+	status := h.connect("pastebin.com:443", "Bearer "+h.sortie.mint("ONS-7", Flow))
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want nono's 403", status)
+	}
+	want := `msg="egress refused" worker=p1 job=ONS-7 attempt=1 host=pastebin.com:443 status=403`
+	if !strings.Contains(h.log.String(), want) {
+		t.Errorf("the refusal is not logged with its job; want %s in:\n%s", want, h.log)
 	}
 }
 

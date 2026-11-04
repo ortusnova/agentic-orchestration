@@ -164,10 +164,10 @@ func TestNoFlowReachesTheEdge(t *testing.T) {
 
 // environment.remote holds only the keys the remote kind takes, so Sortie
 // neither refuses the workflow nor warns of a key it ignores
-// (unknown_sub_key): the harness's hosts are its egress, never allow_hosts,
+// (unknown_sub_key): the allowed hosts are nono's (egress-profile.json),
 // and IS_SANDBOX is the worker image's, not a pass_env.
 func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
-	known := []string{"backend", "image", "requires", "flows", "credentials", "egress", "repositories", "default_repository"}
+	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository"}
 	key := regexp.MustCompile(`^    ([a-z_]+):`)
 	in := false
 	for _, line := range workflowFrontMatter(t) {

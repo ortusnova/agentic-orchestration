@@ -21,7 +21,7 @@ its certificate instead of a tunnel (see
 | `workbench` | `localhost/ortus-nova/workbench:<commit>`, built here | The plan workbench, at `http://127.0.0.1:8793` (`CP_WORKBENCH_PORT`). It shares Sortie's network namespace, so it reaches each session's broker on loopback. |
 | `pomerium` | `docker.io/pomerium/pomerium`, pinned by digest | The only door for worker hosts, on `CP_PUBLIC_PORT` (8443). See [Pomerium](#pomerium). |
 | `egress-gate` | `localhost/ortus-nova/control-plane:<commit>`, built here | Behind Pomerium's egress route: admits each `CONNECT` only with a live egress job token (Sortie's token introspection), logs it with the worker, job and attempt, and tunnels it through nono. |
-| `nono` | `ghcr.io/nolabs-ai/nono`, pinned by digest | Holds every platform credential. It allows only the hosts of `nono/egress-profile.json`, which are the hosts of the credentials it holds (every other host a job reaches is in its offer's policy, which the worker allows directly), replaces a job's placeholder with the credential only on requests to that credential's hosts, and logs every request (`podman logs cp-nono`). A guest sees only placeholders. |
+| `nono` | `ghcr.io/nolabs-ai/nono`, pinned by digest | Holds every platform credential. It allows only the hosts of `nono/egress-profile.json`, replaces a job's placeholder with the credential only on requests to that credential's hosts, and logs every request (`podman logs cp-nono`). A guest sees only placeholders. |
 | `huly` and `huly-*` | `hardcoreeng/*`, CockroachDB, Redpanda, Elasticsearch, Silo (the MinIO fork huly-selfhost runs, as MinIO left Docker Hub) and nginx, each pinned by digest | The tracker. Its entry, nginx, is at `http://huly.cp.internal:8087` (`CP_HULY_HOST`, `CP_HULY_PORT`), published on `127.0.0.1`. |
 
 Two networks: `ortus-cp-internal` has no route out, and every service is on
@@ -128,7 +128,7 @@ file may end in a newline; `cp.sh` drops trailing newlines from each secret.
 | `cp-huly-secret` | `cpctl init` | every Huly service (`SERVER_SECRET`, the collaborator's `SECRET`) |
 | `cp-pomerium-cert`, `cp-pomerium-key` | `cpctl init`, from the CA | Pomerium (files) |
 | `cp-egress-ca-cert`, `cp-egress-ca-key` | `cpctl init` | nono (files): it intercepts TLS for the credentials' hosts with this CA. Worker hosts' machines trust its certificate; its key never leaves this host |
-| `cp-github-token` | you: a token scoped to the repositories Sortie pushes to | Sortie (`SORTIE_GITHUB_TOKEN`, git and the forge API), the workbench (`WORKBENCH_GITHUB_TOKEN`), nono (`CP_EGRESS_GITHUB`, the `github_api` credential, for `api.github.com` only) |
+| `cp-github-token` | you: a token scoped to the repositories Sortie pushes to | Sortie (`SORTIE_GITHUB_TOKEN`, git and the forge API), the workbench (`WORKBENCH_GITHUB_TOKEN`), nono (`CP_EGRESS_GITHUB`, and `CP_EGRESS_GITHUB_BASIC`, `x-access-token:<token>`, which `cp.sh up` derives as the podman secret `cp-github-basic`) |
 | `cp-anthropic-token` | you: `claude setup-token` | nono (`CP_EGRESS_ANTHROPIC`) |
 | `cp-huly-token` | you: `dev/huly_project.py` prints it | Sortie (`SORTIE_HULY_TOKEN`) |
 | `cp-workbench-password-hash` | you: `podman run --rm -i localhost/ortus-nova/workbench:<commit> workbench hash-password` | the workbench (`WORKBENCH_PASSWORD_HASH`) |
