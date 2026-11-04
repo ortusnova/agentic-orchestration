@@ -56,7 +56,10 @@ type Daemon struct {
 
 	mu   sync.Mutex
 	jobs map[string]*job
-	wg   sync.WaitGroup
+	// adopted starts each job adopted from the last start, once the
+	// first check-in is done.
+	adopted []func()
+	wg      sync.WaitGroup
 
 	// The machines no Sortie started, as last listed, and when each
 	// was first seen.
@@ -135,6 +138,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		backoff = min(2*backoff, 30*time.Second)
 	}
+	for _, start := range d.adopted {
+		start()
+	}
+	d.adopted = nil
 	d.pollWhileFree(ctx)
 	t := time.NewTimer(d.heartbeatInterval())
 	defer t.Stop()

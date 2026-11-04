@@ -55,8 +55,24 @@ func TestADaemonRestartKeepsTheJob(t *testing.T) {
 	if n := h.fake.Count("report", "ONS-7", 1); n != 0 {
 		t.Fatalf("the stopping daemon reported the job %d times", n)
 	}
+	since := len(h.fake.Events())
+	h.fake.DelayCheckIns(300 * time.Millisecond)
 	h.startNewDaemon()
 	h.waitFor("the report", 30*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	// The adopted job resumes once the new daemon checked in: its bounds
+	// are the control plane's lease, not the daemon's default.
+	checkIn, resume := -1, -1
+	for i, e := range h.fake.Events()[since:] {
+		if e.Kind == "checkin" && e.Status == http.StatusOK && checkIn < 0 {
+			checkIn = i
+		}
+		if e.Kind == "resume" && resume < 0 {
+			resume = i
+		}
+	}
+	if checkIn < 0 || resume < checkIn {
+		t.Errorf("the adopted job resumed (event %d) before the new daemon checked in (event %d): %s", resume, checkIn, h.describe())
+	}
 	reports := h.reports("ONS-7", 1)
 	if len(reports) != 1 || reports[0].Outcome != protocol.OutcomeSucceeded {
 		raw, _ := json.Marshal(reports)
@@ -79,6 +95,9 @@ func TestADaemonRestartKeepsTheJob(t *testing.T) {
 	}
 	if n := h.fake.Count("resume", "ONS-7", 1); n != 1 {
 		t.Errorf("resumes %d, want the adopted job's one", n)
+	}
+	if !strings.Contains(h.logs.String(), `msg="jobs left by the last start" adopted=1 not_adopted=0`) {
+		t.Errorf("the new daemon did not sum up what it adopted:\n%s", h.logs.String())
 	}
 }
 
