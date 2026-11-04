@@ -311,6 +311,33 @@ func TestADeclaredPrivateRange(t *testing.T) {
 	}
 }
 
+// A policy whose only entries are UDP and private gets a machine with no
+// network, so no --allow-cidr or --allow-udp without a host pattern, the
+// gap of --block-private that the operator guide measured.
+func TestUDPAndPrivateOnlyGetNoNetwork(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offerJob("ONS-7", 1, nil, func(j *fakecp.Job) {
+		j.Egress = &protocol.Egress{Repository: &protocol.EgressPolicy{
+			UDP:     []protocol.EgressUDP{{CIDR: "0.0.0.0/0", Port: "123", Reason: "NTP"}},
+			Private: []protocol.EgressPrivate{{CIDR: "192.168.1.0/30", Reason: "the lab's switch"}},
+		}}
+	})
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	spec := h.machine("ONS-7", 1).Spec()
+	if spec.Network != nil {
+		t.Fatalf("network = %+v, want none", spec.Network)
+	}
+	args, err := machine.CreateArgs(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--net") || strings.HasPrefix(a, "--allow-") || strings.HasPrefix(a, "--deny-") || a == "--block-private" {
+			t.Errorf("create args carry %s", a)
+		}
+	}
+}
+
 // Scenario: Loopback stays denied. A private entry of loopback,
 // link-local or a public range gets no machine and one failed report
 // that names the entry.

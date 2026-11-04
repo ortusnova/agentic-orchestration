@@ -97,7 +97,10 @@ func TestSmolvmEndToEnd(t *testing.T) {
 // e2eEgressCheck connects to $ALLOWED and to $DENIED on port 443 from
 // the job machine, through its own interface (no proxy), and prints
 // whether each connection was made; with $PRIVATE_NAME, it does the same
-// for that name and its address, $PRIVATE_ADDR, on $PRIVATE_PORT. A
+// for that name and its address, $PRIVATE_ADDR, on $PRIVATE_PORT; with
+// $RANGE_ADDR, an address of a declared private range, it does the same
+// for that address and for $OUTSIDE_ADDR, a private address outside the
+// range, on $PRIVATE_PORT. A
 // nested script, when given, does the same from a VM nested in the
 // machine.
 const e2eEgressCheck = `read -r line
@@ -107,6 +110,10 @@ probe "$DENIED" "machine denied"
 if [ -n "$PRIVATE_NAME" ]; then
   probe "$PRIVATE_NAME" "machine private name" "$PRIVATE_PORT"
   probe "$PRIVATE_ADDR" "machine private address" "$PRIVATE_PORT"
+fi
+if [ -n "$RANGE_ADDR" ]; then
+  probe "$RANGE_ADDR" "machine range address" "$PRIVATE_PORT"
+  probe "$OUTSIDE_ADDR" "machine outside address" "$PRIVATE_PORT"
 fi
 if [ -n "$NESTED_SCRIPT" ]; then printf '%s\n' "$NESTED_SCRIPT" > /tmp/nested-egress.sh && sh /tmp/nested-egress.sh; fi
 git -c user.name=agent -c user.email=agent@example.invalid commit -q --allow-empty -m 'agent work'
@@ -134,6 +141,16 @@ echo done
 // answers a private address). Run it in a network namespace of its own
 // whose resolver gives that answer, with testdata/private-name-netns.sh,
 // so that the host's DNS is not changed.
+//
+// With WORKER_DAEMON_E2E_PRIVATE_CIDR, a private range, and
+// WORKER_DAEMON_E2E_PRIVATE_ADDR, an address in it with a listener on
+// WORKER_DAEMON_E2E_PRIVATE_PORT that no name resolves to, the policy
+// declares the range as a private entry, and the machine must reach the
+// address and be refused a private address outside the range that has a
+// listener on the same port, WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR or
+// else the private name's answer, with that refusal, and none of the
+// address in the range, in the record (scenario: A declared private
+// range; design D16).
 func TestSmolvmEgressEndToEnd(t *testing.T) {
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		t.Skip("skipped: this host has no /dev/kvm, so smolvm cannot start a machine here")
@@ -164,6 +181,7 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 	if privName != "" {
 		privAddr = privateAnswer(t, privName, privPort)
 	}
+	privCIDR, rangeAddr, outsideAddr := declaredRange(t, privPort, privAddr)
 	s := defaults()
 	s.backend = &machine.Smolvm{Binary: bin}
 	s.pack = pack
@@ -185,12 +203,17 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 	if privName != "" {
 		hosts = append(hosts, protocol.EgressHost{Host: privName, Reason: "a declared name that answers a private address"})
 	}
+	var private []protocol.EgressPrivate
+	if privCIDR != "" {
+		private = append(private, protocol.EgressPrivate{CIDR: privCIDR, Reason: "a declared private range"})
+	}
 	h.fake.Offer(fakecp.Job{
 		ID: id, Attempt: 1, Requires: requires,
 		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eEgressCheck},
 			Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": id, "ALLOWED": allowed, "DENIED": denied, "NESTED_SCRIPT": nested,
-				"PRIVATE_NAME": privName, "PRIVATE_ADDR": privAddr, "PRIVATE_PORT": privPort}},
-		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Hosts: hosts}},
+				"PRIVATE_NAME": privName, "PRIVATE_ADDR": privAddr, "PRIVATE_PORT": privPort,
+				"RANGE_ADDR": rangeAddr, "OUTSIDE_ADDR": outsideAddr}},
+		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Hosts: hosts, Private: private}},
 		Seed:   seedBundle(t, "sortie/"+id), StdioInput: []string{"go\n"},
 	})
 	h.waitFor("the report", 15*time.Minute, func() bool { return h.fake.Count("report", id, 1) > 0 })
@@ -200,6 +223,11 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 		want = append(want, "machine private name: refused", "machine private address: refused")
 	} else {
 		t.Log("WORKER_DAEMON_E2E_PRIVATE_NAME is not set: a declared name that answers a private address is not checked")
+	}
+	if privCIDR != "" {
+		want = append(want, "machine range address: reached", "machine outside address: refused")
+	} else {
+		t.Log("WORKER_DAEMON_E2E_PRIVATE_CIDR is not set: a declared private range is not checked")
 	}
 	if nested != "" {
 		want = append(want, "nested allowed: reached", "nested denied: refused")
@@ -221,6 +249,14 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 	if privName != "" {
 		if n := refusalsOf(b, privName, privAddr); n < 2 {
 			t.Errorf("refusal record = %s; want two refusals of %s (%s), by name and by address, found %d", b, privName, privAddr, n)
+		}
+	}
+	if privCIDR != "" {
+		if n := refusalsOf(b, outsideAddr, outsideAddr); n < 1 {
+			t.Errorf("refusal record = %s; want a refusal of %s, outside %s", b, outsideAddr, privCIDR)
+		}
+		if n := refusalsOf(b, rangeAddr, rangeAddr); n > 0 {
+			t.Errorf("refusal record = %s; want no refusal of %s, in the declared range %s", b, rangeAddr, privCIDR)
 		}
 	}
 	t.Logf("stdio output:\n%s", out)
@@ -248,6 +284,44 @@ func privateAnswer(t *testing.T, name, port string) string {
 	}
 	_ = c.Close()
 	return a.String()
+}
+
+// declaredRange is the range of WORKER_DAEMON_E2E_PRIVATE_CIDR, its
+// address in WORKER_DAEMON_E2E_PRIVATE_ADDR, and a private address
+// outside it, WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR or else nameAddr,
+// the private name's answer, each address with a listener on port, or
+// the test fails, as a reach or a refusal would prove nothing. All three
+// are empty when no range is set.
+func declaredRange(t *testing.T, port, nameAddr string) (cidr, in, out string) {
+	t.Helper()
+	cidr, in = os.Getenv("WORKER_DAEMON_E2E_PRIVATE_CIDR"), os.Getenv("WORKER_DAEMON_E2E_PRIVATE_ADDR")
+	if cidr == "" {
+		if in != "" {
+			t.Fatal("WORKER_DAEMON_E2E_PRIVATE_ADDR is set without WORKER_DAEMON_E2E_PRIVATE_CIDR")
+		}
+		return "", "", ""
+	}
+	r, err := netip.ParsePrefix(cidr)
+	if err != nil {
+		t.Fatalf("WORKER_DAEMON_E2E_PRIVATE_CIDR %q: %v", cidr, err)
+	}
+	a, err := netip.ParseAddr(in)
+	if err != nil || !r.Contains(a) {
+		t.Fatalf("WORKER_DAEMON_E2E_PRIVATE_ADDR %q is not an address of %s", in, cidr)
+	}
+	out = envOr("WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR", nameAddr)
+	o, err := netip.ParseAddr(out)
+	if err != nil || r.Contains(o) || !slices.ContainsFunc(egress.DeniedRanges, func(d netip.Prefix) bool { return d.Contains(o) }) {
+		t.Fatalf("the outside address %q (WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR, or the private name's answer) is not a private address outside %s", out, cidr)
+	}
+	for _, x := range []string{in, out} {
+		c, err := net.DialTimeout("tcp", net.JoinHostPort(x, port), 10*time.Second)
+		if err != nil {
+			t.Fatalf("nothing listens on %s port %s, so a reach or a refusal would prove nothing: %v", x, port, err)
+		}
+		_ = c.Close()
+	}
+	return cidr, in, out
 }
 
 // refusalsOf counts the egress events in a refusal record that name the
