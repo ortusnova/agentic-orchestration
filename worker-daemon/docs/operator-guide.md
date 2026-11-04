@@ -199,11 +199,15 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
    `/run/worker`, the two sockets mounted with `--mount-socket`, and the
-   image's host inputs, if this host configures any. It
-   gives no network flag, allowlist or credential binding, so smolvm gives
-   the machine no network: `socat` in the guest serves the sockets on guest
-   loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp), and
-   that is the guest's only way out.
+   image's host inputs, if this host configures any. It gives no
+   credential binding. `socat` in the guest serves the sockets on guest
+   loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp). When
+   the offer has no `run.egress`, the machine gets no network flag or
+   allowlist, so smolvm gives it no network and the forwards are its only
+   way out. When it has one, the machine also gets the network of
+   [The machine's network](#the-machines-network). A `run.egress` that
+   does not parse gets no machine: the attempt is reported `failed`, once,
+   with the error, which names the entry.
 4. It seeds `/workspace` from the bundle and checks out the issue branch:
    the branch at the bundle's `HEAD`, or, when several are there, the one
    named after the job (`sortie/ONS-7` for `ONS-7`). It adds `/.sortie` to
@@ -211,7 +215,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    is never committed. Then it runs the image's `setup` scripts.
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
-   forwarder, `NO_PROXY=127.0.0.1,localhost`, and `WORKER_MCP_URL` at the
+   forwarder, `NO_PROXY=127.0.0.1,localhost` (and `no_proxy`), followed by
+   the hosts the machine's network allows directly, and `WORKER_MCP_URL` at the
    mcp forwarder. The agent's standard input, output and error travel on
    the `stdio` flow; its standard error also goes to the daemon's log when
    it fails. When the control plane closes the agent's input (Sortie does
@@ -220,7 +225,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    frame. Then it runs the usage command and reports on `usage`, returns
    the result on `bundles` (the issue branch's bundle and the agent's
    `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
-   when the agent wrote it), deletes the machine, and reports the outcome:
+   when the agent wrote it), keeps the machine's egress refusals when it
+   has a network, deletes the machine, and reports the outcome:
    `succeeded` when the agent exited 0 and the result was returned. The
    result always goes before the report. Usage goes before the result,
    because once Sortie has the result it finishes the attempt and closes
@@ -288,6 +294,112 @@ left, and logs `jobs left by the last start` with how many it
 The machines must outlive the daemon's process: under systemd, run it
 with `KillMode=process` (see [Run as a service](#run-as-a-service)), or
 stopping the unit kills the machines with it.
+
+### The machine's network
+
+An offer's `run.egress` (`agent-platform/job-egress-policy`) holds the
+harness's policy and the repository's, each in the format of
+`.sortie/egress.yaml` without its `version` (`hosts`, `udp`, `private`,
+each list empty, never `null`, when it has no entries), where Sortie read
+the repository's, and the `credential_hosts` that stay on the `egress`
+flow:
+
+```json
+{"source": {"repository": "homelab", "branch": "main", "commit": "4b825dc…", "file": ".sortie/egress.yaml"},
+ "harness": {"hosts": [{"host": "models.opencode.ai", "reason": "…"}], "udp": [], "private": []},
+ "repository": {
+   "hosts": [{"host": "*.githubusercontent.com", "reason": "…"}],
+   "udp": [{"cidr": "0.0.0.0/0", "port": "123", "reason": "NTP"}],
+   "private": [{"cidr": "192.168.122.0/24", "reason": "…"}]},
+ "credential_hosts": ["api.anthropic.com"]}
+```
+
+The daemon checks it strictly, by the policy's schema: an unknown member,
+a `version` other than `1` when one is sent, a host that is not a
+lower-case DNS name or `*.` and a name of two labels or more (never `*`,
+`*.com`, a port or an address), an empty `reason`, a CIDR with host bits
+set, a port outside 1-65535 (a string, `N` or `N-M`, or a number), or a
+`private` entry outside the private ranges (`10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), or overlapping loopback
+or link-local, refuses the job, as above, naming the entry. A valid one
+maps to smolvm's flags (designs D8, D15 and D16):
+
+| `run.egress` | smolvm flag |
+|---|---|
+| present | `--net-backend virtio-net --block-private` |
+| present: design D15's ranges, less the `private` entries | `--deny-cidr <cidr>` for each of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `127.0.0.0/8`, `fc00::/7`, `fe80::/10`, `::1/128`; a range that holds a `private` entry is split into the largest CIDRs that hold none of its addresses |
+| each host of `harness.hosts` and `repository.hosts`, once | `--allow-host-pattern <host>` (an exact name or `*.domain`) |
+| each `udp` entry | `--allow-udp <cidr>:<port>` (`<port>` is `N` or `N-M`) |
+| each `private` entry | `--allow-cidr <cidr>`, every port of the range, and the range left out of the deny set; never `--allow-private` (design D16) |
+| a host that is, or is covered by or covers, a host of `credential_hosts` or of `run.credentials` | nothing: it stays on the `egress` flow |
+| absent | no network flag: no network |
+
+smolvm lets a machine reach every address it resolved for an allowed
+name, private or not, so without the deny set a declared name whose
+answer is a LAN address would reach the LAN (DNS rebinding); smolvm
+checks `--deny-cidr` before anything is allowed. A `private` entry of
+`192.168.1.0/30`, for example, gives `--allow-cidr 192.168.1.0/30` and,
+for `192.168.0.0/16`, `--deny-cidr 192.168.0.0/24`, `192.168.1.4/30`,
+`192.168.1.8/29`, … `192.168.64.0/18`, `192.168.128.0/17`. Loopback and
+link-local are always denied whole. The job's log names the deny set
+(`egress: private ranges denied cidrs=…`). A `private` entry opens every
+port of every address of its range, whether or not a name
+resolves to it, so declare the smallest range the job needs.
+
+A `private` entry is `--allow-cidr`, never `--allow-private` (design
+D16): `--allow-private` reopens no address beside the patterns, as
+measured below, so an entry given by it would open nothing. The daemon
+never uses `--allow-host`, which fixes a host's addresses when the
+machine starts, `--allow-private`, a bare `--net`, or any flag that
+widens egress. The
+socket forwards stay as they are. A policy with no host allowed
+directly, every host a credential host, gives no network, even with
+`udp` or `private` entries: smolvm filters by name only beside a host
+pattern, and `--block-private` without one leaves the internet open.
+
+`NO_PROXY` and `no_proxy` hold `127.0.0.1,localhost` and then each host
+allowed directly, a pattern `*.d` written `.d`, so that HTTP clients go
+direct to those and send every other host, credential hosts first among
+them, to the `egress` forward, where nono puts the credential in place of
+its placeholder. A VM nested in the machine, as homelab's libvirt seed,
+leaves through the machine's own interface, under the same flags, with no
+list of its own.
+
+The job's log names each allowed host with its source (`egress: host
+allowed host=… source=harness`, `repository`, or both), each UDP and
+private entry, and each host withheld as a credential host.
+
+Before it deletes a machine with a network, after a job or when a
+restarted daemon cannot adopt it, the daemon reads its refusals with
+`smolvm machine egress-events --name <machine> --json` and keeps them in
+`state_dir/refusals/<job>/<attempt>.json`: `{"job", "attempt",
+"machine", "read_at", "events"}`, `events` as smolvm prints them. The
+file stays after the machine and its job directory are gone; remove it
+when you no longer need it. A failure to read them is logged and does not
+keep the machine.
+
+#### smolvm's filters, as measured
+
+Measured on smolvm 1.32.4, the version the kit pins, on taichi, on
+2026-11-04, with `--net-backend virtio-net` and machines from homelab's
+pack. A host's answer was changed with a test resolver: smolvm uses the
+host's resolver, so the machines ran in a network namespace of their own
+(`pasta --config-net`, with `/etc/resolv.conf` bound to a resolver on
+`127.0.0.1` that answers the test names from a file, TTL 1 s, and forwards
+the rest), and taichi's own DNS was not changed. Each probe is a TCP
+connection from the machine, by name or by address.
+
+| Question | Result |
+|---|---|
+| Does `--allow-host` fix a host's addresses at machine start? | No. smolvm asks the resolver for it when the machine is created and started, but when the answer changed (`9.9.9.9` to `149.112.112.112`) the machine resolved the new address and reached it within 5 s, as with a pattern. The daemon still never passes it (design D8). |
+| Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Yes. When the answer changed (`1.1.1.1` to `8.8.8.8`), the machine resolved the new address and reached it within 5 s, and again 65 s later; `8.8.8.8`, refused by address before, was reached by address after. An address the machine resolved for an allowed name stays allowed for the machine's life: the old one was still reached after the change, and after the answer changed back. |
+| What does `--block-private` do beside the patterns? | Nothing that the patterns do not already do. With one or more patterns, every address the machine has not resolved for an allowed name is refused, private or public, with or without `--block-private` (the LAN, host loopback at `100.96.0.1`, `169.254.169.254`, `10.0.0.1`, `1.1.1.1`). A pattern whose answer is a private address (`192.168.1.202`) is reached even with `--block-private`. `--allow-private 192.168.1.0/24` did not reopen an address of that range that no allowed name resolved to, so the daemon gives a policy's `private` entries as `--allow-cidr` instead (design D16). Without any pattern, `--block-private` (with `--allow-udp` only) left the public internet and the LAN open and refused only `169.254.169.254`, so the daemon gives no network to a policy that allows no host directly. |
+| Is `--deny-cidr` checked before an allow (design D15)? | Yes. A machine `--from` the stage-0 pack with `--deny-cidr` for each range of design D15, `--allow-host-pattern example.com`, `--allow-host-pattern p1.test` (answered with p1's LAN address, `192.168.1.165`) and `--allow-cidr 192.168.1.165/32` was refused `p1.test` and `192.168.1.165` on port 22, where p1 listens. With every range denied, the guest's resolver still answered `example.com`, and the machine reached it on port 443. |
+| Does a job machine made by the daemon refuse a declared name that answers a private address (design D15)? | Yes. `TestSmolvmEgressEndToEnd` under `private-name-netns.sh p1.test 192.168.1.165`, with `WORKER_DAEMON_E2E_PRIVATE_PORT=22` and the stage-0 pack, passed: the daemon created the machine `--from` the pack with `--deny-cidr` for each range of design D15, the machine reached `ghcr.io` on port 443, was refused `pastebin.com`, and was refused `p1.test` and `192.168.1.165` on port 22, and `state_dir/refusals` held a `connect` record of `192.168.1.165:22` for each. As a control, the same run with the `--deny-cidr` flags removed from the daemon's `machine create` (by a wrapper around smolvm) failed: the machine reached `p1.test` and `192.168.1.165`, with `--block-private` still given. So `machine create --from` keeps `--deny-cidr`, and it is the deny set that refuses the answer. |
+| Does a job machine made by the daemon reach a declared `private` range by address, and only that range (design D16)? | Yes. `TestSmolvmEgressEndToEnd` with `WORKER_DAEMON_E2E_PRIVATE_CIDR=192.168.1.164/30`, `WORKER_DAEMON_E2E_PRIVATE_ADDR=192.168.1.165` (p1, which no name resolves to), `WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR=192.168.1.1` (the router), `WORKER_DAEMON_E2E_PRIVATE_PORT=22` and the stage-0 pack, passed on taichi (2026-11-04): the daemon created the machine with `--allow-cidr 192.168.1.164/30`, no `--allow-private`, and the deny set split around the range (`192.168.1.160/30`, `192.168.1.168/29`, … beside `192.168.0.0/24`, `192.168.1.0/25`, …); the machine reached `ghcr.io` on port 443, was refused `pastebin.com`, reached `192.168.1.165` on port 22, and was refused `192.168.1.1` on port 22, and `state_dir/refusals` held a `connect` record of `192.168.1.1:22` and none of `192.168.1.165`. As a control, the same run with `--allow-cidr` removed from the daemon's `machine create` (by a wrapper around smolvm) failed: `192.168.1.165` was refused. So it is `--allow-cidr` that reopens the range; leaving it out of the deny set alone does not. |
+
+`--allow-udp` was not measured: smolvm answers every UDP query to port 53
+itself, so a DNS probe does not show it.
 
 ### Flows on the wire
 
@@ -402,6 +514,78 @@ elsewhere it is skipped and says which of the three is missing:
 
 ```sh
 WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
+```
+
+`TestSmolvmEgressEndToEnd` runs one job whose `run.egress` declares
+`WORKER_DAEMON_E2E_ALLOWED` (default `ghcr.io`): the machine must reach
+it on port 443 and be refused `WORKER_DAEMON_E2E_DENIED` (default
+`pastebin.com`), and the refusal must be in `state_dir/refusals` after
+the machine is deleted. It also needs nested KVM and the network, and is
+skipped, saying why, without them. With `WORKER_DAEMON_E2E_NESTED_SCRIPT`,
+a shell script run in the machine that boots a VM nested in it (libvirt,
+as homelab's seed) and prints `nested allowed: reached` or `refused`, then
+`nested denied: …`, for `$ALLOWED` and `$DENIED`, the job requires
+`nested` and the nested VM must do the same; give homelab's pack as
+`WORKER_DAEMON_E2E_PACK`:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_ALLOWED=deb.debian.org \
+  WORKER_DAEMON_E2E_NESTED_SCRIPT=$PWD/worker-daemon/internal/daemon/testdata/nested-egress.sh \
+  make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
+```
+
+`internal/daemon/testdata/nested-egress.sh` is that script for homelab's
+pack: it starts libvirt as the pack's `guest-start.sh` does, takes
+Debian's netboot kernel and initrd from `deb.debian.org` (so
+`WORKER_DAEMON_E2E_ALLOWED` must be that host), and boots them on
+libvirt's default network with a probe of its own as the initrd's first
+program. The nested VM resolves names through libvirt's dnsmasq, which
+asks the machine's resolver (design D9). The end-to-end test runs the
+daemon under a worker id and a job id of its own, so on a worker host it
+neither deletes the live worker's machines as strays nor names a machine
+as one of its jobs.
+
+With `WORKER_DAEMON_E2E_PRIVATE_NAME`, a name whose answer is a private
+address with a listener on `WORKER_DAEMON_E2E_PRIVATE_PORT` (default
+`443`), the policy declares that name too, and the machine must be
+refused it by name and by address, with both refusals in
+`state_dir/refusals`, while `WORKER_DAEMON_E2E_ALLOWED` is still reached
+(design D15). The test resolves the name itself and fails if its answer
+is not a private address or nothing listens there. Give the name that
+answer without changing the host's DNS:
+`internal/daemon/testdata/private-name-netns.sh NAME ADDR` runs the test
+in a network namespace of its own (`pasta --config-net --no-map-gw`)
+whose `/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers
+`NAME` with `ADDR` and forwards the rest to `$UPSTREAM` (default
+`9.9.9.9`), and whose `/etc/nsswitch.conf` is `hosts: files dns`, so that
+systemd-resolved does not answer instead. The test runs in a nested user
+namespace as the caller's uid, since smolvm will not start a machine as
+pasta's root. It needs pasta, unshare and dnsmasq; the other variables
+pass through, and the machine is deleted by name after the run. On
+taichi, with p1's SSH port as the listener:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
+  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.165
+```
+
+With `WORKER_DAEMON_E2E_PRIVATE_CIDR`, a private range, and
+`WORKER_DAEMON_E2E_PRIVATE_ADDR`, an address in it with a listener on
+`WORKER_DAEMON_E2E_PRIVATE_PORT` that no name resolves to, the policy
+declares the range as a `private` entry, and the machine must reach the
+address and be refused a private address outside the range, with that
+refusal, and none of the address in the range, in `state_dir/refusals`
+(design D16). The address outside is
+`WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR`, or else the answer of
+`WORKER_DAEMON_E2E_PRIVATE_NAME`; it needs a listener on the same port.
+The test fails if an address is not where it should be or nothing listens
+there. On taichi, with two LAN hosts' SSH ports as the listeners:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
+  WORKER_DAEMON_E2E_PRIVATE_CIDR=192.168.1.164/30 WORKER_DAEMON_E2E_PRIVATE_ADDR=192.168.1.165 \
+  WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR=<another LAN host> \
+  make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
 ```
 
 Three end-to-end tests run the daemon against the real Sortie data plane:

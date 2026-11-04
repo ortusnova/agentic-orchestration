@@ -99,7 +99,22 @@ func (e *Egress) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "egress flow: "+err.Error(), http.StatusBadGateway)
 		},
 	}
+	r, cancel := detached(r)
+	defer cancel()
 	rp.ServeHTTP(w, r)
+}
+
+// detached is r with a context that the guest's half-close does not
+// cancel. net/http cancels a request's context when it reads EOF from
+// the client, and a guest that writes its request and then closes its
+// write side, as `printf ... | socat - TCP:...` does, still waits for
+// the answer: the upstream request ends when the upstream answers, or
+// when writing that answer to a guest that is gone fails. The context
+// has a Done channel, closed by the returned cancel, so that a
+// ReverseProxy does not watch CloseNotify, which the same EOF fires.
+func detached(r *http.Request) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	return r.WithContext(ctx), cancel
 }
 
 // tunnelRefused is the egress flow's answer to a CONNECT other than 200.
@@ -191,7 +206,8 @@ func (e *Egress) tunnel(ctx context.Context, addr string) (net.Conn, *bufio.Read
 
 func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
 	e.requests.Add(1)
-	up, br, resp, err := e.tunnel(r.Context(), r.Host)
+	// Not r's context: the guest's half-close cancels it (see detached).
+	up, br, resp, err := e.tunnel(context.WithoutCancel(r.Context()), r.Host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -276,6 +292,8 @@ func (m *MCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	m.calls.Add(1)
+	r, cancel := detached(r)
+	defer cancel()
 	m.rp.ServeHTTP(w, r)
 }
 

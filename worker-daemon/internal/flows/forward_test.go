@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
@@ -223,5 +226,165 @@ func TestEgressConnectOverTLSWithSharedConfig(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "refused upstream") {
 		t.Fatalf("CONNECT through the forwarder = %d %q, want the upstream's 403", resp.StatusCode, b)
+	}
+}
+
+// heldUpstream is an upstream that accepts no connection until release:
+// what the forwarder answers before then, it answered without the
+// upstream.
+func heldUpstream(t *testing.T, useTLS bool, h http.Handler) (up *httptest.Server, release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	var once sync.Once
+	release = func() { once.Do(func() { close(gate) }) }
+	up = httptest.NewUnstartedServer(h)
+	up.Listener = gatedListener{Listener: up.Listener, gate: gate}
+	if useTLS {
+		up.StartTLS()
+	} else {
+		up.Start()
+	}
+	t.Cleanup(func() { release(); up.Close() })
+	return up, release
+}
+
+type gatedListener struct {
+	net.Listener
+	gate <-chan struct{}
+}
+
+func (l gatedListener) Accept() (net.Conn, error) {
+	<-l.gate
+	return l.Listener.Accept()
+}
+
+// halfClosed serves h on a Unix socket, as the daemon serves a
+// forwarder to the guest, writes raw to it and closes the write side,
+// as the guest's `printf ... | socat - TCP:127.0.0.1:47801` does
+// through the machine's forward, then waits while the upstream is held.
+// It fails the test when the forwarder answered then; once the
+// upstream is released, it returns all the forwarder answered.
+func halfClosed(t *testing.T, h http.Handler, raw string, release func()) string {
+	t.Helper()
+	srv, err := Serve(filepath.Join(t.TempDir(), "f.sock"), h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Close() }()
+	conn, err := net.Dial("unix", srv.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.UnixConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(conn); out <- string(b) }()
+	select {
+	case got := <-out:
+		t.Fatalf("with the upstream held, the forwarder answered the guest that closed its write side: %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	select {
+	case got := <-out:
+		return got
+	case <-time.After(10 * time.Second):
+		t.Fatal("the forwarder answered nothing once the upstream was released")
+		return ""
+	}
+}
+
+// A guest that writes a CONNECT and the request in its tunnel and then
+// closes its write side still gets its tunnel: the forwarder's request
+// context, which net/http cancels on that EOF, does not end the dial
+// and the TLS handshake to the egress flow. It did, and the model
+// request of TestSmolvmEndToEnd never reached the fake control plane
+// about half the time.
+func TestEgressConnectFromAGuestThatHalfCloses(t *testing.T) {
+	seen := make(chan string, 2)
+	up, release := heldUpstream(t, true, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Method + " " + r.Host + " " + r.Header.Get("Proxy-Authorization")
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n\r\n")
+		_ = rw.Flush()
+		req, err := http.ReadRequest(rw.Reader)
+		if err != nil {
+			return
+		}
+		b, _ := io.ReadAll(req.Body)
+		seen <- req.Method + " " + req.URL.Path + " " + string(b)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+	}))
+	u, _ := url.Parse(up.URL)
+	e := &Egress{Upstream: u, Token: secret.New("egress-token"), TLS: up.Client().Transport.(*http.Transport).TLSClientConfig}
+	got := halfClosed(t, e, "CONNECT model.example:443 HTTP/1.1\r\nHost: model.example:443\r\n\r\n"+
+		"POST /v1/messages HTTP/1.1\r\nHost: model.example\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", release)
+	if !strings.HasPrefix(got, "HTTP/1.1 200 Connection established\r\n\r\nHTTP/1.1 200 OK\r\n") || !strings.HasSuffix(got, "ok") {
+		t.Errorf("the guest got %q, want the tunnel and the model's answer in it", got)
+	}
+	for _, want := range []string{"CONNECT model.example:443 Bearer egress-token", "POST /v1/messages {}"} {
+		if s := <-seen; s != want {
+			t.Errorf("upstream saw %q, want %q", s, want)
+		}
+	}
+}
+
+// A guest that writes a plain proxied request and closes its write
+// side still gets the answer, which the forwarder carries in a CONNECT
+// tunnel to the request's host.
+func TestEgressPlainRequestFromAGuestThatHalfCloses(t *testing.T) {
+	up, release := heldUpstream(t, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "want a CONNECT", http.StatusBadRequest)
+			return
+		}
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n\r\n")
+		_ = rw.Flush()
+		req, err := http.ReadRequest(rw.Reader)
+		if err != nil {
+			return
+		}
+		body := "ok http://" + r.Host[:strings.LastIndex(r.Host, ":")] + req.URL.String()
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	}))
+	u, _ := url.Parse(up.URL)
+	got := halfClosed(t, &Egress{Upstream: u}, "GET http://model.example/v1/models HTTP/1.1\r\nHost: model.example\r\nConnection: close\r\n\r\n", release)
+	if !strings.HasPrefix(got, "HTTP/1.1 200 OK\r\n") || !strings.HasSuffix(got, "ok http://model.example/v1/models") {
+		t.Errorf("the guest got %q, want the upstream's answer", got)
+	}
+}
+
+// A guest that writes a tool call and closes its write side, as the
+// agent of TestSmolvmEndToEnd does, still gets the answer: the call
+// reached the mcp flow, and the guest was answered 502.
+func TestMCPCallFromAGuestThatHalfCloses(t *testing.T) {
+	up, release := heldUpstream(t, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_, _ = w.Write([]byte("ok " + r.URL.Path + " " + string(b)))
+	}))
+	j, err := New(&protocol.Offer{Job: protocol.Job{ID: "ONS-7", Attempt: 2}, Flows: map[string]protocol.FlowAccess{
+		"stdio": {URL: "wss://edge/stdio"}, "egress": {URL: "https://egress:3128"}, "bundles": {URL: "https://edge/bundles"},
+		"usage": {URL: "https://edge/usage"}, "mcp": {URL: up.URL + "/mcp", Token: secret.New("mcp-token")},
+	}}, &http.Client{Transport: &http.Transport{}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := halfClosed(t, &MCP{Job: j}, "POST / HTTP/1.1\r\nHost: mcp\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}", release)
+	if !strings.HasPrefix(got, "HTTP/1.1 200 OK\r\n") || !strings.HasSuffix(got, "ok /mcp/jobs/ONS-7/attempts/2/ {}") {
+		t.Errorf("the guest got %q, want the mcp flow's answer", got)
 	}
 }

@@ -2,10 +2,17 @@
 
 `worker-daemon` runs a worker host's jobs for the control plane. It dials
 the control plane's worker API (protocol 1), runs each job it takes in a
-smolvm machine with no network of its own, and carries the job's flows:
+smolvm machine, with no network of its own unless the offer's
+`run.egress` allows hosts by name, and carries the job's flows:
 the agent's standard input and output, its model traffic and tool calls,
 its workspace in and its commits out as git bundles, and its token usage.
 It holds no credential but its client certificate.
+
+A machine with a network is denied the private ranges (design D15). A
+policy's `private[]` entry is smolvm's `--allow-cidr <cidr>`, never
+`--allow-private` (design D16), and is left out of that deny set; it
+opens every port of every address of the range. `udp[]` and `private[]`
+entries alone give no network.
 
 One static binary per platform: `linux/amd64`, `linux/arm64`,
 `darwin/arm64`. Standard library only, no CGo.
@@ -35,3 +42,4 @@ does, and the flows on the wire.
 | `internal/secret` | A token type that never prints. |
 | `internal/hostinfo` | Memory, disk, KVM and nested virtualization, per OS. |
 | `internal/stdio` | The framed stream of the stdio flow (`sortie-stdio/2`, or `sortie-stdio/1`). |
+| `internal/egress` | An offer's `run.egress`: its strict check, and the machine's smolvm network (designs D8, D15 and D16). |
