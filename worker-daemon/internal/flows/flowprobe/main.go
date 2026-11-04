@@ -64,12 +64,19 @@ func run(offerFile string, t config.TLS, args []string) error {
 	if err != nil {
 		return err
 	}
+	// One configuration for the control-plane client and the flows, as
+	// in the daemon.
 	j, err := flows.New(&o, cp.HTTPClient(tlsConfig), tlsConfig)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	// By the time a job runs, the daemon's control-plane client has
+	// made its requests on that configuration: make one too.
+	if err := warm(ctx, j); err != nil {
+		return err
+	}
 	switch {
 	case len(args) == 1 && args[0] == "stdio":
 		return carry(ctx, j)
@@ -77,6 +84,20 @@ func run(offerFile string, t config.TLS, args []string) error {
 		return connect(ctx, j, args[1])
 	}
 	return errors.New("usage: flowprobe -offer FILE [-cert C -key K -ca CA] stdio | connect HOST:PORT")
+}
+
+func warm(ctx context.Context, j *flows.Job) error {
+	u := j.Flows[protocol.FlowUsage].URL
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.Scheme+"://"+u.Host+"/", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := j.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("a control-plane request: %w", err)
+	}
+	_ = resp.Body.Close()
+	return nil
 }
 
 func carry(ctx context.Context, j *flows.Job) error {

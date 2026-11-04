@@ -173,3 +173,26 @@ func TestJobGoneAnswers(t *testing.T) {
 		t.Errorf("heartbeat 503 = %v, want a plain refusal", err)
 	}
 }
+
+// HTTPClient leaves the configuration it is given as it was: its HTTP/2
+// transport adds h2 to its own copy, not to the one the flows' HTTP/1.1
+// dials share.
+func TestHTTPClientKeepsTheSharedTLSConfig(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	cfg := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	cfg.NextProtos = nil
+	resp, err := HTTPClient(cfg).Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Errorf("the client spoke %s, want HTTP/2", resp.Proto)
+	}
+	if len(cfg.NextProtos) != 0 {
+		t.Errorf("the shared configuration now offers %v, want nothing added", cfg.NextProtos)
+	}
+}
