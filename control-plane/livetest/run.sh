@@ -60,12 +60,20 @@ dump() {
     podman logs --tail 200 "$c" >&2 2>&1 || true
   done
 }
+# The project's volumes: the scenarios need fresh ones (a Sortie that
+# restored an earlier run's jobs offers none), and the run removes them.
+volumes() { podman volume ls --format '{{.Name}}' | grep '^ortus-cp_' || true; }
+if [[ -n $(volumes) ]]; then
+  die "the volumes of an earlier ortus-cp project exist ($(volumes | tr '\n' ' ')): remove them with podman volume rm, or run this on another host"
+fi
 stop() {
   if [[ ${CP_LIVE_KEEP:-} == 1 ]]; then
     say "the project keeps running: CP_HOME=$CP_HOME CP_TAG=$CP_TAG CP_LIVE_DIR=$CP_LIVE_DIR"
     return
   fi
   "$CP/cp.sh" down > /dev/null 2>&1 || true
+  local v
+  for v in $(volumes); do podman volume rm -f "$v" > /dev/null 2>&1 || true; done
 }
 trap stop EXIT
 
