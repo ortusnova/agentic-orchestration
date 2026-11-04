@@ -9,6 +9,8 @@
 #                              user builder, homelab's guest kernel, the shared
 #                              folders, the vm key, and the setup the
 #                              workflow's hooks ran
+# On p1, stage0.sh also runs homelab_worktree alone, for the egress of
+# homelab jobs (homelab-egress.sh).
 # Needs stage0.sh's say, die, STAGE0_* settings, REBUILD_PACK and
 # worker-config.sh.
 
@@ -16,17 +18,8 @@ homelab_inputs() {
   local src=${STAGE0_HOMELAB_SRC:-$HOME/dev/homelab} hl=$STAGE0_HOME/homelab
   local settings=$HOME/.config/homelab/sandbox.env
 
-  # The kit's own detached worktree of homelab's origin/master: the pack and
-  # the cache layout come from it, never from the operator's working tree.
   [[ -d $src/.git ]] || die "$src is not a homelab checkout (STAGE0_HOMELAB_SRC)"
-  git -C "$src" fetch -q origin "$STAGE0_HOMELAB_REPO_BASE"
-  if [[ ! -e $hl ]]; then
-    say "Adding the kit's homelab worktree $hl"
-    git -C "$src" worktree add -q --detach "$hl" "origin/$STAGE0_HOMELAB_REPO_BASE"
-  else
-    git -C "$hl" checkout -q --detach "origin/$STAGE0_HOMELAB_REPO_BASE"
-  fi
-  say "homelab at $(git -C "$hl" rev-parse --short HEAD)"
+  homelab_worktree "$src"
 
   [[ -r $settings ]] || die "$settings is missing: run \`make dev-host\` in homelab"
   local vm_key
@@ -86,6 +79,31 @@ PY
   homelab_pack "$hl"
   export STAGE0_HOMELAB_IMAGE_JSON
   STAGE0_HOMELAB_IMAGE_JSON=$(homelab_image_json "$krunfw" "$mounts")
+}
+
+# homelab_worktree [SRC]: the kit's own detached worktree of homelab's
+# origin/$STAGE0_HOMELAB_REPO_BASE in $STAGE0_HOME/homelab, moved to its
+# latest commit: the pack, the cache layout and, on p1, the egress of homelab
+# jobs (homelab-egress.sh) come from it, never from the operator's working
+# tree. It is added from the homelab checkout SRC, or, with none, cloned
+# from STAGE0_HOMELAB_REPO_URL. It moves once per stage0.sh run, so what
+# the run builds and renders comes from one commit.
+homelab_worktree() {
+  local src=${1:-} hl=$STAGE0_HOME/homelab
+  [[ -n ${HOMELAB_WORKTREE_MOVED:-} ]] && return 0
+  if [[ -e $hl ]]; then
+    git -C "$hl" fetch -q origin "$STAGE0_HOMELAB_REPO_BASE" || die "could not fetch homelab into $hl"
+  elif [[ -n $src && -e $src/.git ]]; then
+    say "Adding the kit's homelab worktree $hl"
+    git -C "$src" fetch -q origin "$STAGE0_HOMELAB_REPO_BASE" || die "could not fetch homelab into $src"
+    git -C "$src" worktree add -q --detach "$hl" "origin/$STAGE0_HOMELAB_REPO_BASE" || die "could not add the worktree $hl"
+  else
+    say "Cloning homelab into $hl ($STAGE0_HOMELAB_REPO_URL)"
+    git clone -q --no-checkout "$STAGE0_HOMELAB_REPO_URL" "$hl" || die "could not clone $STAGE0_HOMELAB_REPO_URL into $hl"
+  fi
+  git -C "$hl" checkout -q --detach "origin/$STAGE0_HOMELAB_REPO_BASE" || die "could not move $hl to origin/$STAGE0_HOMELAB_REPO_BASE"
+  HOMELAB_WORKTREE_MOVED=1
+  say "homelab at $(git -C "$hl" rev-parse --short HEAD)"
 }
 
 # homelab_state_mounts RECORDERS OPEN_ISSUES: homelab's state folders, as

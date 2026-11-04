@@ -42,11 +42,39 @@ type fakeSortie struct {
 	grants     map[string]Grant
 	identities [][]string
 	paths      []string
+	// running is Sortie's running entries as GET /api/v1/state lists
+	// them: each job's issue identifier and its repository. The state
+	// answers 503 while stateDown holds.
+	running    map[string]string
+	stateDown  bool
+	stateCalls int
 }
 
 func newFakeSortie(t *testing.T) *fakeSortie {
-	f := &fakeSortie{grants: map[string]Grant{}}
+	f := &fakeSortie{grants: map[string]Grant{}, running: map[string]string{}}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/state", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+controlToken {
+			http.Error(w, "the control token is required", http.StatusUnauthorized)
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.stateCalls++
+		if f.stateDown {
+			http.Error(w, "orchestrator state snapshot unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		type entry struct {
+			IssueIdentifier string `json:"issue_identifier"`
+			Repository      string `json:"repository,omitempty"`
+		}
+		running := []entry{}
+		for id, repo := range f.running {
+			running = append(running, entry{id, repo})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"counts": map[string]int{"running": len(running)}, "running": running})
+	})
 	mux.HandleFunc("POST /api/v1/tokens/introspect", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+controlToken {
 			http.Error(w, "the control token is required", http.StatusUnauthorized)
@@ -77,11 +105,29 @@ func newFakeSortie(t *testing.T) *fakeSortie {
 
 // mint makes a live token for job ONS-7, attempt 1, on flow.
 func (f *fakeSortie) mint(flow string) string {
+	return f.mintFor("ONS-7", 1, flow)
+}
+
+// mintFor makes a live token for attempt of job on flow.
+func (f *fakeSortie) mintFor(job string, attempt uint64, flow string) string {
 	tok := "tok-" + flow + "-" + rand.Text()
 	f.mu.Lock()
-	f.grants[tok] = Grant{Job: "ONS-7", Attempt: 1, Flow: flow}
+	f.grants[tok] = Grant{Job: job, Attempt: attempt, Flow: flow}
 	f.mu.Unlock()
 	return tok
+}
+
+// run lists job as running in repo in Sortie's state.
+func (f *fakeSortie) run(job, repo string) {
+	f.mu.Lock()
+	f.running[job] = repo
+	f.mu.Unlock()
+}
+
+func (f *fakeSortie) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stateCalls
 }
 
 func (f *fakeSortie) end(tok string) {

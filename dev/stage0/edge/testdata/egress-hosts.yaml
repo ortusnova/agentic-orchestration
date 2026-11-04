@@ -1,0 +1,27 @@
+# A copy of the shape of homelab's scripts/smolvm/egress-hosts.yaml.
+hosts:
+  - host: auth.docker.io
+    ports: [443]
+    steps: [image-pins, seed]
+    reason: Docker Hub's token service, for every docker.io pull and digest lookup.
+  - host: deb.debian.org
+    ports: [80]
+    steps: [seed-vm-recreate, seed]
+    reason: The seed's Debian installer and its packages (the netinst ISO is cached).
+  - host: ghcr.io
+    ports: [443]
+    steps: [image-pins, seed]
+    reason: Pinned images on GitHub's registry, resolved by image-pins and synced into the seed's zot.
+  - host: us-central1-docker.pkg.dev
+    ports: [443]
+    steps: [image-pins, seed]
+    reason: Pinned images on Google Artifact Registry, resolved by image-pins and synced into the seed's zot.
+refused:
+  - host: 10.17.9.1
+    ports: [22]
+    steps: [make-test]
+    reason: A connection from inside make test to the vm router's mgmt address.
+  - host: acme-staging-v02.api.letsencrypt.org
+    ports: [443]
+    steps: [seed]
+    reason: lego asked Let's Encrypt staging while renewing nothing.
