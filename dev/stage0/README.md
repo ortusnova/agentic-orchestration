@@ -20,7 +20,6 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
-dev/stage0/test-homelab-egress.sh     # check that homelab jobs' egress is the hosts homelab declares, and that a missing or malformed list stops the kit
 dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
@@ -52,9 +51,9 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Previews | unit `ortus-stage0-previews.timer` every minute, and one `ortus-stage0-preview@<identifier>` per ui story's pull request; see [Previews of ui stories](#previews-of-ui-stories) |
 | Live proofs | unit `ortus-stage0-live-proofs.timer` every minute (`run-live-proofs.sh`, `$STAGE0_HOME/bin/stage0-live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-stage0-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
-| Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono`, `ortus-stage0-nono-homelab` (the egress of homelab jobs) and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
+| Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
 | Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-nono-homelab`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
 
@@ -397,8 +396,7 @@ stream, their machines), so `stage0.sh` restarts each only when what it runs
 changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
-live-proof nono also for `egress-live-proof.json` and `live-proofs/`, the homelab nono
-also for `egress-profile-homelab.json`, which changes with homelab's list); the edge for
+live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
 its source, `edge.json` or unit; the worker daemon for its binary,
 `worker.json` or unit (`worker-build.sh` builds it with `-trimpath
 -buildvcs=false`, so the same code builds the same bytes and a test or
@@ -509,7 +507,7 @@ design D18; no worker change then). Only the control profile runs it.
 | --- | --- |
 | Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); nothing listens on the LAN, and the host gets no SSH access to p1 |
 | Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker on p1's loopback: `127.0.0.1:7700` for p1's own worker, which needs no tunnel, and one per worker host from `127.0.0.1:7701` up, and nothing else |
-| nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. The homelab nono, unit `ortus-stage0-nono-homelab`, on `127.0.0.1:7692` (`STAGE0_NONO_HOMELAB_PORT`), with `$STAGE0_HOME/egress-profile-homelab.json` (below). nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
+| nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
 | Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port, or `LOCAL=1` for p1's own worker (`stage0.sh` writes it); `dev/stage0/worker-host.sh list` |
 
 What the edge does with a request on a worker's port:
@@ -535,7 +533,7 @@ What the edge does with a request on a worker's port:
   `HTTPS_PROXY=http://job:<token>@127.0.0.1:7700`). Once admitted, the
   edge tunnels it through nono, which allows only the hosts in
   `egress-profile.json`, the one list of the hosts a job of any repository
-  but homelab may reach, with the forge's and those of the credentials nono holds
+  may reach, with the forge's and those of the credentials nono holds
   (`edge/profile_test.go` checks it holds each credential `WORKFLOW.md`
   binds). The remote kind takes no `allow_hosts`, so the workflow has none;
   add a host a chain needs to `egress-profile.json`. For a credential's host nono intercepts TLS with the
@@ -543,26 +541,6 @@ What the edge does with a request on a worker's port:
   (`sortie-credential-<name>`) with the credential. A refusal is recorded in
   the edge's journal with the worker, job, attempt and host:
   `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
-- **homelab's egress.** A homelab job reaches only the hosts homelab
-  declares under `hosts` in its `scripts/smolvm/egress-hosts.yaml`, plus
-  those of the credentials nono holds (`api.anthropic.com`, `api.github.com`,
-  `github.com`); the kit keeps no list of homelab's (spec store
-  `homelab-on-sortie`). Each `stage0.sh` run on p1 moves the kit's homelab
-  worktree (`$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`, else
-  cloned from `STAGE0_HOMELAB_REPO_URL`) to the latest `origin/master` and
-  renders `$STAGE0_HOME/egress-profile-homelab.json` from that file
-  (`homelab-egress.sh`, `stage0-edge homelab-profile`), with the credentials
-  of `egress-profile.json`; a missing or malformed file stops `stage0.sh`
-  before any unit restarts, and the homelab nono keeps the list it had. When
-  the list changed, the homelab nono restarts onto it, so a host a merged
-  homelab change adds is reachable by the homelab jobs that start after the
-  kit next runs. The edge learns a job's repository from Sortie's state
-  (`GET /api/v1/state`, once per attempt) and sends a homelab job's CONNECTs
-  to the homelab nono (`repositories` in `edge.json`); while Sortie cannot
-  say, the CONNECT gets `503` and reaches no nono. A live-proof job that runs
-  keeps the live-proof nono. The edge's journal records each homelab tunnel
-  and refusal with `profile=homelab`. To let homelab jobs reach a host, add
-  it to homelab's `egress-hosts.yaml`, not to the kit.
 
 A remote-kind workflow names the flows as the worker host sees them:
 `http://127.0.0.1:7700/<flow>` for stdio, mcp, bundles and usage, and
@@ -649,7 +627,7 @@ machines (spec store `run-homelab-through-sortie`, design D5-D12):
 
 | Part | Where |
 | --- | --- |
-| homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master`. p1 keeps one too, for the egress of homelab jobs ([The stage-1 edge](#the-stage-1-edge-p1)) |
+| homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master` |
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The daemon runs its commands as `builder` (`smolvm.images`); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. While no job runs, the packs it replaced are deleted |
 | Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 60 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
 | Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone; read-only, `~/.local/state/homelab/open-issues` at the same path in the guest (`/home/builder/.local/state/homelab/open-issues`), the open-issue evidence `python3 -m homelab.open_issues capture` keeps on the host, so a job reads the evidence a row of homelab's `docs/open-issues.md` names. A job's own captures go to its recorder folder (`HOMELAB_STATE_HOME=/var/log/homelab-recorder`); the setup gives `~/.local/state` back to `builder`, since the read-only mount leaves its parents to root. Six, beside the daemon's share: on taichi a machine with 8 started (smolvm 1.32.4, nested, 2026-11-04), so one stays spare |
@@ -703,7 +681,7 @@ and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
 
 ```sh
 for w in $(dev/stage0/worker-host.sh list | grep -v '	local	' | cut -f1); do dev/stage0/worker-host.sh remove "$w"; done
-systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono ortus-stage0-nono-homelab ortus-stage0-worker
+systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono ortus-stage0-worker
 smolvm machine ls   # delete each wd-* machine: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.service && systemctl --user daemon-reload
 rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces and the pack
