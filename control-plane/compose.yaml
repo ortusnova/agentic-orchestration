@@ -381,7 +381,7 @@ services:
     networks: [internal]
 
   huly-elastic:
-    image: docker.io/library/elasticsearch:7.14.2@sha256:f05ab7f4d2aa5040813a0ea4eb76fa99bb31459937a4539efe2f2c2dbb2109fb
+    image: docker.io/library/elasticsearch:9.5.3@sha256:e23d4758358a4e356cc2ef3259a5a6f345cacc1722c10dffe6d7150a1a78e52f
     container_name: cp-huly-elastic
     restart: unless-stopped
     environment:
