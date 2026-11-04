@@ -55,7 +55,10 @@ grep -qx 'ExecStartPost=-@KIT@/supervisor.sh repause' "$KIT/units/ortus-stage0-s
 # run-sortie.sh hands Sortie the token, the opencode settings and the PATH
 # stage0.sh recorded; a stub Sortie prints them.
 mkdir -p "$home/bin" "$tmp/kit/dev/stage0" "$tmp/tools"
-cp "$KIT/run-sortie.sh" "$tmp/kit/dev/stage0/"
+cp "$KIT/run-sortie.sh" "$KIT/notify-channel.sh" "$tmp/kit/dev/stage0/"
+# The host's token for the workbench's notifications, as stage0.sh mints it.
+mkdir -p "$home/notify-tokens"
+(umask 077; echo p1-notify-token > "$home/notify-tokens/p1.token")
 printf '#!/bin/sh\necho token\n' > "$tmp/kit/dev/huly_project.py"
 printf '#!/bin/sh\necho claude\n' > "$tmp/kit/dev/stage0/anthropic-token.py"
 printf '#!/bin/sh\nenv | grep -E "^(STAGE0_SUPERVISOR_TOKEN|OPENCODE_CONFIG|PATH)=" | sort\n' > "$home/bin/sortie"
@@ -67,6 +70,7 @@ cat > "$home/stage0.env" <<EOF
 STAGE0_KIT_ROOT=$tmp/kit
 STAGE0_HULY_URL=x STAGE0_HULY_WORKSPACE=x STAGE0_HULY_EMAIL=x STAGE0_HULY_PASSWORD=x STAGE0_HULY_PROJECT=ONS
 STAGE0_SORTIE_PORT=7680
+STAGE0_SORTIE_NAME=p1
 EOF
 out=$(STAGE0_HOME=$home HOME=$tmp "$tmp/kit/dev/stage0/run-sortie.sh" 2>&1 || true)
 grep -qx "STAGE0_SUPERVISOR_TOKEN=$token" <<< "$out" && ok "Sortie gets the supervisor token from its file" || fail "run-sortie.sh: $out"

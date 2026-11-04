@@ -166,15 +166,20 @@ The daemon reaches the control plane only through connections it opens:
 check-in, poll, heartbeat and report on `control_plane.url`, and each
 job's flows on the URLs its offer names.
 
-- **Until the control plane issues client certificates** (design D18),
-  the control plane opens a tunnel to the worker host, and
-  `control_plane.url` is the tunnel's loopback end, such as
-  `http://127.0.0.1:7690`. The tunnel's listener is the tunnel's, not the
-  daemon's. The daemon names itself in `identity_header`.
-- **Once it does,** set an `https` URL and `control_plane.tls.cert_file`,
-  `key_file` and, for a private CA, `ca_file`. The daemon presents the
-  certificate to the control plane and to every flow. The control plane's
-  proxy authenticates the certificate and sets the identity header itself.
+- **The control plane** (design D18) issues each worker host a client
+  certificate (`control-plane/cp.sh worker issue <worker>`; see the
+  [control plane operator guide](../../control-plane/docs/operator-guide.md)).
+  Set `control_plane.url` to Pomerium's `https` URL, such as
+  `https://cp.example.org:8443`, and `control_plane.tls.cert_file`,
+  `key_file` and `ca_file` to the three files it issued. The daemon
+  presents the certificate to the control plane and to every flow.
+  Pomerium admits only certificates from the control plane's CA that its
+  worker list names, and sets the identity header from the certificate,
+  over the one the daemon sends; `worker_id` is the certificate's name.
+- **Without a certificate**, `control_plane.url` is a plain `http` URL
+  and the daemon names itself in `identity_header`. The stage-1 edge
+  that served such hosts through SSH tunnels is gone; this serves only a
+  control plane on the same trusted host, such as a test.
 
 The daemon never uses `HTTP_PROXY` or `HTTPS_PROXY` from its own
 environment.
@@ -495,13 +500,15 @@ WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_NESTED_SCRIPT
   make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
 ```
 
-Two end-to-end tests run the daemon against the real Sortie data plane:
-`TestOneAttemptOverTheWire` and `TestUnknownAmountOverTheWire`. They
-build Sortie from the `sortie/` submodule (plan-bench) and the stage-1
-edge from `dev/stage0/edge`, and run Sortie under `environment.kind:
+Three end-to-end tests run the daemon against the real Sortie data plane:
+`TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and
+`TestACancelledJobIsReleasedOverTheWire`. They build Sortie from the
+`sortie/` submodule (plan-bench) and the control plane's egress gate from
+`control-plane/cmd/cp-egress`, and run Sortie under `environment.kind:
 remote` with a file tracker and a local forge (a bare repository and a
-fake Gitea API). The daemon dials the edge, and the edge's egress goes to
-a fake nono. One attempt of `ONS-7` runs on fake machines, with an agent
+fake Gitea API). The daemon dials a stand-in for Pomerium with a client
+certificate, and its egress route goes through the egress gate to a fake
+nono. One attempt of `ONS-7` runs on fake machines, with an agent
 that speaks the Agent Client Protocol. It ends in a pull request on the
 local forge, and Sortie records the usage the daemon posted, measured or
 `"measured": false`. Without the submodule they are skipped; set

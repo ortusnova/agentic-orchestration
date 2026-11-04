@@ -1,0 +1,4 @@
+[
+  {"id": "id-ONS-7", "identifier": "ONS-7", "title": "The first job", "description": "A live-test job.", "priority": 1, "state": "Todo", "labels": [], "url": "http://tracker.invalid/ONS-7"},
+  {"id": "id-ONS-8", "identifier": "ONS-8", "title": "The second job", "description": "A live-test job.", "priority": 1, "state": "Todo", "labels": [], "url": "http://tracker.invalid/ONS-8"}
+]

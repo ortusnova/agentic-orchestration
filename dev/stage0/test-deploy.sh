@@ -90,11 +90,12 @@ restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
 
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
-    "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile"
+    "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile" \
+    "$tmp/failed-once"
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
-  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon"
+  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon" "$tmp/up/control-plane"
   # Like the real one, it restarts Sortie on p1, and --update-sortie moves
   # the Sortie checkout to plan-bench.
   cat > "$tmp/up/dev/stage0/stage0.sh" <<EOF
@@ -104,11 +105,12 @@ echo "\$STAGE0_PROFILE" > "$tmp/profile"
 . "\$STAGE0_HOME/stage0.env"
 [ "\$1" != --update-sortie ] || git -C "\$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench
 [ -z "\$FAIL_STAGE0" ] || exit 1
+if [ -n "\$FAIL_STAGE0_ONCE" ] && [ ! -e "$tmp/failed-once" ]; then : > "$tmp/failed-once"; exit 1; fi
 [ "\$STAGE0_PROFILE" = worker ] || echo restart >> "\$SORTIE_STUB/restarts"
 EOF
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
-  echo 1 > "$tmp/up/dev/stage0/supervisor.md"
+  echo 1 > "$tmp/up/dev/stage0/supervisor.md"; echo 1 > "$tmp/up/control-plane/x"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
   g clone -q "$tmp/remote" "$STAGE0_LIVE_KIT"
   mkdir -p "$STAGE0_LIVE_KIT/workbench/frontend/node_modules"
@@ -135,6 +137,8 @@ check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;
 # The supervisor's prompt is the kit's: stage0.sh installs it on the host.
 setup; merge dev/stage0/supervisor.md; run; check "a change to the supervisor's prompt runs stage0.sh, which installs it" main "stage0.sh;"
 setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh" main "stage0.sh;"
+# p1 runs the control plane's egress gate and Pomerium image and nono profile.
+setup; merge control-plane/x; run; check "a control-plane change runs stage0.sh" main "stage0.sh;"
 setup; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
 g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
 check "a kit and workbench merge runs stage0.sh, which builds the workbench too" main "stage0.sh;"
@@ -156,6 +160,10 @@ merge workbench/app; run; check "until another one merges" main "uv sync -q;npx 
 setup; smerge; run; check "a plan-bench merge runs stage0.sh --update-sortie" main "stage0.sh --update-sortie;"
 if sortie_at plan-bench; then echo "ok: and moves Sortie to plan-bench"; else echo "FAIL: Sortie not on plan-bench"; failed=1; fi
 setup; merge dev/stage0/units; smerge; run; check "a kit and a plan-bench merge run stage0.sh once" main "stage0.sh --update-sortie;"
+setup; merge dev/stage0/units; FAIL_STAGE0_ONCE=1 run
+check "a kit change whose stage0.sh fails runs the previous commit's stage0.sh" main~1 "stage0.sh;stage0.sh;"
+if grep -q 'running stage0.sh on .* again' "$tmp/err" && ! grep -q 'failed too' "$tmp/err"; then echo "ok: and says so"; else echo "FAIL: re-apply: $(cat "$tmp/err")"; failed=1; fi
+rm -f "$tmp/calls"; run; check "and does not try the failed commit again" main~1 ""
 setup; smerge; FAIL_STAGE0=1 run; check "a failed update runs once" main "stage0.sh --update-sortie;"
 if sortie_at plan-bench~1; then echo "ok: and puts Sortie back"; else echo "FAIL: Sortie not put back"; failed=1; fi
 rm -f "$tmp/calls"; run; check "and does not try that plan-bench commit again" main ""
@@ -194,7 +202,7 @@ finish 0
 if [[ $(cat "$SORTIE_STUB/retries" 2> /dev/null) == 1 ]]; then echo "ok: a worker gone: its run is retried"; else echo "FAIL: a worker gone: retries '$(cat "$SORTIE_STUB/retries" 2> /dev/null)'"; failed=1; fi
 want "a worker gone: and dispatched again beside the run that went on" "running 2, queued 0, dispatching"
 setup; sortie 1 4 1; merge dev/stage0/units; FAIL_STAGE0=1 run
-check "a failed apply during a run goes back" main~1 "stage0.sh;"
+check "a failed apply during a run goes back, and runs the previous stage0.sh again" main~1 "stage0.sh;stage0.sh;"
 never_drained "and drains nothing either"
 # An earlier kit paused dispatch while a change waited for a drain: the
 # first deploy of this kit dispatches again.

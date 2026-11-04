@@ -35,12 +35,12 @@ func readJSON(t *testing.T, file string, v any) {
 // homelab's vm chain, which the kit's own profile refuses.
 func TestTheLiveProofProfile(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "live.json")
-	if err := run([]string{"profile", "-base", "../egress-profile.json", "-extra", "../egress-live-proof.json", "-out", out}); err != nil {
+	if err := run([]string{"profile", "-base", "../../../control-plane/nono/egress-profile.json", "-extra", "../egress-live-proof.json", "-out", out}); err != nil {
 		t.Fatal(err)
 	}
 	var base, live profile
 	var extra liveProofHosts
-	readJSON(t, "../egress-profile.json", &base)
+	readJSON(t, "../../../control-plane/nono/egress-profile.json", &base)
 	readJSON(t, "../egress-live-proof.json", &extra)
 	readJSON(t, out, &live)
 	if live.Meta.Name != "ortus-stage0-egress-live-proof" {
@@ -69,7 +69,7 @@ func TestAProfileWithNoHostsIsRefused(t *testing.T) {
 	if err := os.WriteFile(extra, []byte(`{"allow_domain": []}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := renderProfile("../egress-profile.json", extra); err == nil {
+	if _, err := renderProfile("../../../control-plane/nono/egress-profile.json", extra); err == nil {
 		t.Error("a live-proof profile that adds no host was rendered")
 	}
 }

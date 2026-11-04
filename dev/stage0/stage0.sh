@@ -2,24 +2,28 @@
 # Stages 0 and 1 of agent-platform-workers (spec store, design D13, D18): one
 # persistent Sortie under plan control, on p1, that dispatches every
 # repository under the remote kind, with the plan workbench, acp-broker, the
-# local Huly and the stage-1 edge; and a worker daemon on p1 and on each
-# worker host, which runs the jobs (spec store agent-platform/one-sortie), as
-# systemd user units. GitHub is the forge. Rootless throughout: no sudo, no
-# system unit.
+# local Huly and the control plane's front (Pomerium, the egress gate and
+# nono; spec store agent-platform/control-plane); and a worker daemon on p1
+# and on each worker host, which runs the jobs (spec store
+# agent-platform/one-sortie), as systemd user units. GitHub is the forge.
+# Rootless throughout: no sudo, no system unit.
 #
 # Two profiles, chosen by STAGE0_PROFILE on the first run (then kept in
 # stage0.env):
 #   control (default)  p1: Sortie, the workbench, acp-broker and the local
-#                      Huly, for the whole plan; the stage-1 edge (design
-#                      D18): the edge, nono and one SSH tunnel per worker host
-#                      (worker-host.sh); and p1's own worker.
+#                      Huly, for the whole plan; the control plane's front
+#                      (design D18), which replaced the stage-1 edge and its
+#                      SSH tunnels: Pomerium, which admits only the client
+#                      certificates of its CA (worker-host.sh), the egress
+#                      gate and nono; and p1's own worker.
 #   worker             a worker host such as taichi: the worker daemon only,
-#                      which dials p1's edge through the tunnel p1 opens to it
-#                      (worker-host.sh add, on p1), and homelab's inputs when
-#                      the host has homelab's dev host. No Sortie, no Huly and
-#                      no credential. A host on the retired homelab profile
-#                      moves to it with STAGE0_PROFILE=worker, which stops its
-#                      Sortie and removes its unit.
+#                      which dials p1's Pomerium with the client certificate
+#                      worker-host.sh add, on p1, gave it, and homelab's
+#                      inputs when the host has homelab's dev host. No
+#                      Sortie, no Huly and no credential. A host on the
+#                      retired homelab profile moves to it with
+#                      STAGE0_PROFILE=worker, which stops its Sortie and
+#                      removes its unit.
 #
 #   dev/stage0/stage0.sh                  set up or update, then (re)start the units
 #   dev/stage0/stage0.sh --rebuild-pack   also rebuild the smolvm packs, which are
@@ -35,7 +39,7 @@
 # a live Claude subscription login (claude setup-token, opencode or Claude Code), Huly running
 # (HULY_COMPOSE_DIR) and the host's opencode signed in to Anthropic for
 # planning sessions and the supervisor.
-# Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's tunnel; for
+# Needs (worker): smolvm 1.32.4 or later, Go, git, curl and p1's Pomerium; for
 # homelab jobs, python3 and homelab's dev host (`make dev-host` in homelab).
 set -euo pipefail
 
@@ -104,7 +108,8 @@ if [[ ! -s $ENV_FILE && ${STAGE0_PROFILE:-control} == worker ]]; then
 # Stage-0 settings, worker profile (dev/stage0/stage0.sh). Run stage0.sh again after an edit.
 STAGE0_PROFILE=worker
 STAGE0_KIT_ROOT=$ROOT
-# The worker's name; p1's edge names it by its tunnel anyway (worker-host.sh).
+# The worker's name: the name of the certificate worker-host.sh add gave it,
+# which Pomerium names it by anyway.
 STAGE0_WORKER_NAME=$(hostname -s)
 # Jobs at once (the daemon's run_slots): unset, as many as this host's CPUs
 # and memory hold (worker-config.sh).
@@ -148,12 +153,14 @@ STAGE0_WORKER_SLOTS=
 # Sortie's cap on agents at once, on every worker together: unset, a ceiling
 # above the workers' slots, which the matcher holds (worker-config.sh).
 STAGE0_SORTIE_MAX_AGENTS=
-# The stage-1 edge (README.md): nono's port on p1, and the port each worker
-# host's tunnel ends on, on that host's loopback.
+# The control plane's front (README.md "Worker hosts"): Pomerium's public
+# URL, which every worker dials and whose host must resolve to p1 on each
+# of them; and, on p1's loopback, nono, the live-proof nono (the egress of
+# a live-proof job that runs) and the egress gate.
+STAGE0_CP_PUBLIC_URL=https://$(hostname -f):8443
 STAGE0_NONO_PORT=7690
-STAGE0_EDGE_WORKER_PORT=7700
-# The live-proof nono, the egress of a live-proof job that runs (README.md).
 STAGE0_NONO_LIVE_PROOF_PORT=7691
+STAGE0_EGRESS_GATE_PORT=7692
 # The operator's channel for every question (README.md): slack, discord, telegram or
 # webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
 # where people reach the workbench, for the link in each question.
@@ -176,7 +183,34 @@ fi
 STAGE0_PROFILE=${STAGE0_PROFILE:-control}
 case $STAGE0_PROFILE in control|worker) ;; *) die "STAGE0_PROFILE is $STAGE0_PROFILE; want control or worker" ;; esac
 STAGE0_PACK=${STAGE0_PACK:-$STAGE0_HOME/stage0.smolmachine}
-STAGE0_EDGE_WORKER_PORT=${STAGE0_EDGE_WORKER_PORT:-7700}
+# Pomerium's public URL, which every worker dials: on p1 it stays as the
+# first run that knew it wrote it to stage0.env; a worker host has it from
+# worker-host.sh add (control-plane-url), unless its stage0.env says
+# otherwise.
+WORKER_HOST_CONFIG=$HOME/.config/ortus-nova
+# A worker host that the stage-1 edge served gets its certificate from p1's
+# stage0.sh, which runs from the same merge (carry_edge_workers in
+# retire-edge.sh). The live kit, which the deploy timer runs, waits for it
+# (STAGE0_WORKER_CERT_WAIT seconds); a kit run by hand does not.
+if [[ $STAGE0_PROFILE == worker && -z ${STAGE0_CP_PUBLIC_URL:-} ]]; then
+  cert_wait=${STAGE0_WORKER_CERT_WAIT:-0}
+  [[ $ROOT == "$LIVE" ]] && cert_wait=${STAGE0_WORKER_CERT_WAIT:-1800}
+  [[ $cert_wait =~ ^[0-9]+$ ]] || die "STAGE0_WORKER_CERT_WAIT is $cert_wait; want seconds"
+  # shellcheck source=retire-edge.sh
+  . "$KIT/retire-edge.sh"
+  wait_for_worker_files "$WORKER_HOST_CONFIG" "$cert_wait" \
+    || die "p1 has not given this host its certificate in $cert_wait s ($WORKER_HOST_CONFIG): on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+fi
+if [[ -z ${STAGE0_CP_PUBLIC_URL:-} ]]; then
+  if [[ $STAGE0_PROFILE == worker ]]; then
+    STAGE0_CP_PUBLIC_URL=$(cat "$WORKER_HOST_CONFIG/control-plane-url" 2>/dev/null || true)
+    [[ -n $STAGE0_CP_PUBLIC_URL ]] || die "$WORKER_HOST_CONFIG/control-plane-url is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  else
+    STAGE0_CP_PUBLIC_URL=https://$(hostname -f):8443
+    say "Pomerium's public URL is $STAGE0_CP_PUBLIC_URL (STAGE0_CP_PUBLIC_URL in $ENV_FILE); every worker host must resolve its host to p1"
+    printf '# Pomerium'"'"'s public URL, which every worker dials (README.md "Worker hosts").\nSTAGE0_CP_PUBLIC_URL=%s\n' "$STAGE0_CP_PUBLIC_URL" >> "$ENV_FILE"
+  fi
+fi
 STAGE0_WORKER_NAME=${STAGE0_WORKER_NAME:-$(hostname -s)}
 [[ $STAGE0_PROFILE == control ]] && STAGE0_WORKER_NAME=p1
 STAGE0_AO_REPO_URL=${STAGE0_AO_REPO_URL:-https://github.com/ortusnova/agentic-orchestration.git}
@@ -193,7 +227,7 @@ fi
 export STAGE0_PROFILE STAGE0_HOME STAGE0_HULY_URL STAGE0_HULY_WORKSPACE STAGE0_HULY_PROJECT STAGE0_SORTIE_PORT \
   STAGE0_PACK STAGE0_REPO_URL STAGE0_REPO_BASE STAGE0_REPO_PROJECT \
   STAGE0_AO_REPO_URL STAGE0_AO_REPO_BASE STAGE0_AO_REPO_PROJECT \
-  STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT STAGE0_EDGE_WORKER_PORT
+  STAGE0_HOMELAB_REPO_URL STAGE0_HOMELAB_REPO_BASE STAGE0_HOMELAB_REPO_PROJECT STAGE0_CP_PUBLIC_URL
 
 if [[ $STAGE0_PROFILE == worker ]]; then
   # make dev-host installs smolvm in ~/.local/bin, which a non-login shell lacks.
@@ -213,6 +247,8 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
 migrate_max_agents "$ENV_FILE"
 # shellcheck source=unit-restart.sh
 . "$KIT/unit-restart.sh"
@@ -247,8 +283,13 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   for f in github-token claude-oauth-token; do
     [[ -e $STAGE0_HOME/$f ]] && say "$STAGE0_HOME/$f is no longer used on a worker host: delete it, and revoke the token"
   done
-  STAGE0_EGRESS_CA=$HOME/.config/ortus-nova/egress-ca.crt
-  [[ -s $STAGE0_EGRESS_CA ]] || die "$STAGE0_EGRESS_CA is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  STAGE0_EGRESS_CA=$WORKER_HOST_CONFIG/egress-ca.crt
+  # The client certificate from the control plane's CA, its key and that
+  # CA (worker-host.sh add, on p1), which Pomerium admits this worker by.
+  worker_tls=("$WORKER_HOST_CONFIG/cp-worker.crt" "$WORKER_HOST_CONFIG/cp-worker.key" "$WORKER_HOST_CONFIG/cp-ca.crt")
+  for f in "$STAGE0_EGRESS_CA" "${worker_tls[@]}"; do
+    [[ -s $f ]] || die "$f is missing: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  done
   say "Building worker-daemon and smol-builder into $STAGE0_HOME/bin"
   build_worker_daemon
   (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
@@ -262,7 +303,7 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   else
     say "No homelab checkout (STAGE0_HOMELAB_SRC): this worker takes no homelab job"
   fi
-  render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
+  render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "$STAGE0_CP_PUBLIC_URL" "$STAGE0_EGRESS_CA" "${worker_tls[@]}"
   "$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
     || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
@@ -285,24 +326,25 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   restart_worker
   sleep 2
   systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
-  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT/" || true)
-  [[ $code != 000 && -n $code ]] \
-    || say "p1's edge does not answer at http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT yet: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
-  say "Ready: worker $STAGE0_WORKER_NAME dials p1's edge at http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT (journalctl --user -u ortus-stage0-worker)"
+  # Pomerium answers a listed worker's certificate on its control route;
+  # it rejects a connection without one in the handshake (000).
+  code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "${worker_tls[2]}" --cert "${worker_tls[0]}" --key "${worker_tls[1]}" \
+    "$STAGE0_CP_PUBLIC_URL/api/v1/workers/" || true)
+  [[ $code != 000 && $code != 403 && -n $code ]] \
+    || say "p1's Pomerium does not admit this worker at $STAGE0_CP_PUBLIC_URL yet (HTTP $code): on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+  say "Ready: worker $STAGE0_WORKER_NAME dials p1's Pomerium at $STAGE0_CP_PUBLIC_URL (journalctl --user -u ortus-stage0-worker)"
   exit 0
 fi
 
 # The operator's channel (notify-channel.sh): optional; with no
 # STAGE0_NOTIFY_KIND the questions show on the workbench only.
-# shellcheck source=notify-channel.sh
-. "$KIT/notify-channel.sh"
 STAGE0_NOTIFY_KIND=${STAGE0_NOTIFY_KIND:-}
 STAGE0_NOTIFY_ENTRY=$(notify_entry "$STAGE0_NOTIFY_KIND" "${STAGE0_NOTIFY_CHAT_ID:-}") || die "fix the channel in $ENV_FILE"
 export STAGE0_NOTIFY_ENTRY
 if [[ -n $STAGE0_NOTIFY_KIND ]]; then
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
 else
-  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+  say "No operator channel of your own: Sortie's notifications go to the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE to add one (README.md)"
 fi
 mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
@@ -326,8 +368,8 @@ build_worker_daemon
 export PATH=$STAGE0_HOME/bin:$PATH
 # shellcheck source=nono-version.sh
 . "$KIT/nono-version.sh"
-say "Building the stage-1 edge and stage0-live-proofs, and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
-(cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
+say "Building control-plane's cpctl and egress gate and stage0-live-proofs, and installing nono $NONO_VERSION (pinned by checksum) into $STAGE0_HOME/bin"
+(cd "$ROOT/control-plane" && CGO_ENABLED=0 go build -o "$STAGE0_HOME/bin/" ./cmd/cpctl ./cmd/cp-egress)
 (cd "$KIT/live-proofs" && go build -o "$STAGE0_HOME/bin/stage0-live-proofs" .)
 nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
 
@@ -360,15 +402,19 @@ from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
 secret "$STAGE0_HOME/sortie-token"
+# This host's token for the workbench's notifications (notify-channel.sh):
+# Sortie posts with it, the workbench takes it, no person writes it.
+notify_host=$(notify_host) || die "fix the host name in $ENV_FILE"
+notify_token "$STAGE0_HOME" "$notify_host" || die "could not mint $notify_host's notifications token"
 secret "$STAGE0_HOME/viewer-token"
 # The supervisor's token and prompt (supervisor.sh), which the workflow's
 # supervisor section reads.
 # shellcheck source=supervisor.sh
 . "$KIT/supervisor.sh"
 supervisor_install "$STAGE0_HOME" "$KIT" || die "could not install the supervisor"
-# The edge reaches nono with this; nono intercepts TLS for the credential
-# hosts with the egress CA, whose certificate each worker gets (worker-host.sh,
-# worker-config.sh) and whose key never leaves this host.
+# The egress gate reaches nono with this; nono intercepts TLS for the
+# credential hosts with the egress CA, whose certificate each worker gets
+# (worker-host.sh, worker-config.sh) and whose key never leaves this host.
 secret "$STAGE0_HOME/nono-pass"
 if [[ ! -s $STAGE0_HOME/egress-ca/ca.key ]]; then
   say "Creating the egress CA in $STAGE0_HOME/egress-ca"
@@ -380,12 +426,22 @@ if [[ ! -s $STAGE0_HOME/egress-ca/ca.key ]]; then
       -out ca.crt) || die "could not create the egress CA"
   chmod 644 "$STAGE0_HOME/egress-ca/ca.crt"
 fi
-# shellcheck source=edge-config.sh
-. "$KIT/edge-config.sh"
-# p1's own worker: its edge port is on p1's loopback, with no tunnel.
-register_local_worker "$STAGE0_WORKER_NAME"
-render_edge_config "$STAGE0_HOME/edge.json"
-"$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
+# The control plane's front (front-config.sh): the CA and Pomerium's
+# certificate and configuration, and p1's own worker's certificate.
+# shellcheck source=front-config.sh
+. "$KIT/front-config.sh"
+[[ -n $(pomerium_image) ]] || die "control-plane/compose.yaml pins no Pomerium image"
+front_init || die "could not set up the control plane's CA and Pomerium's configuration in $STAGE0_CP_HOME"
+issue_local_worker "$STAGE0_WORKER_NAME" || die "could not issue p1's own worker its certificate"
+# Each worker host the stage-1 edge served gets its certificate now, before
+# the edge and its tunnels are retired below: a host that cannot be reached
+# stops this run with the edge still up.
+# shellcheck source=retire-edge.sh
+. "$KIT/retire-edge.sh"
+carried=$(carry_edge_workers "$STAGE0_HOME/workers" "$KIT/worker-host.sh" add) \
+  || die "could not give each worker host of the stage-1 edge its certificate; the edge stays until it can"
+for name in $carried; do say "Gave worker host $name its certificate: it dials Pomerium from its next stage0.sh"; done
+mkdir -p "$STAGE0_LIVE_PROOFS"
 
 build_pack
 STAGE0_EGRESS_CA=$STAGE0_HOME/egress-ca/ca.crt
@@ -395,7 +451,10 @@ if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
   . "$KIT/homelab-inputs.sh"
   homelab_inputs
 fi
-render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
+# p1's own worker dials Pomerium as every worker host does.
+local_tls=$STAGE0_CP_HOME/workers/$STAGE0_WORKER_NAME
+render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "$STAGE0_CP_PUBLIC_URL" "$STAGE0_EGRESS_CA" \
+  "$local_tls/worker.crt" "$local_tls/worker.key" "$local_tls/ca.crt"
 "$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
   || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
@@ -417,7 +476,7 @@ units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-t
   ortus-stage0-store.service ortus-stage0-store.timer
   ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
   ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
-  ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
+  ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
 deploy=''
@@ -425,6 +484,9 @@ deploy=''
 for unit in "${units[@]}"; do
   sed -e "s|@KIT@|$KIT|g" -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$unit" > "$UNITS/$unit"
 done
+# The stage-1 edge and its tunnels are gone: every worker reaches Sortie
+# through Pomerium (retire-edge.sh, design D18).
+for unit in $(retire_edge "$UNITS"); do say "Retired $unit: every worker reaches Sortie through Pomerium now"; done
 systemctl --user daemon-reload
 if [[ $deploy ]]; then
   systemctl --user enable -q --now ortus-stage0-deploy.timer
@@ -432,7 +494,7 @@ else
   systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
-  ortus-stage0-nono-live-proof.service ortus-stage0-edge.service ortus-stage0-worker.service
+  ortus-stage0-nono-live-proof.service ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
@@ -441,26 +503,32 @@ systemctl --user enable -q --now ortus-stage0-previews.timer
 # The supervisor's live-proof requests become jobs (run-live-proofs.sh).
 systemctl --user enable -q --now ortus-stage0-live-proofs.timer
 # Sortie restarts at once, whatever runs: it re-adopts each run whose lease a
-# worker still holds (spec store agent-platform/run-supervision). nono, the
-# edge and the worker daemon carry the runs, so each restarts only when what
-# it runs changed (unit-restart.sh): a kit change that leaves them as they
-# are cuts no run's egress, stream or machine.
+# worker still holds (spec store agent-platform/run-supervision); while it
+# restarts, Pomerium and the egress gate answer the workers 503, which they
+# retry. nono, the egress gate, Pomerium and the worker daemon carry the
+# runs, so each restarts only when what it runs changed (unit-restart.sh): a
+# kit change that leaves them as they are cuts no run's egress, stream or
+# machine.
 systemctl --user restart ortus-stage0-sortie.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 nono_inputs=("$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" "$KIT/anthropic-token.py"
-  "$KIT/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
+  "$ROOT/control-plane/nono/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
 restart_changed ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stage0-nono.service"
 # The live-proof nono also runs stage0-live-proofs (its source, not its
 # binary, which Go stamps with the kit's commit) on egress-live-proof.json.
 restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/egress-live-proof.json" \
   "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
-restart_changed ortus-stage0-edge.service "$KIT/edge" "$STAGE0_HOME/edge.json" "$UNITS/ortus-stage0-edge.service"
-for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
+# The egress gate and Pomerium: their source or image, their configuration
+# and their units, not the binaries, which Go stamps with the kit's commit.
+restart_changed ortus-stage0-egress-gate.service "$ROOT/control-plane/internal/egress" "$ROOT/control-plane/cmd/cp-egress" \
+  "$KIT/run-egress-gate.sh" "$KIT/front-config.sh" "$ENV_FILE" "$STAGE0_HOME/sortie-token" "$UNITS/ortus-stage0-egress-gate.service"
+restart_changed ortus-stage0-pomerium.service "$(pomerium_image)" "$STAGE0_CP_HOME/pomerium" "$STAGE0_CP_HOME/secrets/cp-pomerium-cert" \
+  "$KIT/run-pomerium.sh" "$KIT/front-config.sh" "$UNITS/ortus-stage0-pomerium.service"
 restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
-for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-edge ortus-stage0-worker; do
+for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-egress-gate ortus-stage0-pomerium ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
-say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker(s), p1's own and $(tunnel_workers | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"
+say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, Pomerium $STAGE0_CP_PUBLIC_URL for $(front_workers | wc -l) worker(s), p1's own and each worker host's (dev/stage0/worker-host.sh list)"

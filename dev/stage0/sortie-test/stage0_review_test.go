@@ -39,8 +39,8 @@ var stage0Values = map[string]string{
 	"STAGE0_HULY_URL":          "http://127.0.0.1:8087",
 	// No operator channel; stage0_notify_test.go renders each kind.
 	"STAGE0_NOTIFY_ENTRY": "",
-	// The remote kind's flow URLs need a real port.
-	"STAGE0_EDGE_WORKER_PORT": "7700",
+	// The remote kind's flow URLs: Pomerium's public URL (control-plane/).
+	"STAGE0_CP_PUBLIC_URL": "https://p1.example.org:8443",
 
 	"STAGE0_AO_REPO_PROJECT":      "ortusnova/agentic-orchestration",
 	"STAGE0_HOMELAB_REPO_PROJECT": "ortusnova/homelab",
@@ -88,6 +88,9 @@ func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The workbench's notifications endpoint, as run-sortie.sh puts it in
+	// Sortie's environment (stage0_notify_test.go).
+	t.Setenv("SORTIE_WORKBENCH_NOTIFY_URL", stage0Workbench.url())
 	// The supervisor's prompt, beside the workflow, as stage0.sh installs it.
 	if prompt, err := os.ReadFile(filepath.Join(kit, "supervisor.md")); err == nil {
 		if err := os.WriteFile(filepath.Join(dir, "supervisor.md"), prompt, 0o600); err != nil {

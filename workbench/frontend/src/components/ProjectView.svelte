@@ -78,6 +78,15 @@
     }
   }
 
+  async function seeNotifications(ids: number[]): Promise<string | null> {
+    try {
+      await projectApi(slug).seeNotifications(ids);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "The notification was not marked seen.";
+    }
+  }
+
   async function sessions(key: string, n: number): Promise<string | null> {
     try {
       await projectApi(slug).grantSessions(key, n);
@@ -142,7 +151,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions} onfaultdone={faultDone}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions} onfaultdone={faultDone} onseen={seeNotifications}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
