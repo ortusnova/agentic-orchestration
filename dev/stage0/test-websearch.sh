@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Checks that opencode in a Sortie machine can search the web without a
 # prompt: both opencode configs select Firecrawl's keyless provider and keep
-# webfetch denied, and the control plane's egress profile, the one host list under the
-# remote kind (nono enforces it for every worker), allows Firecrawl's MCP
-# host. Without a provider, opencode asks the user to choose
+# webfetch denied, and the workflow declares Firecrawl's MCP host among the
+# harness's hosts (environment.remote.egress), which every job's machine
+# reaches directly: nono, which serves only the credential hosts, does not
+# allow it. Without a provider, opencode asks the user to choose
 # one, and Sortie refuses the prompt.
 set -euo pipefail
 
@@ -26,10 +27,15 @@ for cfg in "$KIT/pack/opencode.json" "$ROOT/smol-builder/layers/base/opencode.js
   fi
 done
 
-if jq -e --arg h "$host" '.network.allow_domain | index($h)' "$ROOT/control-plane/nono/egress-profile.json" > /dev/null; then
-  echo "ok: control-plane/nono/egress-profile.json allows $host"
+if grep -qE '^        - \{host: mcp\.firecrawl\.dev, reason: "[^"]+"\}$' "$KIT/WORKFLOW.md"; then
+  echo "ok: WORKFLOW.md declares $host among the harness's hosts (environment.remote.egress)"
 else
-  echo "FAIL: control-plane/nono/egress-profile.json does not allow $host"; failed=1
+  echo "FAIL: WORKFLOW.md does not declare $host among the harness's hosts (environment.remote.egress)"; failed=1
+fi
+if jq -e --arg h "$host" '.network.allow_domain | index($h)' "$ROOT/control-plane/nono/egress-profile.json" > /dev/null; then
+  echo "FAIL: control-plane/nono/egress-profile.json allows $host, which is no credential host"; failed=1
+else
+  echo "ok: control-plane/nono/egress-profile.json leaves $host to the worker"
 fi
 
 exit $failed
