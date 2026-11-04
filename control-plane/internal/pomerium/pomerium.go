@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/ortusnova/agentic-orchestration/control-plane/internal/workers"
@@ -83,8 +84,11 @@ type Config struct {
 	Routes             []Route        `json:"routes"`
 }
 
-// StdioUpgrade is the Upgrade token of Sortie's stdio flow.
-const StdioUpgrade = "sortie-stdio/1"
+// StdioUpgrades are the Upgrade tokens of Sortie's stdio flow. The worker
+// daemon asks for sortie-stdio/2 first and falls back to sortie-stdio/1
+// only on a 426; Envoy answers an upgrade a route does not allow with 403,
+// so the route allows both.
+var StdioUpgrades = []string{"sortie-stdio/2", "sortie-stdio/1"}
 
 // Render builds Pomerium's configuration for the workers in l.
 func Render(s Settings, l *workers.List) ([]byte, error) {
@@ -133,7 +137,7 @@ func Build(s Settings, l *workers.List) (*Config, error) {
 	stdio := route("stdio")
 	stdio.Prefix = "/stdio/"
 	stdio.PrefixRewrite = "/api/v1/flows/stdio/"
-	stdio.AllowUpgrades = []string{StdioUpgrade}
+	stdio.AllowUpgrades = slices.Clone(StdioUpgrades)
 	stdio.Timeout, stdio.IdleTimeout = "0s", "0s"
 
 	// A worker sends a tool call for the guest's /<path> to

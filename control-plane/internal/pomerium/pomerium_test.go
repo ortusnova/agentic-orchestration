@@ -119,8 +119,8 @@ func TestPathsReachSortiesFlows(t *testing.T) {
 			t.Errorf("route %s = from %s to %s prefix %s rewrite %s; want %s to Sortie, %v", flow, r.From, r.To, r.Prefix, r.PrefixRewrite, r.From, want)
 		}
 	}
-	if up := rs["stdio"].AllowUpgrades; !slices.Equal(up, []string{"sortie-stdio/1"}) {
-		t.Errorf("stdio upgrades = %v, want sortie-stdio/1", up)
+	if up := rs["stdio"].AllowUpgrades; !slices.Equal(up, []string{"sortie-stdio/2", "sortie-stdio/1"}) {
+		t.Errorf("stdio upgrades = %v, want sortie-stdio/2 and sortie-stdio/1, which the worker daemon asks for", up)
 	}
 	mcp := rs["mcp"]
 	if mcp.Prefix != "/mcp/jobs/" || mcp.To != "http://10.89.71.10:7680" {
