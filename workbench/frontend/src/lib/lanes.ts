@@ -2,6 +2,8 @@
  * (agent-platform/run-supervision). The backend reads them from each Sortie;
  * this module places them on the axis. */
 
+import type { Question } from "./types";
+
 export type StuckCode = "held" | "stalled" | "retrying" | "budget" | "question";
 
 export interface Estimate { seconds: number; basis: string }
@@ -27,6 +29,10 @@ export interface LaneJob {
   attempt?: number | null;
   /** Stuck work: since when it waits. */
   since?: number | null;
+  /** A parked story: its whole question, for the answer box its lane opens. */
+  question?: Question | null;
+  /** A story held at a budget: what it used of which. */
+  budget?: { reason: string; used: number | null; sessions: number | null } | null;
 }
 
 export interface LaneNext { identifier: string; key: string | null; title: string; phase: string; rule: string | null; estimate: Estimate | null }
@@ -52,6 +58,10 @@ export interface LaterItem {
   since?: number | null;
   /** It makes its worker stuck. */
   stuck?: boolean | null;
+  /** Stuck work that waits below the lanes: why, and what its action needs. */
+  code?: StuckCode;
+  question?: Question | null;
+  budget?: LaneJob["budget"];
 }
 
 export type WorkerVerdict = "working" | "stuck" | "idle" | "paused" | "unreachable";
@@ -73,6 +83,10 @@ export interface Worker {
   reasons?: { code: string; text: string; identifier: string | null; key: string | null }[];
   lanes?: Lane[];
   later?: LaterItem[];
+  /** Whether its Sortie grants sessions; null until asked. */
+  can_grant?: boolean | null;
+  /** Its workflow's agent.max_sessions. */
+  max_sessions?: number | null;
 }
 
 /** The axis, in minutes from now: half an hour back to an hour ahead. */
@@ -163,7 +177,7 @@ export function laneState(lane: Lane): string {
 export function stuckAction(code: StuckCode | undefined): string {
   switch (code) {
     case "question": return "answer its question";
-    case "budget": return "raise its session budget, or take the story over";
+    case "budget": return "give it more sessions, or take the story over";
     case "held": return "decide on what holds it";
     case "stalled": return "look at its session: the agent stopped reporting";
     case "retrying": return "nothing yet: Sortie retries it";

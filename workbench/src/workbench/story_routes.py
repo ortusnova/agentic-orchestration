@@ -13,6 +13,7 @@ from .auth import APPROVER, Identity
 from .plan_overlay import needs_spec, tracker_by_key
 from .projects import ProjectManager, ProjectRuntime
 from .sortie import SortieError
+from .worker_routes import poll_now
 
 log = logging.getLogger(__name__)
 
@@ -171,8 +172,10 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
         if not n or n.get("kind") != "story" or not ident:
             raise HTTPException(status_code=404, detail={"code": "unknown_story", "message": f"no synced story {body.key}"})
         writable(rt)
+        # The Sortie that parked it takes the answer: this host's or another's.
+        client = rt.hub.client_for(ident)
         try:
-            await rt.hub.sortie.answer(ident, text, who.name or who.email or who.key)
+            await client.answer(ident, text, who.name or who.email or who.key)
         except SortieError as exc:
             if exc.status == 409:
                 await rt.hub.poll_once()
@@ -181,7 +184,8 @@ def story_router(projects: ProjectManager, require_role) -> APIRouter:
             raise sortie_failure(exc) from exc
         if rt.registry is not None:
             await asyncio.to_thread(rt.registry.record_command, rt.project.id, ident, None, "answer", text, who.key, who.name)
-        log.info("project %s: %s answered %s (%s)", slug, who.key, body.key, ident)
+        log.info("project %s: %s answered %s (%s) on %s", slug, who.key, body.key, ident, rt.hub.holder(ident) or rt.hub.sortie_name)
+        await poll_now(client)
         # The park is released: the question leaves the list now, not at the next poll.
         await rt.hub.poll_once()
         return {"answered": body.key, "identifier": ident, "by": who.public(), "node": node(rt, body.key)}

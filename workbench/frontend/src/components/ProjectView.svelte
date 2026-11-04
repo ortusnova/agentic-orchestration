@@ -8,6 +8,7 @@
   import { httpSession } from "../lib/session";
   import { httpSync } from "../lib/sync";
   import { httpWorker } from "../lib/worker";
+  import { httpRun } from "../lib/run";
   import { emptyGraph, type MergedGraph, type TrackerProject, type ViewState } from "../lib/types";
   import ChatPane from "./ChatPane.svelte";
   import GraphPane from "./GraphPane.svelte";
@@ -32,6 +33,8 @@
   const sync = httpSync(slug);
   // svelte-ignore state_referenced_locally
   const specs = httpSpecs(slug);
+  // svelte-ignore state_referenced_locally
+  const runs = httpRun(slug);
   let unsubscribe: (() => void) | null = null;
 
   const tabs = $derived([
@@ -112,7 +115,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} {runs} onapprove={approve} onanswer={answer} onreplace={replace}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
@@ -148,7 +151,7 @@
     </GraphPane>
   {/snippet}
   {#snippet chat()}
-    <ChatPane {doc} {view} {session} onselect={(k) => selectAnywhere(k)} actions={sync} {worker} {specs}
+    <ChatPane {doc} {view} {session} onselect={(k) => selectAnywhere(k)} actions={sync} {worker} {specs} {runs}
       onwatch={(n) => { watching = n.tracker?.identifier ?? null; selectAnywhere(n.plan_key); }} onunwatch={() => (watching = null)} />
   {/snippet}
 </Shell>

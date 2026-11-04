@@ -44,6 +44,7 @@ class FakeSortie:
         # Sortie's agent concurrency cap, and the runs that wait on a budget
         # or a person, as /api/v1/state reports them.
         self.max_agents: int | None = 3
+        self.max_sessions: int | None = None
         self.budget_exhausted: list[dict[str, Any]] = []
         self.parked: list[dict[str, Any]] = []
         # What else /api/v1/state lists: the pull requests it watches, the
@@ -59,6 +60,11 @@ class FakeSortie:
         self.park_details: dict[str, dict[str, Any]] = {}
         self.answers: list[dict[str, Any]] = []
         self.answer_releases = True
+        # Session grants: whether this Sortie has the route, the grants
+        # people made, and the agent events each run kept, by dispatch ID.
+        self.grant_supported = True
+        self.grants: list[dict[str, Any]] = []
+        self.run_events: dict[str, list[dict[str, Any]]] = {}
         # Sync: no connection at all; the next apply is refused as stale;
         # refresh fails; the refreshes Sortie was asked for.
         self.unreachable = False
@@ -177,6 +183,8 @@ class FakeSortie:
             if self.state_down:
                 return httpx.Response(503, json={"error": {"code": "unavailable", "message": "state"}})
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
+            if self.max_sessions is not None:
+                agent["max_sessions"] = self.max_sessions
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
                                              "pending_reactions": self.pending_reactions, "held": self.held,
@@ -184,9 +192,31 @@ class FakeSortie:
                                              "config": {"agent": agent}})
         if path == "/api/v1/runs":
             status = request.url.params.get("status")
+            issue = request.url.params.get("issue")
             limit = int(request.url.params.get("limit") or 50)
-            runs = [r for r in reversed(self.runs) if not status or r.get("status") == status]
+            runs = [r for r in reversed(self.runs) if (not status or r.get("status") == status)
+                    and (not issue or r.get("issue_identifier") == issue)]
             return httpx.Response(200, json={"runs": runs[:limit], "next_cursor": None})
+        if path.startswith("/api/v1/runs/") and path.endswith("/events"):
+            did = path.removeprefix("/api/v1/runs/").removesuffix("/events")
+            if did not in self.run_events:
+                return httpx.Response(404, json={"error": {"code": "run_events_not_retained", "message": did}})
+            events = self.run_events[did]
+            return httpx.Response(200, json={"dispatch_id": did, "first_seq": events[0]["seq"] if events else None, "events": events})
+        if path.startswith("/api/v1/") and path.endswith("/sessions"):
+            # A Sortie without the route answers as its router does for any
+            # path it does not serve: a plain-text 404.
+            if not self.grant_supported:
+                return httpx.Response(404, text="404 page not found")
+            if request.method != "POST":
+                return httpx.Response(405, json={"error": {"code": "method_not_allowed", "message": "POST only"}})
+            ident = path.removeprefix("/api/v1/").removesuffix("/sessions")
+            entry = next((b for b in self.budget_exhausted if b.get("issue_identifier") == ident), None)
+            if entry is None:
+                return httpx.Response(409, json={"error": {"code": "not_budget_held", "message": f"{ident} is not held at its budget"}})
+            self.grants.append({"identifier": ident, **(body or {})})
+            self.budget_exhausted = [b for b in self.budget_exhausted if b is not entry]
+            return httpx.Response(200, json={"issue_identifier": ident, "granted": (body or {}).get("add"), "released": True})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:
@@ -204,10 +234,18 @@ class FakeSortie:
             return httpx.Response(200, json=self.brokers[ident])
         if path.startswith("/api/v1/") and path.count("/") == 3:
             ident = path.removeprefix("/api/v1/")
-            if ident not in self.running and ident not in self.retrying and ident not in self.park_details:
+            budget = next((b for b in self.budget_exhausted if b.get("issue_identifier") == ident), None)
+            reactions = [r for r in self.pending_reactions if r.get("issue_identifier") == ident]
+            history = [r for r in reversed(self.runs) if r.get("issue_identifier") == ident]
+            if not (ident in self.running or ident in self.retrying or ident in self.park_details or budget or reactions or history):
                 return httpx.Response(404, json={"error": {"code": "issue_not_found", "message": ident}})
-            return httpx.Response(200, json={"issue_identifier": ident, "running": self.running.get(ident),
-                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident)})
+            status = ("running" if ident in self.running else "retrying" if ident in self.retrying else "budget_exhausted" if budget
+                      else "parked" if ident in self.park_details else "pending_reactions" if reactions else "history")
+            return httpx.Response(200, json={"issue_identifier": ident, "status": status, "running": self.running.get(ident),
+                                             "retry": self.retrying.get(ident), "parked": self.park_details.get(ident),
+                                             "budget_exhausted": budget, "pending_reactions": reactions,
+                                             "history": {"runs": history} if history else None,
+                                             "status_text": status.replace("_", " ").capitalize(), "next_outcomes": []})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
 
     def handle_project(self, method: str, key: str, body: Any) -> httpx.Response:

@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+import httpx
 from fastapi import HTTPException
 
 from .autosync import SyncLoop, sync_project
@@ -49,8 +50,14 @@ class ProjectRuntime:
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions
-        # The brokers of the workers Sortie runs for this project's stories.
-        self.workers = WorkerRelay(sortie.bind(project.huly_project), transport=broker_transport)
+        # The brokers of the workers each Sortie runs for this project's
+        # stories; another host's brokers are reached through its proxy.
+        proxies = {s.name: s.broker_proxy for s in config.other_sorties}
+        self.relays: dict[str, WorkerRelay] = {
+            name: WorkerRelay(client, transport=broker_transport or (
+                httpx.AsyncHTTPTransport(proxy=proxies[name]) if proxies.get(name) else None))
+            for name, client in self.hub.sorties.items()}
+        self.workers = self.relays[config.sortie_name]
         # The approved plan syncs to the tracker on its own.
         self.sync = SyncLoop(lambda: sync_project(self.hub), debounce=config.debounce_ms / 1000,
                              first_backoff=config.sync_backoff_first, max_backoff=config.sync_backoff_max)
@@ -63,6 +70,10 @@ class ProjectRuntime:
             self.hub.sync_status = {**self.hub.sync_status, "state": "disabled"}
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
+
+    def relay(self, identifier: str) -> WorkerRelay:
+        """The relay of the Sortie that runs or holds the issue."""
+        return self.relays.get(self.hub.holder(identifier) or "") or self.workers
 
     @property
     def slug(self) -> str:
@@ -170,7 +181,8 @@ class ProjectRuntime:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.sessions.aclose()
-        await self.workers.aclose()
+        for relay in self.relays.values():
+            await relay.aclose()
         if self._own_github:
             await self.deliveries.github.aclose()
 

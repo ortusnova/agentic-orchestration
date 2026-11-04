@@ -88,7 +88,7 @@
             <span class="rk" aria-label="Rank {q.rank}">{q.rank}</span>
             <div class="body">
               <a class="name" href={graphHref(slug, { epic: q.change, selected: q.key })} title="{q.key}: {q.title}">{q.label}</a>
-              <span class="note">{[q.identifier, q.title].join(" · ")}</span>
+              <span class="note">{[q.identifier, q.title, q.sortie && `on ${q.sortie}`].filter(Boolean).join(" · ")}</span>
               <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)}
                 replacedBy={q.replaced_by ?? null} onreplace={onreplace && q.replaced_by ? () => onreplace(q.replaced_by!.key) : undefined} />
             </div>

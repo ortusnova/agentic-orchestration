@@ -55,13 +55,24 @@ class SortieSource:
     name: str
     url: str
     token: str = field(default="", repr=False)
+    # The proxy that reaches the brokers of its runs, which listen on its
+    # host's loopback: a SOCKS forward through the same SSH connection.
+    broker_proxy: str = ""
 
 
 def _sorties(env: dict[str, str], main: str) -> tuple[SortieSource, ...]:
     """WORKBENCH_SORTIES: ``name=url`` entries, separated by spaces; each
     one's control token is the file ``<name>.token`` in
-    WORKBENCH_SORTIE_TOKEN_DIR, when that directory is set."""
+    WORKBENCH_SORTIE_TOKEN_DIR, when that directory is set; and
+    WORKBENCH_SORTIE_BROKER_PROXIES: ``name=socks5://host:port`` entries, the
+    proxy that reaches each one's brokers."""
     out: list[SortieSource] = []
+    proxies: dict[str, str] = {}
+    for entry in env.get("WORKBENCH_SORTIE_BROKER_PROXIES", "").split():
+        name, sep, url = entry.partition("=")
+        if not sep or not url.startswith(("socks5://", "socks5h://", "http://")):
+            raise ConfigError(f"WORKBENCH_SORTIE_BROKER_PROXIES: {entry!r} is not name=socks5://address")
+        proxies[name] = url
     token_dir = env.get("WORKBENCH_SORTIE_TOKEN_DIR", "").strip()
     for entry in env.get("WORKBENCH_SORTIES", "").split():
         name, sep, url = entry.partition("=")
@@ -76,7 +87,9 @@ def _sorties(env: dict[str, str], main: str) -> tuple[SortieSource, ...]:
                 token = path.read_text().strip()
             except OSError as exc:
                 raise ConfigError(f"WORKBENCH_SORTIE_TOKEN_DIR: {exc}") from exc
-        out.append(SortieSource(name, url.rstrip("/"), token))
+        out.append(SortieSource(name, url.rstrip("/"), token, proxies.pop(name, "")))
+    if proxies:
+        raise ConfigError(f"WORKBENCH_SORTIE_BROKER_PROXIES: no Sortie named {', '.join(sorted(proxies))}")
     return tuple(out)
 
 

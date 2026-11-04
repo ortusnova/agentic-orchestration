@@ -3,13 +3,14 @@
   import { progressLines, REASON_TEXT, type HomeDoc } from "../lib/home";
   import { graphHref } from "../lib/router";
   import type { MergedGraph } from "../lib/types";
+  import type { RunClient } from "../lib/run";
   import HomeNeeds from "./HomeNeeds.svelte";
   import HomeTimeline from "./HomeTimeline.svelte";
   import TopBar, { type Tab } from "./TopBar.svelte";
   import WorkerLanes from "./WorkerLanes.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, actions, runs,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -21,6 +22,8 @@
     onanswer: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
     actions?: Snippet;
+    /** Grants a story held at its session budget more sessions. */
+    runs?: RunClient;
   } = $props();
 
   const home: HomeDoc | null = $derived(doc.home && !doc.home.error ? doc.home : null);
@@ -73,7 +76,7 @@
       {#if home.timeline}<HomeTimeline {home} {slug} {marks} />{/if}
     </section>
 
-    <WorkerLanes workers={home.workers ?? []} {slug} />
+    <WorkerLanes workers={home.workers ?? []} {slug} {onanswer} {runs} />
 
     {#if home.critical_path && next}
       <section class="path" aria-labelledby="path-h">

@@ -5,12 +5,14 @@
   import type { GraphNode, ViewState } from "../lib/types";
   import Icon from "./Icon.svelte";
   import QuestionBox from "./QuestionBox.svelte";
+  import RunState from "./RunState.svelte";
+  import type { RunClient } from "../lib/run";
   import { workersOf, workerStatus } from "../lib/worker";
   import { renderInline, renderMarkdown } from "../lib/markdown";
   import { groupCovers, type ChangeRequirements, type CoveredRequirement, type SpecReader } from "../lib/spec";
 
   let {
-    model, view, attached, onattach, onselect, actions, onwatch, watching = null, specs,
+    model, view, attached, onattach, onselect, actions, onwatch, watching = null, specs, runs, onlastrun, runActions = true,
   }: {
     model: GraphModel;
     view: ViewState;
@@ -23,6 +25,12 @@
     watching?: string | null;
     /** Reads the requirements a selected story covers. */
     specs?: SpecReader;
+    /** Reads what the Sortie that holds a story does with it, and unblocks it. */
+    runs?: RunClient;
+    /** Open the story's last run in the chat pane. */
+    onlastrun?: (node: GraphNode) => void;
+    /** False while the chat pane shows the story's last run, which holds its action. */
+    runActions?: boolean;
   } = $props();
 
   let busy = $state("");
@@ -128,6 +136,15 @@
     {#if node}
       <div class="sel">
         <h2>{node.title}</h2>
+        {#if node.kind === "story" && node.sortie && node.tracker && runs}
+          {#key node.tracker.identifier}
+            <RunState identifier={node.tracker.identifier} story={node.plan_key} {runs} question={node.question ?? null} canAct={approver} withActions={runActions}
+              onanswer={(text) => answer(node.plan_key, text)}
+              onwatch={onwatch && node.runtime?.watchable ? () => onwatch(node) : undefined}
+              onlastrun={onlastrun ? () => onlastrun(node) : undefined}
+              onblocker={(id) => { const b = model.doc.nodes.find((x) => x.tracker?.identifier === id); if (b) onselect(b.plan_key); }} />
+          {/key}
+        {/if}
         <div class="chips">
           <span class="chip {model.statusClass(node)}"><i></i>{model.statusLabel(node)}</span>
           {#if node.status === "orphaned"}<span class="chip">orphaned: no longer in the plan</span>{/if}
@@ -187,7 +204,7 @@
         {/if}
         {#if node.approved_by}<p class="approver">Approved by {node.approved_by.name}{#if node.approved_at} · {new Date(node.approved_at * 1000).toLocaleString()}{/if}</p>{/if}
 
-        {#if node.kind === "story" && node.question}
+        {#if node.kind === "story" && node.question && !(node.sortie && runs)}
           <div class="asks" data-asks={node.plan_key}>
             <b>The agent asks</b>
             {#key node.plan_key}
@@ -196,7 +213,7 @@
           </div>
         {/if}
 
-        {#if node.runtime}
+        {#if node.runtime && !(node.sortie && runs)}
           <div class="agent" class:warn={node.runtime.status !== "running"}>
             <b><span class="pulse" aria-hidden="true"></span>{model.badge(node)?.label}</b>
             {#if node.runtime.last_message}<p>{node.runtime.last_message}</p>{/if}

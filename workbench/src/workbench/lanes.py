@@ -134,16 +134,21 @@ def _budget(r: dict[str, Any], key_of: dict[str, str]) -> dict[str, Any]:
     else:
         text = f"held: {_words(reason)} reached"
     return {"job": {**_issue(r, key_of), "phase": _phase(r.get("rule_name")), "rule": r.get("rule_name") or None,
-                    "since": parse_time(r.get("exhausted_at")), "status": r.get("status_text_full") or r.get("status_text") or None},
+                    "since": parse_time(r.get("exhausted_at")), "status": r.get("status_text_full") or r.get("status_text") or None,
+                    "budget": {"reason": reason, "used": r.get("used_sessions"), "sessions": r.get("budget_sessions")}},
             "stuck": {"code": "budget", "text": text}}
 
 
-def _parked(r: dict[str, Any], key_of: dict[str, str], statements: dict[str, str]) -> dict[str, Any]:
+def _parked(r: dict[str, Any], key_of: dict[str, str], questions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     ident = r.get("issue_identifier") or ""
-    statement = statements.get(ident) or r.get("statement") or ""
+    q = questions.get(ident) or {}
+    statement = q.get("statement") or r.get("statement") or ""
     text = f"asks: {_first(statement)}" if statement else "stopped for a person without saying why"
+    # The whole question, for the answer box the lane opens.
+    full = {"identifier": ident, "statement": statement, "parked_at": q.get("parked_at") or parse_time(r.get("parked_at")),
+            "reason": q.get("reason") or _words(r.get("reason")) or None}
     return {"job": {**_issue(r, key_of), "phase": _phase(r.get("rule_name")), "rule": r.get("rule_name") or None,
-                    "since": parse_time(r.get("parked_at")), "status": r.get("status_text") or None},
+                    "since": parse_time(r.get("parked_at")), "status": r.get("status_text") or None, "question": full},
             "stuck": {"code": "question", "text": text}}
 
 
@@ -200,12 +205,12 @@ def _paused(state: dict[str, Any]) -> str | None:
 
 def worker_lanes(name: str, *, main: bool, state: dict[str, Any] | None, error: str | None,
                  runs: dict[str, Any] | None, key_of: dict[str, str], now: float,
-                 statements: dict[str, str] | None = None) -> dict[str, Any]:
+                 questions: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """One worker: its slots as lanes, what waits on it, and whether its
     work moves or is stuck, and why."""
     out: dict[str, Any] = {"name": name, "main": main, "reachable": state is not None, "error": error,
                            "slots": None, "busy": 0, "started_at": None, "poll_seconds": None, "paused": None,
-                           "verdict": "unreachable", "reasons": [], "lanes": [], "later": []}
+                           "verdict": "unreachable", "reasons": [], "lanes": [], "later": [], "max_sessions": None}
     if state is None:
         out["reasons"] = [{"code": "unreachable", "text": f"{name}'s Sortie is unreachable" + (f": {error}" if error else "")}]
         return out
@@ -213,7 +218,8 @@ def worker_lanes(name: str, *, main: bool, state: dict[str, Any] | None, error: 
     cap = (config.get("agent") or {}).get("max_concurrent_agents")
     slots = cap if isinstance(cap, int) and cap > 0 else None
     poll = (config.get("polling") or {}).get("interval_ms")
-    out.update(slots=slots, started_at=parse_time(state.get("started_at")),
+    max_sessions = (config.get("agent") or {}).get("max_sessions")
+    out.update(max_sessions=max_sessions if isinstance(max_sessions, int) else None, slots=slots, started_at=parse_time(state.get("started_at")),
                poll_seconds=poll / 1000 if isinstance(poll, (int, float)) else None, paused=_paused(state))
 
     running = sorted(state.get("running") or [], key=lambda r: parse_time(r.get("started_at")) or now)
@@ -223,7 +229,7 @@ def worker_lanes(name: str, *, main: bool, state: dict[str, Any] | None, error: 
     # lane, the one it will run in again; what does not fit waits below.
     waiting = ([{"kind": "retry", **_retry(r, key_of, runs)} for r in state.get("retrying") or []]
                + [{"kind": "stuck", **_budget(r, key_of)} for r in state.get("budget_exhausted") or []]
-               + [{"kind": "stuck", **_parked(r, key_of, statements or {})} for r in state.get("parked") or []])
+               + [{"kind": "stuck", **_parked(r, key_of, questions or {})} for r in state.get("parked") or []])
     room = max(0, (slots if slots is not None else len(lanes)) - len(lanes))
     lanes += waiting[:room]
     later: list[dict[str, Any]] = []
@@ -231,7 +237,7 @@ def worker_lanes(name: str, *, main: bool, state: dict[str, Any] | None, error: 
         j = w["job"]
         later.append({"kind": "you" if w["stuck"]["code"] == "question" else "held",
                       "identifier": j["identifier"], "key": j["key"], "title": j["title"], "text": w["stuck"]["text"],
-                      "stuck": True})
+                      "stuck": True, "code": w["stuck"]["code"], "question": j.get("question"), "budget": j.get("budget")})
 
     # A free slot says what runs in it next, or why nothing does.
     nexts = [{**_issue(h, key_of), "phase": _phase(h.get("target_rule")), "rule": h.get("target_rule") or None,

@@ -14,11 +14,15 @@ export interface Runtime {
   held?: boolean;
   holder?: string | null;
   watchable?: boolean;
+  /** The worker whose Sortie runs it. */
+  sortie?: string | null;
 }
 
 /** The question an agent asked when it stopped, while Sortie keeps its story parked. */
 export interface Question {
   identifier: string;
+  /** The worker whose Sortie parked it. */
+  sortie?: string;
   /** The agent's stop statement, whole. */
   statement: string;
   /** When the story stopped, in Unix seconds, if Sortie says. */
@@ -53,6 +57,8 @@ export interface GraphNode {
   runtime: Runtime | null;
   /** Stories only: the open question of a parked story. */
   question?: Question | null;
+  /** Stories only: the worker whose Sortie runs, holds or watches it, or null. */
+  sortie?: string | null;
   // Stories only: the plan status the workbench derives from approvals and Sortie.
   plan_status?: PlanStatus | null;
   held_by?: string[];
@@ -187,4 +193,6 @@ export interface ViewState {
   showCross: boolean;
   /** A milestone whose changes the project level marks. */
   mark?: string | null;
+  /** "run": the chat pane opens the selected story's run, live or its last. */
+  open?: "run" | null;
 }

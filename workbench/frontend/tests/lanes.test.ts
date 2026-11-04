@@ -1,6 +1,8 @@
 import { flushSync, mount, tick, unmount } from "svelte";
 import { afterEach, describe, expect, it } from "vitest";
 import WorkerLanes from "../src/components/WorkerLanes.svelte";
+import { session } from "../src/lib/identity.svelte";
+import type { GrantResult, RunClient } from "../src/lib/run";
 import { groupLater, jobBox, pct, type Lane, type LaneJob, type StuckCode, type Worker } from "../src/lib/lanes";
 import { parseRoute } from "../src/lib/router";
 
@@ -9,6 +11,7 @@ afterEach(() => {
   if (app) unmount(app);
   app = undefined;
   document.body.innerHTML = "";
+  session.identity = null;
 });
 
 const NOW = 1_800_000_000;
@@ -31,9 +34,20 @@ function worker(lanes: Lane[], extra: Partial<Worker> = {}): Worker {
     verdict: busy ? "working" : "idle", reasons: [], later: [], lanes, ...extra };
 }
 
-async function render(workers: Worker[]) {
-  app = mount(WorkerLanes, { target: document.body, props: { workers, slug: "ons", now: NOW } });
+async function render(workers: Worker[], extra: Record<string, unknown> = {}) {
+  app = mount(WorkerLanes, { target: document.body, props: { workers, slug: "ons", now: NOW, ...extra } });
   await settle();
+}
+
+/** A run client that records grants and answers as its Sortie would. */
+function fakeRuns(result: GrantResult = { ok: true }) {
+  const grants: [string, number][] = [];
+  const runs: RunClient = {
+    state: () => Promise.reject(new Error("not used")),
+    events: () => Promise.resolve([]),
+    grant: async (id, n) => { grants.push([id, n]); return result; },
+  };
+  return { runs, grants };
 }
 
 describe("the axis and a job's box", () => {
@@ -89,10 +103,10 @@ describe("Scenario: The home page's top row", () => {
     const box = $<HTMLAnchorElement>("[data-lane='job'] .job")!;
     const tip = box.querySelector(".tip")!.textContent!.replace(/\s+/g, " ");
     for (const fact of ["ONS-68 failure-routing", "Build · sortie · on p1", "23 min running · 4 turns · 1.8 M tokens",
-      "about 5 min left · median of 9 past build runs", "edited route.go · 20 s ago", "Click to watch or steer its agent"]) {
+      "about 5 min left · median of 9 past build runs", "edited route.go · 20 s ago", "Click to open its session: watch it, or send its agent a message"]) {
       expect(tip).toContain(fact);
     }
-    expect(parseRoute(box.getAttribute("href")!)).toMatchObject({ page: "graph", view: { epic: "sortie", selected: "sortie/failure-routing" } });
+    expect(parseRoute(box.getAttribute("href")!)).toMatchObject({ page: "graph", view: { epic: "sortie", selected: "sortie/failure-routing", open: "run" } });
   });
 
   it("says when a job has no estimate", async () => {
@@ -140,7 +154,7 @@ describe("a stuck slot reads as stuck in its own lane, with why", () => {
 
   it("asks a person what to do about work that waits on them", async () => {
     await render([worker([cases[3][1], { ...cases[4][1], slot: 2 }], { verdict: "stuck" })]);
-    expect(text("[data-stuck='budget'] .fault")).toBe("Needs you: raise its session budget, or take the story over waits for 1 h 00 Open");
+    expect(text("[data-stuck='budget'] .fault")).toBe("Needs you: give it more sessions, or take the story over waits for 1 h 00 Open");
     expect(text("[data-stuck='question'] .fault")).toContain("Needs you: answer its question");
     expect($("[data-stuck='question'] .fault button")!.textContent).toBe("Answer");
   });
@@ -178,5 +192,89 @@ describe("what waits on a worker", () => {
     expect(text("[data-worker='taichi'] .verdict")).toBe("unreachable");
     expect(text("[data-worker='taichi'] .notice")).toBe("taichi's Sortie is unreachable: connection refused. Its slots show again when it answers.");
     expect($$("[data-worker='taichi'] .lane")).toHaveLength(0);
+  });
+});
+
+describe("every stuck lane has the action that resolves it, in place", () => {
+  const approver = () => (session.identity = { name: "Ann", email: "", roles: ["planner", "approver"], id: "a" });
+  const question = { identifier: "ONS-63", statement: "Is the bound **per check** or per phase?\n\nIn-repo parts hold.", parked_at: NOW - 600, reason: "agent blocked" };
+  const parked = lane(1, { kind: "stuck", job: job({ identifier: "ONS-63", key: "rebalance/record-the-boundary", started_at: null, since: NOW - 600, question }),
+    stuck: { code: "question", text: "asks: Is the bound per check or per phase?" } });
+  const held = lane(1, { kind: "stuck", job: job({ started_at: null, since: NOW - 3600, budget: { reason: "session_budget", used: 16, sessions: 16 } }),
+    stuck: { code: "budget", text: "used its 16 sessions; the session budget holds it" } });
+
+  it("Answer opens the whole question with its answer box under the lane, and the answer goes out", async () => {
+    approver();
+    const sent: [string, string][] = [];
+    await render([worker([parked], { name: "taichi", main: false, verdict: "stuck" })],
+      { onanswer: async (k: string, t: string) => { sent.push([k, t]); return null; } });
+    expect($("[data-opened]")).toBeNull();
+    $<HTMLButtonElement>("[data-act='answer']")!.click();
+    await settle();
+    const box = $("[data-opened='ONS-63']")!;
+    expect(box.querySelector(".oh")!.textContent).toContain("on taichi");
+    expect(box.querySelector(".statement strong")!.textContent).toBe("per check");
+    expect(box.querySelector(".statement")!.textContent).toContain("In-repo parts hold.");
+    const area = box.querySelector<HTMLTextAreaElement>("textarea")!;
+    area.value = "Per check: record it in design.md.";
+    area.dispatchEvent(new Event("input"));
+    await settle();
+    box.querySelector<HTMLFormElement>("form")!.requestSubmit();
+    await settle();
+    expect(sent).toEqual([["rebalance/record-the-boundary", "Per check: record it in design.md."]]);
+    expect(text("[data-opened] .sent")).toBe("Answer sent. The story resumes once Sortie releases it.");
+    expect(parseRoute(box.querySelector("a")!.getAttribute("href")!).name).toBe("project");
+  });
+
+  it("a held session budget offers more sessions, and the grant goes to its Sortie", async () => {
+    approver();
+    const { runs, grants } = fakeRuns();
+    await render([worker([held], { verdict: "stuck", can_grant: true, max_sessions: 16 })], { runs });
+    $<HTMLButtonElement>("[data-act='grant']")!.click();
+    await settle();
+    expect(text("[data-opened] .used")).toBe("Used 16 of its 16 sessions.");
+    $<HTMLFormElement>("[data-opened] form")!.requestSubmit();
+    await settle();
+    expect(grants).toEqual([["ONS-68", 4]]);
+    expect(text("[data-opened] .ok")).toBe("Gave ONS-68 4 more sessions. p1's Sortie runs it again at its next poll.");
+  });
+
+  it("a Sortie that cannot grant sessions yet says so plainly, with the setting to raise", async () => {
+    approver();
+    const { runs, grants } = fakeRuns({ ok: false, unsupported: true, message: "no route" });
+    await render([worker([held], { verdict: "stuck", can_grant: null, max_sessions: 16 })], { runs });
+    $<HTMLButtonElement>("[data-act='grant']")!.click();
+    await settle();
+    $<HTMLFormElement>("[data-opened] form")!.requestSubmit();
+    await settle();
+    expect(grants).toHaveLength(1);
+    expect(text("[data-note='grant-unsupported']")).toBe(
+      "p1's Sortie cannot grant sessions yet. Raise agent.max_sessions (now 16) in p1's workflow instead, and Sortie runs it again at its next poll.");
+    expect($("[data-opened] form")).toBeNull();
+  });
+
+  it("knows ahead when its Sortie cannot grant, and shows no button that cannot work", async () => {
+    approver();
+    await render([worker([held], { verdict: "stuck", can_grant: false, max_sessions: 16 })], { runs: fakeRuns().runs });
+    $<HTMLButtonElement>("[data-act='grant']")!.click();
+    await settle();
+    expect($("[data-opened] [data-act='grant']")).toBeNull();
+    expect(text("[data-note='grant-unsupported']")).toContain("Raise agent.max_sessions (now 16)");
+  });
+
+  it("Open on stuck work opens its story with its run", async () => {
+    await render([worker([held], { verdict: "stuck" })]);
+    const href = $("[data-act='open']")!.getAttribute("href")!;
+    expect(parseRoute(href)).toMatchObject({ page: "graph", view: { selected: "sortie/failure-routing", open: "run" } });
+  });
+
+  it("stuck work below the lanes opens its action too", async () => {
+    approver();
+    const later = [{ kind: "you" as const, identifier: "ONS-55", key: "x/y", title: "t", text: "asks: which?", stuck: true, code: "question" as const,
+      question: { identifier: "ONS-55", statement: "Which host?", parked_at: null, reason: null } }];
+    await render([worker([lane(1, { kind: "job", job: job() })], { later })], { onanswer: async () => null });
+    $<HTMLButtonElement>(".later [data-act='answer']")!.click();
+    await settle();
+    expect(text("[data-opened='ONS-55'] .statement")).toBe("Which host?");
   });
 });

@@ -285,7 +285,12 @@ to `$STAGE0_HOME/sorties/taichi.token` on p1, with its address in
 `taichi.env`. `run-workbench.sh` passes every Sortie there to the
 workbench (`WORKBENCH_SORTIES`), and the project home shows each as a
 worker with its slot lanes, beside p1's own (`WORKBENCH_SORTIE_NAME`, the
-host's short name).
+host's short name). The connection also holds a SOCKS forward to taichi's
+loopback (from port 7781 up, `SORTIE_BROKER_PROXY` in `taichi.env`), where
+the brokers of taichi's agents listen: through it the workbench opens and
+steers their sessions (`WORKBENCH_SORTIE_BROKER_PROXIES`). Run
+`huly-tunnel.sh taichi` again after an update to add it to an existing
+tunnel.
 
 | Part | Where |
 | --- | --- |

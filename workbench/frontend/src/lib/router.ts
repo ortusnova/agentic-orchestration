@@ -8,7 +8,7 @@ export type Route =
   | { name: "new" }
   | { name: "project"; slug: string; page: ProjectPage; view: ViewState };
 
-export const emptyView = (): ViewState => ({ epic: null, selected: null, showCross: true, mark: null });
+export const emptyView = (): ViewState => ({ epic: null, selected: null, showCross: true, mark: null, open: null });
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, "");
@@ -17,7 +17,8 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "new" && parts.length === 1) return { name: "new" };
   if (parts[0] === "p" && parts[1] && (parts.length === 2 || (parts.length === 3 && parts[2] === "graph"))) {
     const q = new URLSearchParams(query);
-    const view: ViewState = { epic: q.get("epic"), selected: q.get("sel"), showCross: q.get("cross") !== "0", mark: q.get("mark") };
+    const view: ViewState = { epic: q.get("epic"), selected: q.get("sel"), showCross: q.get("cross") !== "0", mark: q.get("mark"),
+      open: q.get("open") === "run" ? "run" : null };
     // A link from before the home existed carries the graph's place without "/graph".
     const page: ProjectPage = parts[2] === "graph" || view.epic || view.selected || view.mark || !view.showCross ? "graph" : "home";
     return { name: "project", slug: decodeURIComponent(parts[1]), page, view };
@@ -39,6 +40,7 @@ export function formatRoute(route: Route): string {
       if (route.view.selected) q.set("sel", route.view.selected);
       if (route.view.mark) q.set("mark", route.view.mark);
       if (!route.view.showCross) q.set("cross", "0");
+      if (route.view.open) q.set("open", route.view.open);
       const s = q.toString();
       return `${base}/graph${s ? `?${s}` : ""}`;
     }
@@ -46,7 +48,7 @@ export function formatRoute(route: Route): string {
 }
 
 /** The graph at a place: a story selected in its epic, an epic opened, or a milestone's changes marked. */
-export function graphHref(slug: string, place: { epic?: string | null; selected?: string | null; mark?: string | null } = {}): string {
+export function graphHref(slug: string, place: { epic?: string | null; selected?: string | null; mark?: string | null; open?: "run" | null } = {}): string {
   return formatRoute({ name: "project", slug, page: "graph", view: { ...emptyView(), ...place } });
 }
 

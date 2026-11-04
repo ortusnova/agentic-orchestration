@@ -4,11 +4,33 @@
     ago, duration, groupLater, hostLine, jobBox, laneState, nextBox, pct, retryBox, stuckAction, TICKS, tokens, VERDICT_WORD,
     type Lane, type LaneJob, type Worker,
   } from "../lib/lanes";
+  import { can } from "../lib/identity.svelte";
+  import type { RunClient } from "../lib/run";
   import { graphHref } from "../lib/router";
+  import type { Question } from "../lib/types";
+  import GrantBox from "./GrantBox.svelte";
+  import QuestionBox from "./QuestionBox.svelte";
 
   /** The workers' agent slots in time, half an hour back to an hour ahead:
-   * one section per worker, one lane per slot (agent-platform/run-supervision). */
-  let { workers, slug, now: fixed }: { workers: Worker[]; slug: string; now?: number } = $props();
+   * one section per worker, one lane per slot (agent-platform/run-supervision).
+   * Every stuck lane has the action that resolves it, in place: Answer opens
+   * the question and its box under the lane; a held session budget offers
+   * more sessions; Open opens the story's session, or its last run. */
+  let { workers, slug, now: fixed, onanswer, runs }: {
+    workers: Worker[];
+    slug: string;
+    now?: number;
+    /** Answer a parked story's question; resolves to an error message, or null. */
+    onanswer?: (key: string, text: string) => Promise<string | null>;
+    /** Grants a story held at its session budget more sessions. */
+    runs?: RunClient;
+  } = $props();
+
+  // The stuck work whose action is open under its lane: "<worker>/<identifier>".
+  let opened: string | null = $state(null);
+  const toggle = (w: Worker, id: string) => (opened = opened === `${w.name}/${id}` ? null : `${w.name}/${id}`);
+  const isOpen = (w: Worker, id: string) => opened === `${w.name}/${id}`;
+  const approver = $derived(can("approver"));
 
   let tick = $state(Date.now() / 1000);
   const timer = setInterval(() => (tick = Date.now() / 1000), 15_000);
@@ -17,8 +39,11 @@
 
   const at = pct(0);
   const storyHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key });
+  // The story with its run open in the chat pane: its live session, or its last run.
+  const runHref = (key: string) => graphHref(slug, { epic: key.split("/")[0], selected: key, open: "run" });
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const toNeeds = () => document.getElementById("needs-h")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const answerOf = (key: string | null) => (text: string) =>
+    !key ? Promise.resolve("This story is not on the plan, so it cannot be answered here.") : onanswer ? onanswer(key, text) : Promise.resolve("Answering is not available here.");
 
   /** Every fact of a job, for its hover card. */
   function facts(lane: Lane, j: LaneJob): string[] {
@@ -36,12 +61,28 @@
     return out;
   }
 
-  function opens(w: Worker, j: LaneJob): string {
+  function opens(j: LaneJob): string {
     if (!j.key) return "Not on this plan";
-    if (!w.main) return "Click to open its story; its session is watched on its own worker for now";
-    return j.watchable ? "Click to watch or steer its agent" : "Click to open its story";
+    return j.watchable ? "Click to open its session: watch it, or send its agent a message" : "Click to open its story and its run";
   }
 </script>
+
+{#snippet action(w: Worker, id: string, key: string | null, code: string | undefined, q: Question | null | undefined, budget: LaneJob["budget"])}
+  <div class="opened" data-opened={id} role="region" aria-label="{id}: {code === 'question' ? 'its question' : 'its sessions'}">
+    <div class="oh">
+      <b><span class="id">{id}</span> {code === "question" ? "asks" : "is held at its session budget"}</b>
+      <span>on {w.name}</span>
+      {#if key}<a href={runHref(key)}>{code === "question" ? "Open its story" : "Open its last run"}</a>{/if}
+      <button type="button" class="x" aria-label="Close" onclick={() => (opened = null)}>Close</button>
+    </div>
+    {#if code === "question" && q}
+      <QuestionBox question={q} story={key ?? id} canAnswer={approver && !!key} onanswer={answerOf(key)} />
+    {:else if code === "budget" && runs}
+      <GrantBox identifier={id} sortie={w.name} used={budget?.used} sessions={budget?.sessions} canGrant={w.can_grant} maxSessions={w.max_sessions}
+        canAct={approver} ongrant={(n) => runs.grant(id, n)} />
+    {/if}
+  </div>
+{/snippet}
 
 <section class="lanes" aria-labelledby="lanes-h">
   <h2 id="lanes-h" class="sr-only">Workers</h2>
@@ -99,29 +140,35 @@
                 <div class="lt">
                   {#if j && lane.kind === "job"}
                     {@const b = jobBox(j, now)}
-                    <svelte:element this={j.key ? "a" : "div"} href={j.key ? storyHref(j.key) : undefined} tabindex="0" role={j.key ? undefined : "group"}
+                    <svelte:element this={j.key ? "a" : "div"} href={j.key ? runHref(j.key) : undefined} tabindex="0" role={j.key ? undefined : "group"}
                       class="job" class:stalled={!!lane.stuck || b.overdue} class:cut={b.cut}
                       style:left="{b.left}%" style:width="calc({b.width}% - 2px)" style:--split="{b.split}%"
                       aria-label="{j.identifier} {j.title}: {facts(lane, j).join('; ')}">
                       <span class="h"><span class="id">{j.identifier}</span><b>{j.title}</b></span>
                       <span class="f"><span><b>{j.started_at != null ? duration(now - j.started_at) : "—"}</b></span><span>{#if b.overdue}<b class="alarm">overdue</b>{:else if b.left_min != null}<b>~{b.left_min} min</b> left{:else}no estimate{/if}</span></span>
-                      <span class="tip" role="tooltip"><b>{j.identifier} {j.title}</b><span>{j.phase}{j.repository ? ` · ${j.repository}` : ""} · on {w.name}</span>{#each facts(lane, j) as f (f)}<span class:alarm={f === lane.stuck?.text}>{f}</span>{/each}<span class="mute">{opens(w, j)}</span></span>
+                      <span class="tip" role="tooltip"><b>{j.identifier} {j.title}</b><span>{j.phase}{j.repository ? ` · ${j.repository}` : ""} · on {w.name}</span>{#each facts(lane, j) as f (f)}<span class:alarm={f === lane.stuck?.text}>{f}</span>{/each}<span class="mute">{opens(j)}</span></span>
                     </svelte:element>
                   {:else if j && lane.kind === "retry"}
                     {@const b = retryBox(j, now)}
-                    <svelte:element this={j.key ? "a" : "div"} href={j.key ? storyHref(j.key) : undefined} tabindex="0" role={j.key ? undefined : "group"}
+                    <svelte:element this={j.key ? "a" : "div"} href={j.key ? runHref(j.key) : undefined} tabindex="0" role={j.key ? undefined : "group"}
                       class="job starting" style:left="{b.left}%" style:width="calc({b.width}% - 2px)"
                       aria-label="{j.identifier} {j.title}: {facts(lane, j).join('; ')}">
                       <span class="h"><span class="id">{j.identifier}</span><b>{j.title}</b></span>
                       <span class="f"><span>{b.left_min ? `retries in ${b.left_min} min` : "retries now"}</span></span>
-                      <span class="tip" role="tooltip"><b>{j.identifier} {j.title}</b><span>{j.phase} · on {w.name}</span>{#each facts(lane, j) as f (f)}<span class:alarm={f === lane.stuck?.text}>{f}</span>{/each}<span class="mute">{opens(w, j)}</span></span>
+                      <span class="tip" role="tooltip"><b>{j.identifier} {j.title}</b><span>{j.phase} · on {w.name}</span>{#each facts(lane, j) as f (f)}<span class:alarm={f === lane.stuck?.text}>{f}</span>{/each}<span class="mute">{opens(j)}</span></span>
                     </svelte:element>
                   {:else if j && lane.kind === "stuck"}
                     <div class="fault">
                       <b>Needs you:</b> {stuckAction(lane.stuck?.code)}
                       {#if j.since != null}<span>waits for {duration(now - j.since)}</span>{/if}
-                      {#if lane.stuck?.code === "question"}<button type="button" class="ghost" onclick={toNeeds}>Answer</button>
-                      {:else if j.key}<a class="ghost" href={storyHref(j.key)}>Open</a>{/if}
+                      <span class="acts">
+                        {#if lane.stuck?.code === "question"}
+                          <button type="button" class="ghost ink" data-act="answer" aria-expanded={isOpen(w, j.identifier)} onclick={() => toggle(w, j.identifier)}>Answer</button>
+                        {:else if lane.stuck?.code === "budget" && j.budget?.reason === "session_budget"}
+                          <button type="button" class="ghost ink" data-act="grant" aria-expanded={isOpen(w, j.identifier)} onclick={() => toggle(w, j.identifier)}>Give more sessions</button>
+                        {/if}
+                        {#if j.key}<a class="ghost" data-act="open" href={runHref(j.key)}>Open</a>{/if}
+                      </span>
                     </div>
                   {:else}
                     {#each lane.next as n (n.identifier)}
@@ -136,6 +183,9 @@
                   {/if}
                 </div>
               </div>
+              {#if j && lane.kind === "stuck" && isOpen(w, j.identifier)}
+                {@render action(w, j.identifier, j.key, lane.stuck?.code, j.question, j.budget)}
+              {/if}
             {/each}
           </div>
           {#if w.later?.length}
@@ -148,10 +198,17 @@
                     {#if i.identifiers.length === 1 && i.key}<a href={storyHref(i.key)}><b>{i.identifier}</b></a>{:else}<b>{i.identifiers.join(", ")}</b>{/if}
                     {#if i.pull?.url}<small><a href={i.pull.url} target="_blank" rel="noopener">{i.text}</a>{i.stuck && i.since != null ? `, for ${duration(now - i.since)}` : ""}</small>
                     {:else}<small title={i.status ?? undefined}>{i.text}</small>{/if}
+                    {#if i.code === "question" || (i.code === "budget" && i.budget?.reason === "session_budget")}
+                      <button type="button" class="mini" data-act={i.code === "question" ? "answer" : "grant"} aria-expanded={isOpen(w, i.identifier)}
+                        onclick={() => toggle(w, i.identifier)}>{i.code === "question" ? "Answer" : "Give more sessions"}</button>
+                    {/if}
                   </li>
                 {/each}
               </ul>
             </div>
+            {#each (w.later ?? []).filter((i) => i.code && isOpen(w, i.identifier)) as i (i.identifier)}
+              {@render action(w, i.identifier, i.key, i.code, i.question, i.budget)}
+            {/each}
           {/if}
         {/if}
       </section>
@@ -162,7 +219,7 @@
       <span><i class="sw rest" aria-hidden="true"></i>estimated rest, from the median of past runs</span>
       <span><i class="sw nx" aria-hidden="true"></i>next on this slot</span>
       <span><i class="sw st" aria-hidden="true"></i>stuck or overdue</span>
-      <span>Click a job to open its story and watch its agent.</span>
+      <span>Click a job to open its session.</span>
     </div>
   {/if}
 </section>
@@ -250,7 +307,22 @@
 
   .fault { position: absolute; top: 18px; left: 0; right: 0; z-index: 3; height: 60px; display: flex; align-items: center; gap: 14px; padding: 0 14px; border: 1.5px solid var(--alert); border-radius: var(--r-card); background: #fff; }
   .fault span { color: var(--mute); }
-  .ghost { margin-left: auto; height: 32px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; font-weight: 600; color: var(--ink); text-decoration: none; }
+  .acts { margin-left: auto; display: inline-flex; gap: 6px; }
+  .ghost.ink { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .ghost.ink:hover { background: #000; }
+  .ghost[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--amber-tint), 0 0 0 3px var(--amber); }
+  .opened { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px var(--label); padding: 14px 16px; border: 1.5px solid var(--alert); border-top: 0; border-radius: 0 0 var(--r-card) var(--r-card); background: #fff; }
+  .later + .opened { margin-top: 6px; border-top: 1.5px solid var(--alert); border-radius: var(--r-card); }
+  .oh { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+  .oh b { font-size: 14px; font-weight: 600; }
+  .oh span, .oh a { color: var(--mute); }
+  .oh a { color: var(--ink); text-underline-offset: 3px; }
+  .oh .x { margin-left: auto; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; font-size: 12px; font-weight: 600; }
+  .oh .x:hover { border-color: var(--ink); }
+  .opened :global(.statement) { max-width: 78ch; font-size: 13px; }
+  .mini { height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; color: var(--ink); font-size: 12px; font-weight: 600; }
+  .mini:hover, .mini[aria-expanded="true"] { border-color: var(--ink); }
+  .ghost { height: 32px; display: inline-flex; align-items: center; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--r-button); background: #fff; font-weight: 600; color: var(--ink); text-decoration: none; }
   .ghost:hover { background: var(--strip); }
 
   .later { display: grid; grid-template-columns: var(--label) 1fr; padding: 8px 0 4px; }
@@ -288,7 +360,7 @@
     .ll { padding-bottom: 0; }
     .lt { min-height: 80px; }
     .job, .fault { top: 6px; }
-    .notice, .legend { margin-left: 0; }
+    .notice, .legend, .opened { margin-left: 0; }
     h3 { width: auto; }
   }
 </style>

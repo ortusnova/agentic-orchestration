@@ -13,9 +13,12 @@
   import ModelPicker from "./ModelPicker.svelte";
   import Transcript from "./Transcript.svelte";
   import WorkerPane from "./WorkerPane.svelte";
+  import LastRunPane from "./LastRunPane.svelte";
+  import { can } from "../lib/identity.svelte";
+  import type { RunClient } from "../lib/run";
 
   let {
-    doc, view, session, onselect, actions, worker = null, onwatch, onunwatch, specs,
+    doc, view, session, onselect, actions, worker = null, onwatch, onunwatch, specs, runs,
   }: {
     doc: MergedGraph;
     view: ViewState;
@@ -28,6 +31,8 @@
     onunwatch?: () => void;
     /** Reads the requirements a selected story covers. */
     specs?: SpecReader;
+    /** Reads what the Sortie that holds a story does with it, and unblocks it. */
+    runs?: RunClient;
   } = $props();
 
   const model = $derived(new GraphModel(doc));
@@ -99,6 +104,30 @@
     if (key && key !== autoWatched && worker?.node.tracker?.identifier !== id) onwatch?.(node!);
     autoWatched = key;
   });
+
+  // The selected story's last run, in place of the planning session, once a
+  // person opens it; a new selection goes back to planning.
+  let openedFor: string | null | undefined;
+  $effect(() => {
+    const sel = view.selected;
+    if (openedFor !== undefined && sel !== openedFor && view.open) view.open = null;
+    openedFor = sel;
+  });
+  const lastRunNode = $derived.by(() => {
+    if (view.open !== "run" || !runs) return null;
+    const n = view.selected ? model.node(view.selected) : undefined;
+    return n && n.kind === "story" && n.sortie && n.tracker ? n : null;
+  });
+
+  async function answerStory(key: string, text: string): Promise<string | null> {
+    if (!actions) return "Answering is not available here.";
+    try {
+      await actions.answer(key, text);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "The answer did not go through.";
+    }
+  }
 
   async function refresh() {
     try {
@@ -199,11 +228,16 @@
   });
 </script>
 
-<ContextCard {model} {view} {attached} {actions} {onwatch} {specs} watching={worker?.node.tracker?.identifier ?? null} onattach={(k) => (attached = [...attached, k])} onselect={(k) => onselect(k)} />
+<ContextCard {model} {view} {attached} {actions} {onwatch} {specs} {runs} runActions={!lastRunNode || !!worker}
+  onlastrun={() => (view.open = "run")} watching={worker?.node.tracker?.identifier ?? null} onattach={(k) => (attached = [...attached, k])} onselect={(k) => onselect(k)} />
 
 {#if worker}
   {#key worker.node.tracker?.identifier}
-    <WorkerPane node={worker.node} client={worker.client} {actions} onclose={() => onunwatch?.()} />
+    <WorkerPane node={worker.node} client={worker.client} {actions} onclose={() => { view.open = null; onunwatch?.(); }} />
+  {/key}
+{:else if lastRunNode && runs}
+  {#key lastRunNode.tracker?.identifier}
+    <LastRunPane node={lastRunNode} {runs} canAct={!!actions && can("approver")} onanswer={(t) => answerStory(lastRunNode.plan_key, t)} onclose={() => (view.open = null)} />
   {/key}
 {:else}
 <div class="session-bar">

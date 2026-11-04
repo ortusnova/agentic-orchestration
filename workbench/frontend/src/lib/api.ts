@@ -1,5 +1,6 @@
 /** The workbench backend: the browser's only server. */
 import type { About, Identity } from "./identity.svelte";
+import type { RunEvent, RunState } from "./run";
 import type { MergedGraph, ProjectSummary, SyncStatus, TrackerProject } from "./types";
 
 export class ApiError extends Error {
@@ -62,6 +63,11 @@ export function projectApi(slug: string) {
     workerMessages: (id: string) => request<{ commands: WorkerCommand[] }>("GET", `${p}/workers/${encodeURIComponent(id)}/messages`),
     workerCommand: (id: string, cmd: Record<string, unknown>) => request<unknown>("POST", `${p}/workers/${encodeURIComponent(id)}/commands`, cmd),
     workerEvents: (id: string) => `${p}/workers/${encodeURIComponent(id)}/events`,
+    workerRun: (id: string) => request<RunState>("GET", `${p}/workers/${encodeURIComponent(id)}/run`),
+    workerRunEvents: (id: string, dispatchId: string) =>
+      request<{ events: RunEvent[] }>("GET", `${p}/workers/${encodeURIComponent(id)}/runs/${encodeURIComponent(dispatchId)}/events`),
+    grantSessions: (id: string, add: number, reason: string) =>
+      request<{ granted: number }>("POST", `${p}/workers/${encodeURIComponent(id)}/sessions`, { add, reason }),
     events: `${p}/events`,
   };
 }

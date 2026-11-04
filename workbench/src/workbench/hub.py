@@ -22,8 +22,11 @@ log = logging.getLogger(__name__)
 
 _UNSET = object()
 
-# How often each Sortie's run history is read again, for the estimates.
+# How often each Sortie's run history is read again, for the estimates, and
+# asked again whether it grants sessions.
 RUNS_EVERY = 300.0
+# The lists of Sortie's state that name an issue it holds, most active first.
+HOLDING = ("running", "retrying", "budget_exhausted", "parked", "pending_reactions", "between_stages", "held")
 
 
 class Hub:
@@ -45,6 +48,17 @@ class Hub:
         self.worker_states: dict[str, tuple[dict[str, Any] | None, str | None]] = {}
         self._runs: dict[str, dict[str, Any]] = {}
         self._runs_at: dict[str, float] = {}
+        # Whether each Sortie can grant an issue more sessions, asked while
+        # one holds an issue at its session budget, and when it was asked.
+        self.can_grant: dict[str, bool | None] = {}
+        self._grant_at: dict[str, float] = {}
+        # From the states: which Sortie holds each issue, the runtime of the
+        # stories the other Sorties run, and every worker's fields.
+        self.holders: dict[str, str] = {}
+        self.other_runtime: dict[str, dict[str, Any]] = {}
+        self.all_workers: dict[str, dict[str, Any]] = {}
+        # Each Sortie's open questions, by tracker identifier.
+        self._sortie_questions: dict[str, dict[str, dict[str, Any]]] = {}
         # (approvals, rereviews) of the project, by plan key.
         self.records = records or (lambda: ({}, {}))
         # What GitHub reported of each pull request a story names, by ref.
@@ -108,24 +122,25 @@ class Hub:
         # The home reads the agent slots and held runs from Sortie's state,
         # which Sortie keeps for the project it dispatches only.
         if not graph.get("dispatched"):
-            self.agent_state, self.state_error, self.questions = None, None, {}
+            self.agent_state, self.state_error = None, None
+            self._sortie_questions.pop(self.sortie_name, None)
             return {}
         try:
             state = await self.sortie.state()
         except SortieError as exc:
             log.warning("sortie state unavailable: %s", exc)
-            self.agent_state, self.state_error, self.questions = None, exc.message, {}
+            self.agent_state, self.state_error = None, exc.message
+            self._sortie_questions.pop(self.sortie_name, None)
             return {}
         self.agent_state, self.state_error = state, None
-        self.questions = await self._questions(state)
         if not any(n.get("runtime") for n in graph.get("nodes") or []):
             return {}
         return worker_fields(state)
 
     async def _read_workers(self) -> None:
-        """Each worker's state, for its lanes. The main Sortie's is the one
-        just read for the project it dispatches; it is not read for a
-        project it does not dispatch."""
+        """Each worker's state, for its lanes, and the questions, runs and
+        holds it keeps. The main Sortie's is the one just read for the project
+        it dispatches; it is not read for a project it does not dispatch."""
         now = time.time()
         for name, client in self.sorties.items():
             if name == self.sortie_name:
@@ -144,16 +159,67 @@ class Hub:
                         log.warning("%s's sortie state unavailable: %s", name, exc.message)
                     state, error = None, exc.message
             self.worker_states[name] = (state, error)
-            if state is not None and now - self._runs_at.get(name, float("-inf")) >= RUNS_EVERY:
+            if state is None:
+                continue
+            self._sortie_questions[name] = await self._questions(name, client, state)
+            if now - self._runs_at.get(name, float("-inf")) >= RUNS_EVERY:
                 self._runs_at[name] = now
                 try:
                     self._runs[name] = estimates((await client.runs()).get("runs") or [])
                 except SortieError as exc:
                     log.info("%s's sortie run history unavailable: %s", name, exc.message)
+            held = [r["issue_identifier"] for r in state.get("budget_exhausted") or [] if r.get("issue_identifier")]
+            if held and now - self._grant_at.get(name, float("-inf")) >= RUNS_EVERY:
+                self._grant_at[name] = now
+                self.can_grant[name] = await client.can_grant(held[0])
+        self._index()
+
+    def _index(self) -> None:
+        """Which Sortie holds each issue, and what the stories the other
+        Sorties run show of them, from the states just read."""
+        holders: dict[str, str] = {}
+        others: dict[str, dict[str, Any]] = {}
+        fields: dict[str, dict[str, Any]] = {}
+        # The main Sortie first: it decides an issue two Sorties list.
+        names = sorted(self.worker_states, key=lambda n: n != self.sortie_name)
+        for name in names:
+            state = self.worker_states[name][0]
+            if state is None:
+                continue
+            for key in HOLDING:
+                for r in state.get(key) or []:
+                    if r.get("issue_identifier"):
+                        holders.setdefault(r["issue_identifier"], name)
+            for ident, f in worker_fields(state).items():
+                fields.setdefault(ident, {**f, "sortie": name})
+            if name == self.sortie_name:
+                continue
+            for r in state.get("running") or []:
+                others.setdefault(r["issue_identifier"], {"status": "running", "turn_count": r.get("turn_count"),
+                                                          "last_message": r.get("last_message") or None, "attempt": None})
+            for r in state.get("retrying") or []:
+                others.setdefault(r["issue_identifier"], {"status": "retrying", "turn_count": None, "last_message": None,
+                                                          "attempt": r.get("attempt")})
+            for r in state.get("budget_exhausted") or []:
+                others.setdefault(r["issue_identifier"], {"status": "budget_held", "turn_count": None, "last_message": None,
+                                                          "attempt": None})
+        self.holders, self.other_runtime, self.all_workers = holders, others, fields
+        merged: dict[str, dict[str, Any]] = {}
+        for name in names:
+            for ident, q in self._sortie_questions.get(name, {}).items():
+                merged.setdefault(ident, q)
+        self.questions = merged
+
+    def holder(self, identifier: str) -> str | None:
+        """The name of the Sortie that runs, holds or watches the issue, or None."""
+        return self.holders.get(identifier)
+
+    def client_for(self, identifier: str) -> ProjectSortie:
+        """The Sortie that holds the issue; the main one for an issue none holds."""
+        return self.sorties.get(self.holder(identifier) or self.sortie_name) or self.sortie
 
     def _lanes(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes if n.get("tracker")}
-        statements = {i: q["statement"] for i, q in self.questions.items() if q.get("statement")}
         now = time.time()
         out = []
         for name in self.sorties:
@@ -164,29 +230,30 @@ class Hub:
             state, error = self.worker_states[name]
             out.append({**worker_lanes(name, main=name == self.sortie_name, state=state, error=error,
                                        runs=self._runs.get(name), key_of=key_of, now=now,
-                                       statements=statements if name == self.sortie_name else None),
-                        "dispatched": True})
+                                       questions=self._sortie_questions.get(name) or {}),
+                        "dispatched": True, "can_grant": self.can_grant.get(name)})
         return out
 
-    async def _questions(self, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        """The open question of each parked issue, by tracker identifier. The
-        state may shorten a stop statement; the issue's own response holds it
-        whole, and is read once per park."""
+    async def _questions(self, name: str, client: ProjectSortie, state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """The open question of each issue the Sortie parked, by tracker
+        identifier. The state may shorten a stop statement; the issue's own
+        response holds it whole, and is read once per park."""
         out: dict[str, dict[str, Any]] = {}
-        details: dict[tuple[str, Any], dict[str, Any] | None] = {}
+        details: dict[tuple[str, str, Any], dict[str, Any] | None] = {}
         for entry in parked(state):
             ident = entry["issue_identifier"]
-            park = (ident, parked_at_of(entry))
-            detail = self._park_details.get(park) if park[1] is not None else None
+            park = (name, ident, parked_at_of(entry))
+            detail = self._park_details.get(park) if park[2] is not None else None
             if detail is None:
                 try:
-                    detail = await self.sortie.issue(ident)
+                    detail = await client.issue(ident)
                 except SortieError as exc:
-                    log.info("sortie has no details of %s's park: %s", ident, exc.message)
+                    log.info("%s's sortie has no details of %s's park: %s", name, ident, exc.message)
                     detail = None
             details[park] = detail
-            out[ident] = question(entry, detail)
-        self._park_details = {k: v for k, v in details.items() if v is not None}
+            out[ident] = {**question(entry, detail), "sortie": name}
+        self._park_details = {**{k: v for k, v in self._park_details.items() if k[0] != name},
+                              **{k: v for k, v in details.items() if v is not None}}
         return out
 
     async def pull_back_stale(self) -> None:
@@ -224,9 +291,13 @@ class Hub:
             ident = (n.get("tracker") or {}).get("identifier")
             if n.get("kind") == "story":
                 n["question"] = self.questions.get(ident) if ident else None
+                # The Sortie that runs or holds it, by its worker's name.
+                n["sortie"] = self.holder(ident) if ident else None
+                if ident and not n.get("runtime") and ident in self.other_runtime:
+                    n["runtime"] = dict(self.other_runtime[ident])
             if n.get("runtime") and n.get("tracker"):
                 n["runtime"] = {"stage": None, "session_id": None, "held": False, "holder": None, "watchable": False,
-                                **n["runtime"], **self.workers.get(n["tracker"]["identifier"], {})}
+                                **n["runtime"], **self.all_workers.get(n["tracker"]["identifier"], {})}
         self.version += 1
         doc.update(
             version=self.version,

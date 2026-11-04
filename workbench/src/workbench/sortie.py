@@ -19,6 +19,16 @@ class SortieError(Exception):
         self.body = body or {}
 
 
+class GrantUnsupported(SortieError):
+    """The Sortie has no route that grants an issue more sessions."""
+
+
+def unsupported(exc: SortieError) -> bool:
+    """Sortie has no such route: a 405, or a 404 without Sortie's error
+    envelope, which its router answers for a path it does not serve."""
+    return exc.status == 405 or (exc.status == 404 and not exc.body.get("error"))
+
+
 class SortieClient:
     def __init__(self, base_url: str, token: str, transport: httpx.AsyncBaseTransport | None = None, timeout: float = 30.0):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -104,6 +114,38 @@ class SortieClient:
         return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/answer",
                                    json={"text": text, "author": author})
 
+    async def grant_sessions(self, identifier: str, add: int, by: str, reason: str) -> dict[str, Any]:
+        """Give the issue ``add`` more sessions than ``agent.max_sessions``. A
+        Sortie without the route raises GrantUnsupported."""
+        try:
+            return await self._request("POST", f"/api/v1/{quote(identifier, safe='')}/sessions",
+                                       json={"add": add, "by": by, "reason": reason})
+        except SortieError as exc:
+            if unsupported(exc):
+                raise GrantUnsupported(exc.status, "grant_unsupported", "this Sortie cannot grant sessions yet") from exc
+            raise
+
+    async def can_grant(self, identifier: str) -> bool | None:
+        """Whether this Sortie has the session grant route, asked without
+        changing anything: a GET of the route that only a POST serves. None
+        when Sortie does not answer."""
+        try:
+            await self._request("GET", f"/api/v1/{quote(identifier, safe='')}/sessions")
+        except SortieError as exc:
+            if exc.status == 0:
+                return None
+            # A 405 says the route is there, for a POST.
+            return not (exc.status == 404 and not exc.body.get("error"))
+        return True
+
+    async def issue_runs(self, identifier: str, limit: int = 10) -> dict[str, Any]:
+        """The issue's newest runs, newest first."""
+        return await self._request("GET", "/api/v1/runs", params={"issue": identifier, "limit": str(limit)})
+
+    async def run_events(self, dispatch_id: str) -> dict[str, Any]:
+        """The agent events Sortie kept for one run, oldest first."""
+        return await self._request("GET", f"/api/v1/runs/{quote(dispatch_id, safe='')}/events")
+
     def bind(self, project: str) -> "ProjectSortie":
         return ProjectSortie(self, project)
 
@@ -151,3 +193,15 @@ class ProjectSortie:
 
     async def answer(self, identifier: str, text: str, author: str) -> dict[str, Any]:
         return await self.client.answer(identifier, text, author)
+
+    async def grant_sessions(self, identifier: str, add: int, by: str, reason: str) -> dict[str, Any]:
+        return await self.client.grant_sessions(identifier, add, by, reason)
+
+    async def can_grant(self, identifier: str) -> bool | None:
+        return await self.client.can_grant(identifier)
+
+    async def issue_runs(self, identifier: str, limit: int = 10) -> dict[str, Any]:
+        return await self.client.issue_runs(identifier, limit)
+
+    async def run_events(self, dispatch_id: str) -> dict[str, Any]:
+        return await self.client.run_events(dispatch_id)

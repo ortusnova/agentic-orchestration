@@ -117,7 +117,7 @@ def test_a_stuck_slot_reads_as_stuck_with_why(lists, code, text):
 
 
 def test_a_question_takes_its_whole_statement_from_the_issue():
-    w = lanes(state(parked=[{"issue_identifier": "T-1", "statement": "Which…"}]), statements={"T-1": "Which repository should it use?"})
+    w = lanes(state(parked=[{"issue_identifier": "T-1", "statement": "Which…"}]), questions={"T-1": {"statement": "Which repository should it use?"}})
     assert w["lanes"][0]["stuck"]["text"] == "asks: Which repository should it use?"
 
 
@@ -125,7 +125,9 @@ def test_stuck_work_that_does_not_fit_the_free_slots_waits_below():
     parked = [{"issue_identifier": f"T-{i}", "statement": f"q{i}"} for i in (1, 2, 3)]
     w = lanes(state(slots=2, parked=parked))
     assert [lane["kind"] for lane in w["lanes"]] == ["stuck", "stuck"]
-    assert w["later"][0] == {"kind": "you", "identifier": "T-3", "key": None, "title": "T-3", "text": "asks: q3", "stuck": True}
+    assert w["later"][0] == {"kind": "you", "identifier": "T-3", "key": None, "title": "T-3", "text": "asks: q3", "stuck": True,
+                             "code": "question", "budget": None,
+                             "question": {"identifier": "T-3", "statement": "q3", "parked_at": None, "reason": None}}
     assert [r["identifier"] for r in w["reasons"]] == ["T-1", "T-2", "T-3"]
 
 
@@ -235,5 +237,10 @@ def test_the_other_sorties_come_from_the_environment(tmp_path):
     config = Config.from_env(env)
     assert config.sortie_name == "p1"
     assert [(s.name, s.url, s.token) for s in config.other_sorties] == [("taichi", "http://127.0.0.1:7681", "t0ken")]
+    assert config.other_sorties[0].broker_proxy == ""
+    proxied = Config.from_env({**env, "WORKBENCH_SORTIE_BROKER_PROXIES": "taichi=socks5://127.0.0.1:7781"})
+    assert proxied.other_sorties[0].broker_proxy == "socks5://127.0.0.1:7781"
+    with pytest.raises(ConfigError, match="no Sortie named nope"):
+        Config.from_env({**env, "WORKBENCH_SORTIE_BROKER_PROXIES": "nope=socks5://127.0.0.1:7781"})
     with pytest.raises(ConfigError, match="taken"):
         Config.from_env({**env, "WORKBENCH_SORTIES": "p1=http://x"})
