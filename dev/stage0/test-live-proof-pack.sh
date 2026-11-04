@@ -42,8 +42,11 @@ grep -q 'check-tools.sh "${GO_VERSION}" "${SMOLVM_VERSION}" "${PASST_VERSION}" "
   && ok "the build runs check-tools.sh with every pin" || fail "the build does not check its tools"
 
 # check-tools.sh against fake tools.
-tools=$tmp/tools
-mkdir -p "$tools"
+# check-tools.sh sees only the fakes and awk, so a host's own pasta or dnsmasq
+# (a CI runner has passt) cannot stand in for a missing one.
+tools=$tmp/tools base=$tmp/base
+mkdir -p "$tools" "$base"
+ln -s "$(command -v awk)" "$base/awk"
 fake_tools() { # GO SMOLVM PASST DNSMASQ
   printf '#!/bin/sh\necho "go version go%s linux/amd64"\n' "$1" > "$tools/go"
   printf '#!/bin/sh\necho "smolvm %s"\n' "$2" > "$tools/smolvm"
@@ -52,7 +55,7 @@ fake_tools() { # GO SMOLVM PASST DNSMASQ
   printf '#!/bin/sh\n' > "$tools/dnsmasq"
   chmod +x "$tools"/*
 }
-check_tools() { PATH=$tools:/usr/bin:/bin "$KIT/live-proof-pack/check-tools.sh" "$go_pin" "$smolvm_pin" "$passt_pin" "$dnsmasq_pin"; }
+check_tools() { PATH=$tools:$base "$KIT/live-proof-pack/check-tools.sh" "$go_pin" "$smolvm_pin" "$passt_pin" "$dnsmasq_pin"; }
 fake_tools "$go_pin" "$smolvm_pin" "$passt_pin" "$dnsmasq_pin"
 check_tools > "$tmp/out" 2>&1 && grep -q "^smolvm smolvm $smolvm_pin$" "$tmp/out" \
   && ok "check-tools.sh passes the pinned tools and prints their versions" || fail "check-tools: $(cat "$tmp/out")"
