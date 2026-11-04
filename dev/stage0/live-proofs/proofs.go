@@ -18,7 +18,7 @@
 //     proof. For a parked story Sortie starts the job itself when it takes
 //     the request, with the same marker, and keeps the park: the pass asks
 //     for no fix run, which Sortie refuses for a parked story. While it runs, its identifier is in the active file, and the
-//     edge gives its CONNECTs the live-proof egress.
+//     egress gate behind Pomerium gives its CONNECTs the live-proof egress.
 //   - The job comments its result on the pull request. The newest such
 //     comment by the kit's GitHub account sets the status: success when it
 //     proved the criterion at the head, failure when it did not.
@@ -102,7 +102,8 @@ type Result struct {
 	At     time.Time `json:"at"`
 }
 
-// ActiveFile is the file of Dir the edge reads (edge.json, live_proof).
+// ActiveFile is the file of Dir the egress gate reads (cp-egress
+// -live-proof-jobs-file).
 const ActiveFile = "active"
 
 func (s *Syncer) now() time.Time {

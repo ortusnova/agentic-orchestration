@@ -39,8 +39,8 @@ var stage0Values = map[string]string{
 	"STAGE0_HULY_URL":          "http://127.0.0.1:8087",
 	// No operator channel; stage0_notify_test.go renders each kind.
 	"STAGE0_NOTIFY_ENTRY": "",
-	// The remote kind's flow URLs need a real port.
-	"STAGE0_EDGE_WORKER_PORT": "7700",
+	// The remote kind's flow URLs: Pomerium's public URL (control-plane/).
+	"STAGE0_CP_PUBLIC_URL": "https://p1.example.org:8443",
 
 	"STAGE0_AO_REPO_PROJECT":      "ortusnova/agentic-orchestration",
 	"STAGE0_HOMELAB_REPO_PROJECT": "ortusnova/homelab",

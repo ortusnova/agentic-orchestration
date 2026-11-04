@@ -1,34 +1,37 @@
 #!/usr/bin/env bash
-# Start nono's proxy, the egress flow of the stage-1 edge (the
+# Start nono's proxy, the egress flow behind Pomerium's egress route (the
 # ortus-stage0-nono user unit runs this). It listens on p1's loopback only,
-# and only the edge reaches it, with the credential in $STAGE0_HOME/nono-pass.
-# It allows the hosts in egress-profile.json and replaces each credential's
-# placeholder on requests to its host, intercepting TLS with the kit's
-# egress CA ($STAGE0_HOME/egress-ca). The credentials are read here at start
-# (egress-credentials.sh) and live only in nono's memory.
+# and only the egress gate reaches it, with the credential in
+# $STAGE0_HOME/nono-pass. It allows the hosts in the control plane's egress
+# profile (control-plane/nono/egress-profile.json, the compose project's
+# too) and replaces each credential's placeholder on requests to its host,
+# intercepting TLS with the kit's egress CA ($STAGE0_HOME/egress-ca). The
+# credentials are read here at start (egress-credentials.sh) and live only
+# in nono's memory.
 #
 # run-nono.sh live-proof (the ortus-stage0-nono-live-proof unit) starts the
 # second one, of the live-proof profile: the same credentials and hosts,
 # and those of egress-live-proof.json, on STAGE0_NONO_LIVE_PROOF_PORT. The
-# edge sends it only the CONNECTs of a live-proof job that runs
+# egress gate sends it only the CONNECTs of a live-proof job that runs
 # ($STAGE0_HOME/live-proofs/active, README.md "Live proofs").
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
+PROFILE=$(cd "$KIT/../../control-plane/nono" && pwd)/egress-profile.json
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
 die() { printf 'run-nono.sh: %s\n' "$*" >&2; exit 1; }
 export PATH=$STAGE0_HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 
-profile=$KIT/egress-profile.json
+profile=$PROFILE
 port=${STAGE0_NONO_PORT:-7690}
 case ${1:-} in
   '') ;;
   live-proof)
     profile=$STAGE0_HOME/egress-profile-live-proof.json
     port=${STAGE0_NONO_LIVE_PROOF_PORT:-7691}
-    stage0-live-proofs profile -base "$KIT/egress-profile.json" -extra "$KIT/egress-live-proof.json" -out "$profile" \
+    stage0-live-proofs profile -base "$PROFILE" -extra "$KIT/egress-live-proof.json" -out "$profile" \
       || die "could not render the live-proof profile"
     ;;
   *) die "usage: run-nono.sh [live-proof]" ;;
