@@ -320,20 +320,33 @@ lower-case DNS name or `*.` and a name of two labels or more (never `*`,
 `*.com`, a port or an address), an empty `reason`, a CIDR with host bits
 set, a port outside 1-65535 (a string, `N` or `N-M`, or a number), or a
 `private` entry outside the private ranges (`10.0.0.0/8`,
-`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) refuses the job, as
-above. A valid one maps to smolvm's flags (design D8):
+`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), or overlapping loopback
+or link-local, refuses the job, as above, naming the entry. A valid one
+maps to smolvm's flags (designs D8, D15 and D16):
 
 | `run.egress` | smolvm flag |
 |---|---|
 | present | `--net-backend virtio-net --block-private` |
+| present: design D15's ranges, less the `private` entries | `--deny-cidr <cidr>` for each of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `127.0.0.0/8`, `fc00::/7`, `fe80::/10`, `::1/128`; a range that holds a `private` entry is split into the largest CIDRs that hold none of its addresses |
 | each host of `harness.hosts` and `repository.hosts`, once | `--allow-host-pattern <host>` (an exact name or `*.domain`) |
 | each `udp` entry | `--allow-udp <cidr>:<port>` (`<port>` is `N` or `N-M`) |
-| each `private` entry | `--allow-private <cidr>` |
+| each `private` entry | `--allow-cidr <cidr>` |
 | a host that is, or is covered by or covers, a host of `credential_hosts` or of `run.credentials` | nothing: it stays on the `egress` flow |
 | absent | no network flag: no network |
 
+smolvm lets a machine reach every address it resolved for an allowed
+name, private or not, so without the deny set a declared name whose
+answer is a LAN address would reach the LAN (DNS rebinding); smolvm
+checks `--deny-cidr` before anything is allowed. A `private` entry of
+`192.168.1.0/30`, for example, gives `--allow-cidr 192.168.1.0/30` and,
+for `192.168.0.0/16`, `--deny-cidr 192.168.0.0/24`, `192.168.1.4/30`,
+`192.168.1.8/29`, … `192.168.64.0/18`, `192.168.128.0/17`. Loopback and
+link-local are always denied whole. The job's log names the deny set
+(`egress: private ranges denied cidrs=…`).
+
 The daemon never uses `--allow-host`, which fixes a host's addresses when
-the machine starts, a bare `--net`, or any flag that widens egress. The
+the machine starts, `--allow-private`, which reopens nothing beside a
+pattern, a bare `--net`, or any flag that widens egress. The
 socket forwards stay as they are. A policy with no host allowed
 directly, every host a credential host, gives no network, even with
 `udp` or `private` entries: smolvm filters by name only beside a host
@@ -376,6 +389,8 @@ connection from the machine, by name or by address.
 | Does `--allow-host` fix a host's addresses at machine start? | No. smolvm asks the resolver for it when the machine is created and started, but when the answer changed (`9.9.9.9` to `149.112.112.112`) the machine resolved the new address and reached it within 5 s, as with a pattern. The daemon still never passes it (design D8). |
 | Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Yes. When the answer changed (`1.1.1.1` to `8.8.8.8`), the machine resolved the new address and reached it within 5 s, and again 65 s later; `8.8.8.8`, refused by address before, was reached by address after. An address the machine resolved for an allowed name stays allowed for the machine's life: the old one was still reached after the change, and after the answer changed back. |
 | What does `--block-private` do beside the patterns? | Nothing that the patterns do not already do. With one or more patterns, every address the machine has not resolved for an allowed name is refused, private or public, with or without `--block-private` (the LAN, host loopback at `100.96.0.1`, `169.254.169.254`, `10.0.0.1`, `1.1.1.1`). A pattern whose answer is a private address (`192.168.1.202`) is reached even with `--block-private`. `--allow-private 192.168.1.0/24` did not reopen an address of that range that no allowed name resolved to, so a policy's `private` entries reopen nothing beside the patterns. Without any pattern, `--block-private` (with `--allow-udp` only) left the public internet and the LAN open and refused only `169.254.169.254`, so the daemon gives no network to a policy that allows no host directly. |
+| Is `--deny-cidr` checked before an allow (design D15)? | Yes. A machine `--from` the stage-0 pack with `--deny-cidr` for each range of design D15, `--allow-host-pattern example.com`, `--allow-host-pattern p1.test` (answered with p1's LAN address, `192.168.1.165`) and `--allow-cidr 192.168.1.165/32` was refused `p1.test` and `192.168.1.165` on port 22, where p1 listens. With every range denied, the guest's resolver still answered `example.com`, and the machine reached it on port 443. |
+| Does a job machine made by the daemon refuse a declared name that answers a private address (design D15)? | Yes. `TestSmolvmEgressEndToEnd` under `private-name-netns.sh p1.test 192.168.1.165`, with `WORKER_DAEMON_E2E_PRIVATE_PORT=22` and the stage-0 pack, passed: the daemon created the machine `--from` the pack with `--deny-cidr` for each range of design D15, the machine reached `ghcr.io` on port 443, was refused `pastebin.com`, and was refused `p1.test` and `192.168.1.165` on port 22, and `state_dir/refusals` held a `connect` record of `192.168.1.165:22` for each. As a control, the same run with the `--deny-cidr` flags removed from the daemon's `machine create` (by a wrapper around smolvm) failed: the machine reached `p1.test` and `192.168.1.165`, with `--block-private` still given. So `machine create --from` keeps `--deny-cidr`, and it is the deny set that refuses the answer. |
 
 `--allow-udp` was not measured: smolvm answers every UDP query to port 53
 itself, so a DNS probe does not show it.
@@ -523,6 +538,30 @@ asks the machine's resolver (design D9). The end-to-end test runs the
 daemon under a worker id and a job id of its own, so on a worker host it
 neither deletes the live worker's machines as strays nor names a machine
 as one of its jobs.
+
+With `WORKER_DAEMON_E2E_PRIVATE_NAME`, a name whose answer is a private
+address with a listener on `WORKER_DAEMON_E2E_PRIVATE_PORT` (default
+`443`), the policy declares that name too, and the machine must be
+refused it by name and by address, with both refusals in
+`state_dir/refusals`, while `WORKER_DAEMON_E2E_ALLOWED` is still reached
+(design D15). The test resolves the name itself and fails if its answer
+is not a private address or nothing listens there. Give the name that
+answer without changing the host's DNS:
+`internal/daemon/testdata/private-name-netns.sh NAME ADDR` runs the test
+in a network namespace of its own (`pasta --config-net --no-map-gw`)
+whose `/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers
+`NAME` with `ADDR` and forwards the rest to `$UPSTREAM` (default
+`9.9.9.9`), and whose `/etc/nsswitch.conf` is `hosts: files dns`, so that
+systemd-resolved does not answer instead. The test runs in a nested user
+namespace as the caller's uid, since smolvm will not start a machine as
+pasta's root. It needs pasta, unshare and dnsmasq; the other variables
+pass through, and the machine is deleted by name after the run. On
+taichi, with p1's SSH port as the listener:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
+  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.165
+```
 
 Three end-to-end tests run the daemon against the real Sortie data plane:
 `TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and
