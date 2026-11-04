@@ -30,9 +30,11 @@ from typing import Any
 
 from .questions import parked_at_of
 
-# The actions the home lists, newest first, and those a story's details list.
-HOME_ACTIONS = 20
-STORY_ACTIONS = 10
+# The actions the home lists, newest first, and those a story's details list;
+# each shows its newest few until a person asks for all. A Sortie serves its
+# 50 newest.
+HOME_ACTIONS = 50
+STORY_ACTIONS = 50
 
 _PULL_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/pull/(\d+)")
 _PULL_REF = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")

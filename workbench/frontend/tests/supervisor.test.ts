@@ -100,7 +100,7 @@ describe("the supervisor on the home", () => {
   it("names a recorded merge's pull request, the merge commit and the time, and links to its story and pull request", async () => {
     await home(doc());
     const act = $("[data-supervisor] [data-action='record_merge']")!;
-    expect(act.querySelector(".what")!.textContent).toBe("Recorded a merge");
+    expect(act.querySelector(".what b")!.textContent).toBe("Recorded a merge");
     expect(act.querySelector(".res")!.textContent).toBe("done");
     expect(act.querySelector("time")!.getAttribute("datetime")).toBe("2026-11-03T10:12:00.000Z");
     const storyLink = act.querySelector<HTMLAnchorElement>(`a[data-story='${MERGED}']`)!;
@@ -112,7 +112,7 @@ describe("the supervisor on the home", () => {
     const commit = act.querySelector<HTMLAnchorElement>("[data-evidence='merge commit'] a")!;
     expect(commit.textContent).toBe(COMMIT.slice(0, 7));
     expect(commit.href).toBe(`https://github.com/${REPO}/commit/${COMMIT}`);
-    expect(act.querySelector("[data-evidence=''] dd")!.textContent).toBe("The forge shows the pull request merged.");
+    expect(act.querySelector("[data-evidence='']")!.textContent).toBe("The forge shows the pull request merged.");
   });
 
   // Scenario: A refused action
@@ -120,9 +120,10 @@ describe("the supervisor on the home", () => {
     await home(doc());
     const act = $("[data-supervisor] [data-action='POST /api/v1/{identifier}/hold']")!;
     expect(act.dataset.result).toBe("refused");
-    expect(act.querySelector(".what")!.textContent).toBe("Tried POST /api/v1/{identifier}/hold");
+    expect(act.querySelector(".what b")!.textContent).toBe("Tried POST /api/v1/{identifier}/hold");
     expect(act.querySelector(".res")!.textContent).toBe("refused");
-    expect(act.querySelector(".detail")!.textContent).toBe("forbidden: not a supervisor action");
+    expect(act.querySelector(".detail")!.textContent).toBe("Sortie: forbidden not a supervisor action");
+    expect(act.querySelector(".detail code")!.textContent).toBe("forbidden");
     expect(act.querySelector(`a[data-story='${REFUSED}']`)).not.toBeNull();
     expect(act.querySelector("[data-pull]")).toBeNull();
   });
@@ -138,7 +139,8 @@ describe("the supervisor on the home", () => {
     h.setDoc(doc(supervisor({ status: "paused", paused_by: "Ann Approver", paused_at: MERGED_AT })));
     await settle();
     expect(text("[data-supervisor-status]")).toBe("Paused");
-    expect(text("[data-supervisor] .by")).toContain("paused by Ann Approver");
+    expect(text("[data-supervisor] .by")).toMatch(/^by Ann Approver · since /);
+    expect(text("[data-note='paused']")).toBe("It takes no action until someone resumes it.");
     expect($("[data-act='pause-supervisor']")).toBeNull();
     $<HTMLButtonElement>("[data-act='resume-supervisor']")!.click();
     await settle();
@@ -180,7 +182,7 @@ describe("the supervisor on the home", () => {
     await home(doc(supervisor({ sorties })), async (op, sortie) => { calls.push([op, sortie]); return null; });
     expect($$("[data-supervisor] [data-sortie]").map((r) => [r.dataset.sortie, r.querySelector<HTMLElement>("[data-supervisor-status]")!.dataset.supervisorStatus]))
       .toEqual([["p1", "idle"], ["taichi", "paused"]]);
-    expect(text("[data-sortie='taichi'] .by")).toContain("paused by Ana Ruiz");
+    expect(text("[data-sortie='taichi'] .by")).toMatch(/^by Ana Ruiz · since /);
     $<HTMLButtonElement>("[data-sortie='taichi'] [data-act='resume-supervisor']")!.click();
     await settle();
     $<HTMLButtonElement>("[data-sortie='p1'] [data-act='pause-supervisor']")!.click();
@@ -192,6 +194,37 @@ describe("the supervisor on the home", () => {
     await home(doc(supervisor({ sorties: [{ name: "p1", own: true, status: "idle", paused_at: null, paused_by: null, reason: null }] })));
     expect($("[data-supervisor] .name")).toBeNull();
     expect($("[data-supervisor] .others")).toBeNull();
+  });
+
+  it("shows the 6 newest actions, and all of them when asked", async () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ ...merge, id: `m-${i}`, at: MERGED_AT - i * 60 }));
+    await home(doc(supervisor({ actions: many, total: 9 })));
+    expect($$("[data-supervisor] .act")).toHaveLength(6);
+    expect(text("[data-supervisor] .foot span")).toBe("The 6 newest of 9 on this project's stories");
+    $<HTMLButtonElement>("[data-supervisor] [data-act='show-all-actions']")!.click();
+    await settle();
+    expect($$("[data-supervisor] .act").map((a) => a.dataset.actId)).toEqual(many.map((a) => a.id));
+    expect($("[data-supervisor] .foot")).toBeNull();
+  });
+
+  it("links each address in the evidence, and says why Sortie declined an action", async () => {
+    const asked: SupervisorAction = {
+      ...refused, id: "a-3", action: "fix_run", result: "rejected", detail: "no_pull_request: Sortie watches no pull request of issue T-2",
+      evidence: [{ name: null, value: `Forge: ${PULL_URL} is OPEN; see https://ci.example/run/1.`, url: null }],
+    };
+    await home(doc(supervisor({ actions: [asked], total: 1 })));
+    const act = $("[data-supervisor] [data-action='fix_run']")!;
+    expect(act.querySelector(".what b")!.textContent).toBe("Tried to start a fix run");
+    expect(act.querySelector(".detail code")!.textContent).toBe("no_pull_request");
+    expect(act.querySelector(".detail")!.textContent).toBe("Sortie: no_pull_request Sortie watches no pull request of issue T-2");
+    const links = [...act.querySelectorAll<HTMLAnchorElement>("details.ev a")].map((a) => [a.textContent, a.href]);
+    expect(links).toEqual([["agentic-orchestration/pull/75", PULL_URL], ["https://ci.example/run/1", "https://ci.example/run/1"]]);
+    expect(act.querySelector("details.ev summary")!.textContent).toMatch(/^Evidence/);
+  });
+
+  it("says why Sortie's supervisor is unavailable", async () => {
+    await home(doc(supervisor({ status: "unavailable", reason: "the agent command exited" })));
+    expect(text("[data-note='unavailable']")).toBe("Sortie says: the agent command exited");
   });
 
   it("says when it has taken no action", async () => {
@@ -223,6 +256,25 @@ describe("the supervisor beside a story", () => {
     expect([...box.querySelectorAll<HTMLElement>(".act")].map((a) => a.dataset.action)).toEqual(["record_merge"]);
     expect(box.querySelector<HTMLAnchorElement>("a[data-pull]")!.href).toBe(PULL_URL);
     expect(box.querySelector("[data-evidence='merge commit'] a")!.textContent).toBe(COMMIT.slice(0, 7));
+  });
+
+  it("counts the story's actions and shows its 3 newest until asked for all", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => ({ ...merge, id: `m-${i}`, at: MERGED_AT - i * 60 }));
+    const d = doc();
+    d.nodes = d.nodes.map((n) => (n.plan_key === MERGED ? { ...n, supervisor_actions: many } : n));
+    const h = mount(ChatHarness, { target: document.body, props: { initial: d, session: noSession } }) as
+      ReturnType<typeof mount> & { select: (k: string | null) => void; setEpic: (k: string | null) => void };
+    app = h;
+    h.setEpic(C);
+    h.select(MERGED);
+    await settle();
+    const box = $(`[data-supervisor-actions='${MERGED}']`)!;
+    expect(box.querySelector("b span")!.textContent).toBe("5 actions");
+    expect(box.querySelectorAll(".act")).toHaveLength(3);
+    expect(box.querySelector(".foot span")!.textContent).toBe("The 3 newest");
+    box.querySelector<HTMLButtonElement>("[data-act='show-all-actions']")!.click();
+    await settle();
+    expect(box.querySelectorAll(".act")).toHaveLength(5);
   });
 
   it("shows the refusal beside the story it was about, and nothing beside a story it did not touch", async () => {
@@ -298,6 +350,10 @@ describe("how Sortie's records read", () => {
     expect(actionText(a("merge", "rejected"))).toBe("Tried to merge the pull request");
     expect(actionText(a("live_proof", "failed"))).toBe("Tried to request a live proof");
     expect(actionText(a("POST /api/v1/plan/sync", "refused"))).toBe("Tried POST /api/v1/plan/sync");
+    expect(actionText(a("ask_person", "done"))).toBe("Asked a person");
+    expect(actionText(a("ask_person", "rejected"))).toBe("Tried to ask a person");
+    expect(actionText(a("hold", "done"))).toBe("Held a story");
+    expect(actionText(a("release_hold", "done"))).toBe("Released a hold");
   });
 
   it("shows a rejected action, one Sortie found did not hold, in the refused tone", () => {

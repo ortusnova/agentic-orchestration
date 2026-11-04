@@ -1,6 +1,6 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
-  import { canPause, canResume, iso, statusText, when } from "../lib/supervisor";
+  import { canPause, canResume, clock, iso, statusText, when } from "../lib/supervisor";
   import type { Supervisor, SupervisorStatus } from "../lib/types";
   import SupervisorActions from "./SupervisorActions.svelte";
 
@@ -22,6 +22,9 @@
   let error = $state("");
 
   // The other Sorties that report a supervisor, each with its own status and pause.
+  // The newest actions the home shows until a person asks for all of them.
+  const SHOWN = 6;
+
   const others = $derived((supervisor?.sorties ?? []).filter((s) => !s.own));
 
   async function control(op: "pause" | "resume", sortie: string | null = null) {
@@ -36,7 +39,8 @@
 {#snippet status(s: SupervisorStatus, sortie: string | null)}
   <span class="st {s.status}" data-supervisor-status={s.status}><i aria-hidden="true"></i>{statusText(s)}</span>
   {#if s.status === "paused" && (s.paused_by || s.paused_at != null)}
-    <span class="by">{s.paused_by ? `paused by ${s.paused_by}` : "paused"}{#if s.paused_at != null}{" · "}<time datetime={iso(s.paused_at)}>{when(s.paused_at)}</time>{/if}</span>
+    {@const since = s.paused_at != null ? clock(s.paused_at) : null}
+    <span class="by">{s.paused_by ? `by ${s.paused_by}` : "paused"}{#if since}{" · since "}<time datetime={iso(s.paused_at)} title={when(s.paused_at)}>{since.day ? `${since.day}, ` : ""}{since.time}</time>{/if}</span>
   {/if}
   {#if can("approver") && oncontrol}
     {#if canPause(s)}
@@ -72,10 +76,15 @@
   {:else if !supervisor}
     <p class="none" data-note="no-supervisor">This Sortie reports no supervisor.</p>
   {:else}
-    {#if supervisor.reason}<p class="none">{supervisor.reason}</p>{/if}
+    {#if supervisor.status === "paused"}
+      <p class="note paused" data-note="paused">It takes no action until someone resumes it.{supervisor.reason ? ` Why: ${supervisor.reason}` : ""}</p>
+    {:else if supervisor.status === "unavailable" && supervisor.reason}
+      <p class="note down" data-note="unavailable">Sortie says: {supervisor.reason}</p>
+    {:else if supervisor.reason}
+      <p class="note">{supervisor.reason}</p>
+    {/if}
     {#if supervisor.actions.length}
-      <SupervisorActions actions={supervisor.actions} {slug} />
-      {#if supervisor.total > supervisor.actions.length}<p class="none">The {supervisor.actions.length} newest of {supervisor.total}.</p>{/if}
+      <SupervisorActions actions={supervisor.actions} {slug} first={SHOWN} total={supervisor.total} scope="on this project's stories" />
     {:else}
       <p class="none" data-note="no-actions">It has taken no action on this project's stories.</p>
     {/if}
@@ -90,21 +99,25 @@
   .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .st { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--r-pill); font-size: 12px; font-weight: 700; }
   .st i { width: 8px; height: 8px; border-radius: 50%; background: var(--slate); }
-  .st.active, .st.idle, .st.running { border-color: #bcd6c6; background: var(--done-tint); color: var(--done); }
+  .st.active, .st.running { border-color: #bcd6c6; background: var(--done-tint); color: var(--done); }
+  .st.idle { background: var(--panel); color: var(--ink); }
   .st.active i, .st.idle i, .st.running i { background: var(--done); }
   .st.paused { border-color: #ecd9a8; background: var(--amber-tint); color: var(--amber-ink); }
   .st.paused i { background: var(--amber); }
   .st.unavailable, .st.budget_exhausted { border-color: #e9b8b3; background: #fbeceb; color: #8f241d; }
   .st.unavailable i, .st.budget_exhausted i { background: #8f241d; }
-  .by { font-size: 12px; color: var(--mute); }
+  .by { font-size: 12px; color: var(--mute); font-variant-numeric: tabular-nums; }
   .name { font: 600 12px var(--font-mono); color: var(--ink); }
   .others { list-style: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-bottom: 6px; }
-  .btn { height: 28px; padding: 0 14px; border: 1px solid var(--ink); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
-  .btn:hover:not(:disabled) { background: var(--strip); }
+  .btn { height: 28px; padding: 0 14px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); font-size: 12px; font-weight: 700; }
+  .btn:hover:not(:disabled) { border-color: var(--ink); }
   .btn.go { border-color: var(--done); background: var(--done); color: #fff; }
   .btn.go:hover:not(:disabled) { background: #255a3f; }
   .btn:disabled { opacity: 0.6; cursor: progress; }
-  .sup :global(.acts) { padding: 2px 14px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
+  .sup :global(.acts) { padding: 0 16px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
+  .note { margin: -2px 0 8px; max-width: 90ch; font-size: 12.5px; color: var(--mute); }
+  .note.paused { color: var(--amber-ink); }
+  .note.down { color: #8f241d; }
   .none { padding: 6px 0; color: var(--mute); font-size: 12.5px; }
   .err { font-size: 12px; color: #8f241d; }
 </style>

@@ -244,8 +244,8 @@
 
         {#if node.kind === "story" && node.supervisor_actions?.length}
           <div class="supervised" data-supervisor-actions={node.plan_key}>
-            <b>The supervisor</b>
-            <SupervisorActions actions={node.supervisor_actions} />
+            <b>The supervisor<span>{node.supervisor_actions.length === 1 ? "1 action" : `${node.supervisor_actions.length} actions`}</span></b>
+            <SupervisorActions actions={node.supervisor_actions} first={3} compact />
           </div>
         {/if}
 
@@ -401,7 +401,8 @@
   .asks { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #ecc77f; border-left: 4px solid var(--amber); border-radius: var(--r-well); background: var(--amber-tint); }
   .asks > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--amber-ink); }
   .supervised { display: flex; flex-direction: column; gap: 2px; margin-top: var(--s-md); padding: 10px 14px 4px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
-  .supervised > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .supervised > b { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .supervised > b span { margin-left: auto; font-weight: 600; letter-spacing: 0; text-transform: none; }
   .failure { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s-md); padding: 12px 14px; border: 1px solid #e9b8b3; border-left: 4px solid var(--alert); border-radius: var(--r-well); background: #fbeceb; font-size: 12.5px; }
   .failure > b { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #8f241d; }
   .failure .cause { font: 600 12px/1.5 var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }

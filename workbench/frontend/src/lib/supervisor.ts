@@ -12,6 +12,9 @@ const ACTION_TEXT: Record<string, string> = {
   merge: "Merged the pull request",
   file_issue: "Filed an issue",
   live_proof: "Requested a live proof",
+  hold: "Held a story",
+  release_hold: "Released a hold",
+  ask_person: "Asked a person",
 };
 
 /** The same actions, tried and not done. */
@@ -25,6 +28,9 @@ const TRIED_TEXT: Record<string, string> = {
   merge: "merge the pull request",
   file_issue: "file an issue",
   live_proof: "request a live proof",
+  hold: "hold a story",
+  release_hold: "release a hold",
+  ask_person: "ask a person",
 };
 
 /** A refused route Sortie names by its method and pattern, such as "POST /api/v1/plan/sync". */
@@ -71,6 +77,36 @@ export function when(at: number | null): string {
 }
 
 export const iso = (at: number | null) => (at == null ? undefined : new Date(at * 1000).toISOString());
+
+/** The time of day, "18:06"; with the day too, "Nov 2", when it was not today. */
+export function clock(at: number, now = Date.now()): { time: string; day: string | null } {
+  const d = new Date(at * 1000);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const today = new Date(now).toDateString() === d.toDateString();
+  return { time, day: today ? null : d.toLocaleDateString([], { month: "short", day: "numeric" }) };
+}
+
+/** Sortie's "code: message" for an action it declined, split; a detail in other words has no code. */
+export function detailOf(detail: string): { code: string | null; message: string } {
+  const m = /^([a-z][a-z0-9_]*): ([\s\S]*)$/.exec(detail);
+  return m ? { code: m[1], message: m[2] } : { code: null, message: detail };
+}
+
+const URL_IN_TEXT = /https?:\/\/[^\s<>"')\]]+/g;
+
+/** Evidence text in parts, each address a link; a GitHub address reads by its path in the owner's repositories. */
+export function linkParts(text: string): { text: string; url: string | null }[] {
+  const out: { text: string; url: string | null }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(URL_IN_TEXT)) {
+    const url = m[0].replace(/[.,;:]+$/, "");
+    if (m.index > last) out.push({ text: text.slice(last, m.index), url: null });
+    out.push({ text: url.replace(/^https:\/\/github\.com\/[^/]+\//, ""), url });
+    last = m.index + url.length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), url: null });
+  return out;
+}
 
 function capital(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
