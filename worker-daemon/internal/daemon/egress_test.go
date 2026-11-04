@@ -20,9 +20,9 @@ import (
 // repository policy also names.
 func scenarioEgress() *protocol.Egress {
 	return &protocol.Egress{
-		Source:  &protocol.EgressSource{Repository: "ortusnova/homelab", Commit: "0123abc"},
-		Harness: &protocol.EgressPolicy{Version: 1, Hosts: []protocol.EgressHost{{Host: "models.opencode.ai", Reason: "the harness's models"}}},
-		Repository: &protocol.EgressPolicy{Version: 1,
+		Source:  &protocol.EgressSource{Repository: "homelab", Branch: "main", Commit: "0123abc", File: ".sortie/egress.yaml"},
+		Harness: &protocol.EgressPolicy{Hosts: []protocol.EgressHost{{Host: "models.opencode.ai", Reason: "the harness's models"}}},
+		Repository: &protocol.EgressPolicy{
 			Hosts: []protocol.EgressHost{
 				{Host: "*.githubusercontent.com", Reason: "release downloads"},
 				{Host: "api.anthropic.com", Reason: "named, but a credential host"},
@@ -164,8 +164,9 @@ func TestAMalformedPolicyGetsNoMachine(t *testing.T) {
 	}
 }
 
-// The fake control plane serves run.egress in the policy's form: its
-// members, and a single UDP port as a number.
+// The fake control plane serves run.egress in the form Sortie sends:
+// its members, each policy's lists never null, and a UDP port as a
+// string.
 func TestTheFakeServesRunEgress(t *testing.T) {
 	h := newHarness(t, defaults())
 	h.offerJob("ONS-7", 1, nil, func(j *fakecp.Job) { j.Egress = scenarioEgress() })
@@ -185,8 +186,17 @@ func TestTheFakeServesRunEgress(t *testing.T) {
 			t.Errorf("run.egress lacks %s: %s", k, raw)
 		}
 	}
-	if !strings.Contains(string(raw), `"port":123`) {
-		t.Errorf("run.egress = %s, want the UDP port as a number", raw)
+	if !strings.Contains(string(raw), `"port":"123"`) {
+		t.Errorf("run.egress = %s, want the UDP port as a string", raw)
+	}
+	if strings.Contains(string(raw), "null") || strings.Contains(string(raw), `"version"`) {
+		t.Errorf("run.egress = %s, want lists never null and no version", raw)
+	}
+	src, _ := doc["source"].(map[string]any)
+	for _, k := range []string{"repository", "branch", "commit", "file"} {
+		if _, ok := src[k]; !ok {
+			t.Errorf("run.egress.source lacks %s: %s", k, raw)
+		}
 	}
 }
 

@@ -155,18 +155,23 @@ type Egress struct {
 	CredentialHosts []string      `json:"credential_hosts,omitempty"`
 }
 
-// EgressSource names where Sortie read the repository's policy.
+// EgressSource names where Sortie read the repository's policy: the
+// repository's name, its base branch, the commit read and the file.
 type EgressSource struct {
 	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
 	Commit     string `json:"commit"`
+	File       string `json:"file"`
 }
 
-// EgressPolicy is one policy in the format of .sortie/egress.yaml.
+// EgressPolicy is one policy in the format of .sortie/egress.yaml. An
+// offer carries it without its version, its lists empty, never null.
 type EgressPolicy struct {
-	Version int             `json:"version"`
+	// Version, when sent, is 1.
+	Version *int            `json:"version,omitempty"`
 	Hosts   []EgressHost    `json:"hosts"`
-	UDP     []EgressUDP     `json:"udp,omitempty"`
-	Private []EgressPrivate `json:"private,omitempty"`
+	UDP     []EgressUDP     `json:"udp"`
+	Private []EgressPrivate `json:"private"`
 }
 
 // EgressHost is a host the machine reaches by name: a DNS name, or
@@ -189,17 +194,9 @@ type EgressPrivate struct {
 	Reason string `json:"reason"`
 }
 
-// EgressPort is a UDP port, N, or a range, N-M. On the wire it is a
-// number or a string.
+// EgressPort is a UDP port, N, or a range, N-M. An offer carries it as
+// a string, such as "123" or "5000-5010"; a number is read too.
 type EgressPort string
-
-// MarshalJSON writes a single port as a number and a range as a string.
-func (p EgressPort) MarshalJSON() ([]byte, error) {
-	if n, err := strconv.Atoi(string(p)); err == nil {
-		return json.Marshal(n)
-	}
-	return json.Marshal(string(p))
-}
 
 // UnmarshalJSON reads a number or a string.
 func (p *EgressPort) UnmarshalJSON(b []byte) error {

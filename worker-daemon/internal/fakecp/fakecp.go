@@ -590,7 +590,7 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 		run.SeedPath = "/jobs/" + j.ID + "/attempts/" + strconv.Itoa(j.Attempt) + "/seed"
 	}
 	if len(run.Egress) == 0 && j.Egress != nil {
-		b, err := json.Marshal(j.Egress)
+		b, err := json.Marshal(wireEgress(*j.Egress))
 		if err != nil {
 			f.mu.Unlock()
 			problem(w, http.StatusInternalServerError, "bad_egress", err.Error())
@@ -608,6 +608,34 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 	})
 	// The event's body is the run.egress served, if any.
 	f.record(Event{Kind: "poll", Status: 200, Job: j.ID, Attempt: j.Attempt, Body: run.Egress})
+}
+
+// wireEgress is e as Sortie sends it: a source, both policies, and
+// every list empty, never null.
+func wireEgress(e protocol.Egress) protocol.Egress {
+	if e.Source == nil {
+		e.Source = &protocol.EgressSource{}
+	}
+	for _, p := range []**protocol.EgressPolicy{&e.Harness, &e.Repository} {
+		w := protocol.EgressPolicy{}
+		if *p != nil {
+			w = **p
+		}
+		if w.Hosts == nil {
+			w.Hosts = []protocol.EgressHost{}
+		}
+		if w.UDP == nil {
+			w.UDP = []protocol.EgressUDP{}
+		}
+		if w.Private == nil {
+			w.Private = []protocol.EgressPrivate{}
+		}
+		*p = &w
+	}
+	if e.CredentialHosts == nil {
+		e.CredentialHosts = []string{}
+	}
+	return e
 }
 
 // live returns the attempt's lease when id holds it live.

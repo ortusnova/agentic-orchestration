@@ -30,18 +30,23 @@ const (
 	SourceRepository = "repository"
 )
 
-// dnsName is a lower-case DNS name of two labels or more.
-var dnsName = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+// label is one lower-case DNS label; numeric is a label of digits only,
+// which may not end a name.
+var (
+	label   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	numeric = regexp.MustCompile(`^[0-9]+$`)
+)
 
-// privateRanges are the ranges an entry of private may lie in.
+// maxName bounds a host's name, without its *. prefix.
+const maxName = 253
+
+// privateRanges are the ranges an entry of private may lie in, as the
+// schema states them: never loopback, link-local or a public range.
 var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"),
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.168.0.0/16"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("169.254.0.0/16"),
 	netip.MustParsePrefix("fc00::/7"),
-	netip.MustParsePrefix("fe80::/10"),
 }
 
 // Parse reads run.egress strictly: an unknown member, a host that is
@@ -83,13 +88,18 @@ func Parse(raw json.RawMessage) (*protocol.Egress, error) {
 	return &e, nil
 }
 
+// checkPolicy checks one policy against the schema. An offer carries no
+// version; one that does must carry 1.
 func checkPolicy(at string, p *protocol.EgressPolicy) error {
-	if p.Version != Version {
-		return fmt.Errorf("%s.version: %d is not %d", at, p.Version, Version)
+	if p.Version != nil && *p.Version != Version {
+		return fmt.Errorf("%s.version: %d is not %d", at, *p.Version, Version)
 	}
 	for i, h := range p.Hosts {
 		if err := checkHost(h.Host); err != nil {
 			return fmt.Errorf("%s.hosts[%d].host: %w", at, i, err)
+		}
+		if err := checkReason(h.Reason); err != nil {
+			return fmt.Errorf("%s.hosts[%d].reason: %w", at, i, err)
 		}
 	}
 	for i, u := range p.UDP {
@@ -98,6 +108,9 @@ func checkPolicy(at string, p *protocol.EgressPolicy) error {
 		}
 		if err := checkPort(string(u.Port)); err != nil {
 			return fmt.Errorf("%s.udp[%d].port: %w", at, i, err)
+		}
+		if err := checkReason(u.Reason); err != nil {
+			return fmt.Errorf("%s.udp[%d].reason: %w", at, i, err)
 		}
 	}
 	for i, pr := range p.Private {
@@ -108,19 +121,44 @@ func checkPolicy(at string, p *protocol.EgressPolicy) error {
 		if !slices.ContainsFunc(privateRanges, func(r netip.Prefix) bool { return r.Bits() <= pf.Bits() && r.Contains(pf.Addr()) }) {
 			return fmt.Errorf("%s.private[%d].cidr: %s is not within a private range", at, i, pr.CIDR)
 		}
+		if err := checkReason(pr.Reason); err != nil {
+			return fmt.Errorf("%s.private[%d].reason: %w", at, i, err)
+		}
 	}
 	return nil
 }
 
-// checkHost accepts a DNS name, or *. and a DNS name: never *, a bare
-// suffix such as *.com, an address, or a wildcard elsewhere.
-func checkHost(h string) error {
-	name := strings.TrimPrefix(h, "*.")
-	if !dnsName.MatchString(name) {
-		return fmt.Errorf("%q is not a lower-case DNS name, or *. and a domain", h)
+// checkReason accepts a reason that says something.
+func checkReason(r string) error {
+	if strings.TrimSpace(r) == "" {
+		return errors.New("is empty: say why the job reaches the entry")
 	}
-	if _, err := netip.ParseAddr(name); err == nil {
+	return nil
+}
+
+// checkHost accepts a lower-case DNS name, or *. and a name of two
+// labels or more: never *, a wildcard over a top-level domain such as
+// *.com, an address, a port, or a wildcard elsewhere.
+func checkHost(h string) error {
+	wildcard := strings.HasPrefix(h, "*.")
+	name := strings.TrimPrefix(h, "*.")
+	if name == "" || len(name) > maxName {
+		return fmt.Errorf("%q is not a DNS name of 1 to %d characters", h, maxName)
+	}
+	if _, err := netip.ParseAddr(strings.Trim(name, "[]")); err == nil {
 		return fmt.Errorf("%q is an address, not a name", h)
+	}
+	labels := strings.Split(name, ".")
+	for _, l := range labels {
+		if !label.MatchString(l) {
+			return fmt.Errorf("%q is not a lower-case DNS name, or *. and a domain", h)
+		}
+	}
+	if numeric.MatchString(labels[len(labels)-1]) {
+		return fmt.Errorf("%q is an address, not a name", h)
+	}
+	if wildcard && len(labels) < 2 {
+		return fmt.Errorf("%q covers a whole top-level domain", h)
 	}
 	return nil
 }

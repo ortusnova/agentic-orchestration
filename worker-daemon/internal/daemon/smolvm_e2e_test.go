@@ -148,7 +148,7 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 		ID: "ONS-30", Attempt: 1, Requires: requires,
 		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eEgressCheck},
 			Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": "ONS-30", "ALLOWED": allowed, "DENIED": denied, "NESTED_SCRIPT": nested}},
-		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Version: 1, Hosts: []protocol.EgressHost{{Host: allowed, Reason: "the declared host"}}}},
+		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Hosts: []protocol.EgressHost{{Host: allowed, Reason: "the declared host"}}}},
 		Seed:   seedBundle(t, "sortie/ONS-30"), StdioInput: []string{"go\n"},
 	})
 	h.waitFor("the report", 15*time.Minute, func() bool { return h.fake.Count("report", "ONS-30", 1) > 0 })

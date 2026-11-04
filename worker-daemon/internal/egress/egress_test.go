@@ -24,6 +24,27 @@ const valid = `{
   "credential_hosts": ["api.anthropic.com"]
 }`
 
+// sortieOffer is run.egress as Sortie's workflow reference shows it for
+// a homelab job (agent-platform/job-egress-policy): no version, the
+// source's four members, every list present, and the port a string.
+const sortieOffer = `{
+  "source": {"repository": "homelab", "branch": "main", "commit": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "file": ".sortie/egress.yaml"},
+  "harness": {"hosts": [{"host": "models.opencode.ai", "reason": "the agent harness reaches its models"}], "udp": [], "private": []},
+  "repository": {"hosts": [{"host": "deb.debian.org", "reason": "apt installs the build's packages"}], "udp": [{"cidr": "0.0.0.0/0", "port": "123", "reason": "NTP"}], "private": []},
+  "credential_hosts": ["api.anthropic.com"]
+}`
+
+func TestParseSortiesOffer(t *testing.T) {
+	e, err := Parse(json.RawMessage(sortieOffer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := PlanOf(e, nil)
+	if n := p.Network(); n == nil || !slices.Equal(n.Hosts, []string{"models.opencode.ai", "deb.debian.org"}) || !slices.Equal(n.UDP, []string{"0.0.0.0/0:123"}) {
+		t.Errorf("network = %+v", n)
+	}
+}
+
 func TestParseAndPlan(t *testing.T) {
 	e, err := Parse(json.RawMessage(valid))
 	if err != nil {
@@ -55,7 +76,7 @@ func TestParseAndPlan(t *testing.T) {
 // A credential host is never allowed directly: not by its name, not by a
 // pattern that covers it, and not when only the run's credentials name it.
 func TestCredentialHostsAreWithheld(t *testing.T) {
-	e := &protocol.Egress{Repository: &protocol.EgressPolicy{Version: 1, Hosts: []protocol.EgressHost{
+	e := &protocol.Egress{Repository: &protocol.EgressPolicy{Hosts: []protocol.EgressHost{
 		{Host: "*.anthropic.com"}, {Host: "api.openai.com"}, {Host: "ghcr.io"},
 	}}, CredentialHosts: []string{"api.anthropic.com"}}
 	p := PlanOf(e, []string{"api.openai.com"})
@@ -70,7 +91,7 @@ func TestCredentialHostsAreWithheld(t *testing.T) {
 // A policy that allows nothing once credential hosts are withheld gives
 // no network, never an open one.
 func TestAPlanThatAllowsNothingHasNoNetwork(t *testing.T) {
-	e := &protocol.Egress{Harness: &protocol.EgressPolicy{Version: 1, Hosts: []protocol.EgressHost{{Host: "api.anthropic.com"}}},
+	e := &protocol.Egress{Harness: &protocol.EgressPolicy{Hosts: []protocol.EgressHost{{Host: "api.anthropic.com"}}},
 		CredentialHosts: []string{"api.anthropic.com"}}
 	if n := PlanOf(e, nil).Network(); n != nil {
 		t.Errorf("network = %+v, want none", n)
@@ -109,6 +130,14 @@ func TestParseRefusesAMalformedPolicy(t *testing.T) {
 		{`{"repository": {"version": 1, "hosts": []}, "credential_hosts": ["*"]}`, `run.egress.credential_hosts[0]`},
 		{`{"repository": {"version": 1, "hosts": []}} {}`, `data after the object`},
 		{`"open"`, `run.egress`},
+		{repo(`"private": [{"cidr": "169.254.0.0/16", "reason": "link-local"}]`), `run.egress.repository.private[0].cidr`},
+		{repo(`"private": [{"cidr": "100.64.0.0/10", "reason": "not a private range of the schema"}]`), `run.egress.repository.private[0].cidr`},
+		{repo(`"private": [{"cidr": "10.0.0.0/8", "reason": " "}]`), `run.egress.repository.private[0].reason`},
+		{`{"harness": {"hosts": [{"host": "ghcr.io", "reason": ""}]}}`, `run.egress.harness.hosts[0].reason`},
+		{repo(`"udp": [{"cidr": "0.0.0.0/0", "port": "123"}]`), `run.egress.repository.udp[0].reason`},
+		{`{"harness": {"hosts": [{"host": "ghcr.io:443", "reason": "r"}]}}`, `run.egress.harness.hosts[0].host`},
+		{`{"harness": {"hosts": [{"host": "1.2.3.4", "reason": "r"}]}}`, `run.egress.harness.hosts[0].host`},
+		{`{"source": {"repository": "homelab", "url": "https://x"}, "harness": {"hosts": []}}`, `unknown field "url"`},
 	} {
 		_, err := Parse(json.RawMessage(c.raw))
 		if err == nil || !strings.Contains(err.Error(), c.want) {
@@ -126,7 +155,10 @@ func TestPorts(t *testing.T) {
 		t.Errorf("udp = %v", p.UDP)
 	}
 	b, _ := json.Marshal(protocol.EgressUDP{CIDR: "0.0.0.0/0", Port: "123"})
-	if !strings.Contains(string(b), `"port":123`) {
-		t.Errorf("a single port marshals as %s, want a number", b)
+	if !strings.Contains(string(b), `"port":"123"`) {
+		t.Errorf("a single port marshals as %s, want a string, as Sortie sends it", b)
+	}
+	if _, err := Parse(json.RawMessage(`{"harness": {"hosts": [{"host": "intranet", "reason": "a single-label name"}]}}`)); err != nil {
+		t.Errorf("a single-label name: %v", err)
 	}
 }

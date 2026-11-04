@@ -294,26 +294,29 @@ stopping the unit kills the machines with it.
 
 An offer's `run.egress` (`agent-platform/job-egress-policy`) holds the
 harness's policy and the repository's, each in the format of
-`.sortie/egress.yaml` (`version`, `hosts`, `udp`, `private`), and the
-`credential_hosts` that stay on the `egress` flow:
+`.sortie/egress.yaml` without its `version` (`hosts`, `udp`, `private`,
+each list empty, never `null`, when it has no entries), where Sortie read
+the repository's, and the `credential_hosts` that stay on the `egress`
+flow:
 
 ```json
-{"source": {"repository": "ortusnova/homelab", "commit": "0123abc"},
- "harness": {"version": 1, "hosts": [{"host": "models.opencode.ai", "reason": "…"}]},
- "repository": {"version": 1,
+{"source": {"repository": "homelab", "branch": "main", "commit": "4b825dc…", "file": ".sortie/egress.yaml"},
+ "harness": {"hosts": [{"host": "models.opencode.ai", "reason": "…"}], "udp": [], "private": []},
+ "repository": {
    "hosts": [{"host": "*.githubusercontent.com", "reason": "…"}],
-   "udp": [{"cidr": "0.0.0.0/0", "port": 123, "reason": "NTP"}],
+   "udp": [{"cidr": "0.0.0.0/0", "port": "123", "reason": "NTP"}],
    "private": [{"cidr": "192.168.122.0/24", "reason": "…"}]},
  "credential_hosts": ["api.anthropic.com"]}
 ```
 
-The daemon checks it strictly: an unknown member, a version that is not
-`1`, a host that is not a lower-case DNS name or `*.` and a domain (never
-`*`, `*.com` or an address), a CIDR with host bits set, a port outside
-1-65535, or a `private` entry outside the private ranges (`10.0.0.0/8`,
-`172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`,
-`fc00::/7`, `fe80::/10`) refuses the job, as above. A valid one maps to
-smolvm's flags (design D8):
+The daemon checks it strictly, by the policy's schema: an unknown member,
+a `version` other than `1` when one is sent, a host that is not a
+lower-case DNS name or `*.` and a name of two labels or more (never `*`,
+`*.com`, a port or an address), an empty `reason`, a CIDR with host bits
+set, a port outside 1-65535 (a string, `N` or `N-M`, or a number), or a
+`private` entry outside the private ranges (`10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) refuses the job, as
+above. A valid one maps to smolvm's flags (design D8):
 
 | `run.egress` | smolvm flag |
 |---|---|
