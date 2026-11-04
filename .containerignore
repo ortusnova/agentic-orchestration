@@ -1,0 +1,18 @@
+# What the control plane's image builds (control-plane/images) leave out of
+# their context, the repository root: version control, dependencies and
+# build output. Sortie's own internal/server/ui/dist stays: it is source.
+.git
+**/node_modules
+**/.venv
+**/__pycache__
+.dev
+.bin
+acp-broker/bin
+acp-broker/dist
+control-plane/bin
+smol-builder/bin
+smol-builder/dist
+worker-daemon/bin
+worker-daemon/dist
+workbench/dist
+workbench/frontend/dist

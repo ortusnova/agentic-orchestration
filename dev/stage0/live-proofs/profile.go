@@ -19,7 +19,7 @@ type liveProofHosts struct {
 }
 
 // renderProfile returns the live-proof profile: the kit's egress profile
-// (egress-profile.json), with its credentials, and every host of extra
+// (control-plane/nono/egress-profile.json), with its credentials, and every host of extra
 // added to the hosts it allows.
 func renderProfile(baseFile, extraFile string) ([]byte, error) {
 	b, err := os.ReadFile(baseFile) // #nosec G304 G703 -- the operator names the file

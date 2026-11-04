@@ -36,6 +36,25 @@ updates:
       npm:
         update-types: [minor, patch]
 
+  # The control plane: the upstream images of its compose project and the
+  # bases of the images built here, each pinned by digest.
+  - package-ecosystem: docker-compose
+    directory: /control-plane
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: docker
+    directory: /control-plane/images
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

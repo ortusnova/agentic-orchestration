@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks that opencode in a Sortie machine can search the web without a
 # prompt: both opencode configs select Firecrawl's keyless provider and keep
-# webfetch denied, and p1's egress profile, the one host list under the
+# webfetch denied, and the control plane's egress profile, the one host list under the
 # remote kind (nono enforces it for every worker), allows Firecrawl's MCP
 # host. Without a provider, opencode asks the user to choose
 # one, and Sortie refuses the prompt.
@@ -26,10 +26,10 @@ for cfg in "$KIT/pack/opencode.json" "$ROOT/smol-builder/layers/base/opencode.js
   fi
 done
 
-if jq -e --arg h "$host" '.network.allow_domain | index($h)' "$KIT/egress-profile.json" > /dev/null; then
-  echo "ok: egress-profile.json allows $host"
+if jq -e --arg h "$host" '.network.allow_domain | index($h)' "$ROOT/control-plane/nono/egress-profile.json" > /dev/null; then
+  echo "ok: control-plane/nono/egress-profile.json allows $host"
 else
-  echo "FAIL: egress-profile.json does not allow $host"; failed=1
+  echo "FAIL: control-plane/nono/egress-profile.json does not allow $host"; failed=1
 fi
 
 exit $failed

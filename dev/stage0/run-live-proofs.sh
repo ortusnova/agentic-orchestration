@@ -3,7 +3,7 @@
 # minute; README.md "Live proofs"): stage0-live-proofs reads each live-proof
 # request the supervisor made of Sortie, holds its pull request's merge with
 # the live-proof status, starts the live-proof job as a fix run on the
-# story's branch, lists the jobs that run for the edge's live-proof egress,
+# story's branch, lists the jobs that run for the egress gate's live-proof egress,
 # and sets the status from the job's result comment. It keeps its record in
 # $STAGE0_HOME/live-proofs.
 set -euo pipefail
