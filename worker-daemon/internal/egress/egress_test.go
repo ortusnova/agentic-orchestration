@@ -100,6 +100,25 @@ func TestAPlanThatAllowsNothingHasNoNetwork(t *testing.T) {
 	}
 }
 
+// A plan whose only entries are UDP and private gives no network: with no
+// host pattern, smolvm's --block-private leaves the internet and the LAN
+// open, and --allow-cidr would not close it (design D16).
+func TestAPlanOfUDPAndPrivateOnlyHasNoNetwork(t *testing.T) {
+	e, err := Parse(json.RawMessage(`{"repository": {"hosts": [],
+		"udp": [{"cidr": "0.0.0.0/0", "port": "123", "reason": "NTP"}],
+		"private": [{"cidr": "192.168.122.0/24", "reason": "libvirt"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := PlanOf(e, nil)
+	if p.Empty() || len(p.UDP) != 1 || len(p.Private) != 1 {
+		t.Fatalf("plan = %+v, want one UDP and one private entry", p)
+	}
+	if n := p.Network(); n != nil {
+		t.Errorf("network = %+v, want none", n)
+	}
+}
+
 func TestAbsentIsNoPolicy(t *testing.T) {
 	for _, raw := range []string{"", " ", "null"} {
 		e, err := Parse(json.RawMessage(raw))

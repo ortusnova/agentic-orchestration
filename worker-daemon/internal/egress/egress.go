@@ -282,7 +282,9 @@ type Plan struct {
 	// UDP entries are cidr:port, each with --allow-udp.
 	UDP []string
 	// Private entries are CIDRs, each with --allow-cidr and left out
-	// of the deny set (designs D15 and D16).
+	// of the deny set (designs D15 and D16): smolvm's --allow-private
+	// reopens no address beside the patterns, as measured, so it is
+	// never passed.
 	Private []string
 	// Withheld are the policies' hosts left out because they are, or
 	// cover, a credential host.
@@ -360,7 +362,8 @@ func (p Plan) Empty() bool { return len(p.Hosts) == 0 && len(p.UDP) == 0 && len(
 // entries alone give no network. A network denies the private ranges
 // less the plan's private entries (design D15): smolvm otherwise lets
 // the machine reach any address resolved for an allowed name, private
-// or not.
+// or not. Its private entries are --allow-cidr, never --allow-private,
+// which reopens no address beside the patterns (design D16).
 func (p Plan) Network() *machine.Network {
 	if len(p.Hosts) == 0 {
 		return nil

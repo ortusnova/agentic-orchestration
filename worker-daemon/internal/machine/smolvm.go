@@ -114,9 +114,12 @@ func CreateArgs(spec Spec) ([]string, error) {
 // networkArgs are the flags of designs D8, D15 and D16 for n: virtio-net
 // with private ranges blocked, each CIDR of the deny set denied, and
 // each host by name, each UDP entry and each private entry allowed.
-// Never --allow-host, which takes a host's addresses at the machine's
-// start, never --allow-private, which reopens nothing beside a pattern,
-// and never --net, which opens the network unfiltered.
+// A private entry is --allow-cidr, which opens every port of its range
+// (design D16): --allow-private reopens no address beside the patterns,
+// as measured on smolvm 1.32.4, so a private entry given by it would
+// open nothing. Never --allow-host, which takes a host's addresses at
+// the machine's start, and never --net, which opens the network
+// unfiltered.
 func networkArgs(n *Network) ([]string, error) {
 	if n == nil {
 		return nil, nil
