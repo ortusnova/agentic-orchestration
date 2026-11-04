@@ -63,15 +63,16 @@ type Config struct {
 
 // ControlPlane is where and how the daemon dials the control plane.
 type ControlPlane struct {
-	// URL is the control plane's base URL: Pomerium's https URL, with
-	// the client certificate in TLS (design D18).
+	// URL is the control plane's base URL. Until the control plane
+	// issues client certificates it is the loopback end of the tunnel
+	// the control plane opens to this host (design D18).
 	URL string `json:"url"`
 
 	// IdentityHeader names the header that carries WorkerID.
 	IdentityHeader string `json:"identity_header"`
 
-	// TLS holds the client certificate the control plane issued, and
-	// the CA that signs the control plane's certificate.
+	// TLS holds the client certificate, once the control plane issues
+	// one, and the CA that signs the control plane's certificate.
 	TLS TLS `json:"tls"`
 }
 

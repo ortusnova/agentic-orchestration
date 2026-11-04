@@ -1,0 +1,25 @@
+[Unit]
+Description=Ortus Nova stage 0: the tunnel to worker host %i, its way to p1's edge
+After=network-online.target ortus-stage0-edge.service
+
+[Service]
+Type=exec
+# WORKER_HOST, EDGE_PORT, WORKER_PORT, WORKBENCH_PORT and
+# WORKBENCH_TUNNEL_PORT (worker-host.sh).
+EnvironmentFile=@STAGE0_HOME@/workers/%i.env
+# p1 opens it, as a remote forward: the edge port of this worker appears on
+# the worker host's loopback only. Nothing listens on the LAN, the worker
+# host gets no way into p1 but its own edge port, and the edge names the
+# worker by that port (README.md, the stage-1 edge). The second forward is
+# p1's workbench, where a Sortie on the host posts its notifications with
+# the host's token (notify-channel.sh); the workbench's other routes need a
+# person's sign-in.
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -R 127.0.0.1:${WORKBENCH_TUNNEL_PORT}:127.0.0.1:${WORKBENCH_PORT} \
+  -R 127.0.0.1:${WORKER_PORT}:127.0.0.1:${EDGE_PORT} ${WORKER_HOST}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

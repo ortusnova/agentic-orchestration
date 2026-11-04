@@ -57,14 +57,11 @@ printf '%s\\n' "\$ORTUS_EGRESS_CA" | \$s tee $STAGE0_GUEST_CA > /dev/null
 EOF
 }
 
-# render_worker_config FILE NAME URL CA CERT KEY CP_CA
-#   NAME   the worker's name; Pomerium names it by its certificate anyway
-#   URL    the control plane as every worker reaches it: Pomerium's public
-#          URL on p1 (front-config.sh)
-#   CA     the egress CA's certificate on this host
-#   CERT   the worker's client certificate from the control plane's CA,
-#   KEY    its key, and
-#   CP_CA  that CA, which signs Pomerium's certificate too
+# render_worker_config FILE NAME URL CA
+#   NAME  the worker's name; the edge names it by its port anyway
+#   URL   the control plane as this host reaches it: its edge port on p1,
+#         or the tunnel's end on a worker host
+#   CA    the egress CA's certificate on this host
 # Reads STAGE0_PACK and STAGE0_WORKER_SLOTS, and, when homelab_inputs ran,
 # STAGE0_HOMELAB_PACK and STAGE0_HOMELAB_IMAGE_JSON. Without them the worker
 # does not declare nested: it has no image that needs it.
@@ -74,7 +71,7 @@ EOF
 # slots"): a host that gains memory gets more slots without a deploy. The
 # live free CPU, memory and disk still bound each job.
 render_worker_config() {
-  local out=$1 name=$2 url=$3 ca=$4 cert=$5 key=$6 cpca=$7 packs images nested=false slots=''
+  local out=$1 name=$2 url=$3 ca=$4 packs images nested=false slots=''
   if [[ -n ${STAGE0_WORKER_SLOTS:-} ]]; then
     [[ $STAGE0_WORKER_SLOTS =~ ^[1-9][0-9]*$ ]] || { echo "STAGE0_WORKER_SLOTS is $STAGE0_WORKER_SLOTS; want a positive whole number, or unset to follow the host" >&2; return 1; }
     slots="
@@ -96,10 +93,7 @@ render_worker_config() {
   (umask 077; cat > "$out.tmp" <<EOF
 {
   "worker_id": $(json_str "$name"),
-  "control_plane": {
-    "url": $(json_str "$url"),
-    "tls": {"cert_file": $(json_str "$cert"), "key_file": $(json_str "$key"), "ca_file": $(json_str "$cpca")}
-  },$slots
+  "control_plane": {"url": $(json_str "$url")},$slots
   "reserve": {"mem_gib": $STAGE0_WORKER_RESERVE_MEM_GIB, "cpu": $STAGE0_WORKER_RESERVE_CPU},
   "floor": {"disk_gib": $STAGE0_WORKER_FLOOR_DISK_GIB},
   "smallest_job": {"cpu": 4, "mem_gib": 8, "disk_gib": 20},
@@ -146,6 +140,18 @@ worker_jobs() {
     [[ -d $d ]] && n=$((n + 1))
   done
   echo "$n"
+}
+
+# register_local_worker NAME: p1's own worker in $STAGE0_WORKERS (edge-config.sh).
+# Its edge port is the one every worker host's tunnel ends on, so on p1 too
+# the flows are at 127.0.0.1:$STAGE0_EDGE_WORKER_PORT, as the workflow names
+# them, and it needs no tunnel.
+register_local_worker() {
+  local f=$STAGE0_WORKERS/$1.env want
+  want=$(printf 'LOCAL=1\nEDGE_PORT=%s' "$STAGE0_EDGE_WORKER_PORT")
+  mkdir -p "$STAGE0_WORKERS"
+  [[ -e $f && $(cat "$f") == "$want" ]] && return 0
+  (umask 077; printf '%s\n' "$want" > "$f")
 }
 
 # retire_sortie UNITS: a worker host runs no Sortie (spec store

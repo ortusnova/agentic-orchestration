@@ -1,8 +1,0 @@
-# The system git configuration of the Sortie image. The helper prints the
-# token from Sortie's environment (SORTIE_GITHUB_TOKEN, a podman secret);
-# this file holds no secret.
-[credential "https://github.com"]
-	helper =
-	helper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=%s\\n' \"$SORTIE_GITHUB_TOKEN\"; }; f"
-[safe]
-	directory = *

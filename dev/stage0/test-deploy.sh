@@ -95,7 +95,7 @@ setup() {
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
-  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon" "$tmp/up/control-plane"
+  mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon"
   # Like the real one, it restarts Sortie on p1, and --update-sortie moves
   # the Sortie checkout to plan-bench.
   cat > "$tmp/up/dev/stage0/stage0.sh" <<EOF
@@ -110,7 +110,7 @@ if [ -n "\$FAIL_STAGE0_ONCE" ] && [ ! -e "$tmp/failed-once" ]; then : > "$tmp/fa
 EOF
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
-  echo 1 > "$tmp/up/dev/stage0/supervisor.md"; echo 1 > "$tmp/up/control-plane/x"
+  echo 1 > "$tmp/up/dev/stage0/supervisor.md"
   g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm one; g -C "$tmp/up" push -q origin main
   g clone -q "$tmp/remote" "$STAGE0_LIVE_KIT"
   mkdir -p "$STAGE0_LIVE_KIT/workbench/frontend/node_modules"
@@ -137,8 +137,6 @@ check "a workbench change rebuilds and restarts the workbench" main "uv sync -q;
 # The supervisor's prompt is the kit's: stage0.sh installs it on the host.
 setup; merge dev/stage0/supervisor.md; run; check "a change to the supervisor's prompt runs stage0.sh, which installs it" main "stage0.sh;"
 setup; merge dev/stage0/units; run; check "a kit change runs stage0.sh" main "stage0.sh;"
-# p1 runs the control plane's egress gate and Pomerium image and nono profile.
-setup; merge control-plane/x; run; check "a control-plane change runs stage0.sh" main "stage0.sh;"
 setup; echo "$RANDOM" >> "$tmp/up/workbench/app"; echo "$RANDOM" >> "$tmp/up/dev/stage0/units"
 g -C "$tmp/up" commit -qam both; g -C "$tmp/up" push -q origin main; sortie 1; run
 check "a kit and workbench merge runs stage0.sh, which builds the workbench too" main "stage0.sh;"
