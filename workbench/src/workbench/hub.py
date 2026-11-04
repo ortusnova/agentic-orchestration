@@ -19,6 +19,7 @@ from .plan_state import PlanState
 from .notifications import project_notifications
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
+from .supervisor import supervisor_view
 from .timeline import RunHistory, RunWorkers
 from .workers import worker_fields
 
@@ -305,6 +306,8 @@ class Hub:
         states = [s for _, s, _ in self.states()]
         self.fields = overlay(snap["graph"], self.plan.stories, approvals, rereviews, self.tracker, self.pulls(),
                               self.previews(), run_phases(states), merge_waits(states))
+        supervisor, acted_on = supervisor_view(self.agent_state, doc["nodes"],
+                                               [(p.name, s) for p, s in self._peer_pairs()], self.sortie.name)
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         self.leases = leases_of(self.states())
         try:
@@ -329,6 +332,7 @@ class Hub:
             if n.get("kind") == "story":
                 n["question"] = self.questions.get(ident) if ident and ident not in self.leases else None
                 n["lease"] = self.leases.get(ident) if ident else None
+                n["supervisor_actions"] = acted_on.get(n["plan_key"], [])
                 n["failure"] = self.failures.get(ident) if ident else None
                 n["run_state"] = runs.get(ident) if ident else None
                 peer = self.workers.get(ident or "", {}).get("sortie")
@@ -354,6 +358,9 @@ class Hub:
             },
         )
         doc["plan_states"] = (self.tracker or {}).get("plan_states")
+        # The supervisor's status, from the Sortie that dispatches the
+        # project, and every Sortie's recent actions; None when none reports any.
+        doc["supervisor"] = supervisor
         doc["sync"] = self.sync_status
         doc["fleet"] = self.fleet
         doc["home"] = self.home = self._home(doc, snap)

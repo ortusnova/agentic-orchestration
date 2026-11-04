@@ -11,6 +11,13 @@ from tests.workbench.conftest import SORTIE_TOKEN
 from workbench.sortie import SortieClient
 
 
+# What the supervisor's scoped token allows (agent-platform/run-supervision), as
+# sortie#40 names them in supervisor_actions[].action: Sortie refuses every other
+# route for it, and records each one either way.
+SUPERVISOR_ACTIONS = {"answer", "release", "grant_sessions", "record_merge", "fix_run",
+                      "mark_draft", "merge", "file_issue", "live_proof"}
+
+
 def built_unapproved(n: dict[str, Any]) -> bool:
     """A ui story that covers a requirement: Sortie syncs and releases it
     without an approval, and refuses one that names an approver."""
@@ -85,11 +92,38 @@ class FakeSortie:
         self.history: dict[str, dict[str, Any]] = {}
         # Finished runs, as GET /api/v1/runs serves them, newest first.
         self.runs: list[dict[str, Any]] = []
+        # The supervisor session's status (supervisor-session), or None for a
+        # Sortie that serves none; the actions its token took, as
+        # supervisor_actions (sortie#40), or None for a Sortie without them;
+        # and the pauses and resumes people asked for.
+        self.supervisor: dict[str, Any] | None = {"status": "idle", "agent": "opencode", "unavailable": None, "paused": None}
+        self.supervisor_actions: list[dict[str, Any]] | None = []
+        self.supervisor_controls: list[dict[str, str]] = []
         # Open platform faults as /api/v1/state serves them; whether the
         # check an action-done runs passes; and the action-done requests.
         self.platform_faults: list[dict[str, Any]] = []
         self.fault_check_passes = True
         self.faults_done: list[dict[str, Any]] = []
+
+    def supervise(self, action: str, identifier: str | None = None, *, evidence: str = "checked",
+                  pull: str | None = None, merge_commit: str | None = None, at: str = "2026-11-03T10:00:00Z",
+                  detail: str | None = None) -> dict[str, Any]:
+        """The supervisor asks for ``action`` with its scoped token. Sortie
+        does it only if the token allows it and the supervisor is not paused,
+        and records the action, its evidence and its result either way; a
+        route the token may not take is recorded by its method and pattern."""
+        assert self.supervisor_actions is not None, "this Sortie records no supervisor actions"
+        paused = (self.supervisor or {}).get("status") == "paused"
+        allowed = action in SUPERVISOR_ACTIONS and not paused
+        if detail is None and not allowed:
+            detail = "the supervisor is paused" if paused else "forbidden: not a supervisor action"
+        record = {"id": len(self.supervisor_actions) + 1, "action": action,
+                  "route": action if action.startswith("POST ") else f"POST /api/v1/{identifier}/{action}",
+                  "issue_identifier": identifier, "evidence": evidence,
+                  "result": "done" if allowed else "refused", "status": 200 if allowed else 403, "detail": detail,
+                  "pull_request": pull, "merge_commit": merge_commit if allowed else None, "at": at}
+        self.supervisor_actions.append(record)
+        return record
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -235,10 +269,31 @@ class FakeSortie:
             if self.state_down:
                 return httpx.Response(503, json={"error": {"code": "unavailable", "message": "state"}})
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
-            return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
-                                             "budget_exhausted": self.budget_exhausted, "parked": self.parked,
-                                             "platform_faults": self.platform_faults,
-                                             "config": {"agent": agent}, **self.extra_state})
+            state = {"running": list(self.running.values()), "retrying": list(self.retrying.values()),
+                     "budget_exhausted": self.budget_exhausted, "parked": self.parked,
+                     "platform_faults": self.platform_faults, "config": {"agent": agent},
+                     **self.extra_state}
+            if self.supervisor is not None:
+                state["supervisor"] = self.supervisor
+            if self.supervisor_actions is not None:
+                state["supervisor_actions"] = self.supervisor_actions[::-1][:50]
+            return httpx.Response(200, json=state)
+        if path in ("/api/v1/supervisor/pause", "/api/v1/supervisor/resume") and request.method == "POST":
+            # As Sortie's supervisor-session serves it: the control token's
+            # route, with an optional {"by", "reason"}; "operator" by default.
+            if self.supervisor is None:
+                return httpx.Response(409, json={"error": {"code": "supervisor_not_configured",
+                                                           "message": "the workflow configures no supervisor section"}})
+            op = path.rsplit("/", 1)[1]
+            by = (body or {}).get("by") or "operator"
+            self.supervisor_controls.append({"op": op, "by": by})
+            if op == "pause":
+                paused = {"since": "2026-11-03T11:00:00Z", "by": by, "reason": (body or {}).get("reason") or ""}
+                self.supervisor.update(status="paused", paused=paused)
+            else:
+                paused = self.supervisor.get("paused")
+                self.supervisor.update(status="idle", paused=None)
+            return httpx.Response(200, json={"supervisor_paused": paused})
         if path.startswith("/api/v1/platform-faults/") and path.endswith("/action-done") and request.method == "POST":
             fault_id = path.removeprefix("/api/v1/platform-faults/").removesuffix("/action-done")
             fault = next((f for f in self.platform_faults if f["id"] == fault_id), None)

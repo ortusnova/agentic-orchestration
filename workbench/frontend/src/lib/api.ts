@@ -1,7 +1,7 @@
 /** The workbench backend: the browser's only server. */
 import type { About, Identity } from "./identity.svelte";
 import type { Fleet } from "./fleet";
-import type { MergedGraph, ProjectSummary, SyncStatus, TrackerProject } from "./types";
+import type { MergedGraph, ProjectSummary, Supervisor, SyncStatus, TrackerProject } from "./types";
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly body: unknown = null) {
@@ -53,6 +53,8 @@ export function projectApi(slug: string) {
     cancel: (key: string) => request<{ cancelled: string; rereview: string[] }>("POST", `${p}/stories/cancel`, { key }),
     supersede: (key: string) => request<{ superseded: string; by: string }>("POST", `${p}/stories/supersede`, { key }),
     answer: (key: string, text: string) => request<{ answered: string; identifier: string }>("POST", `${p}/stories/answer`, { key, text }),
+    supervisor: (op: "pause" | "resume", sortie: string | null = null) =>
+      request<{ supervisor: Supervisor | null }>("POST", `${p}/supervisor/${op}${sortie ? `?sortie=${encodeURIComponent(sortie)}` : ""}`),
     seeNotifications: (ids: number[]) => request<{ seen: number }>("POST", `${p}/notifications/seen`, { ids }),
     grantSessions: (key: string, sessions: number) =>
       request<{ granted: number; sortie: string }>("POST", `${p}/stories/sessions`, { key, sessions }),

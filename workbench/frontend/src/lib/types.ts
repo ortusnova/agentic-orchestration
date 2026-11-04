@@ -100,6 +100,50 @@ export interface GraphNode {
   delivery?: Delivery | null;
   /** A ui story only: the preview of its pull request, once the kit deployed it; null before. */
   preview?: Preview | null;
+  /** Stories only: what Sortie's supervisor did to the story, or was refused, newest first. */
+  supervisor_actions?: SupervisorAction[];
+}
+
+/** One action of Sortie's supervisor, as Sortie recorded it. */
+export interface SupervisorAction {
+  id: string;
+  /** When Sortie recorded it, in Unix seconds. */
+  at: number | null;
+  /** What the supervisor did or asked to do, such as "record_merge". */
+  action: string;
+  /** The story it touched; null for an action on no story, such as filing an issue. */
+  identifier: string | null;
+  key: string | null;
+  label: string | null;
+  title: string | null;
+  url: string | null;
+  pull: { ref: string; url: string | null } | null;
+  /** What it was based on: named values, a link where one applies. */
+  evidence: { name: string | null; value: string; url: string | null }[];
+  /** "done", "refused", "rejected" or "failed". */
+  result: string;
+  detail: string | null;
+  /** The Sortie whose supervisor took it. */
+  sortie?: string | null;
+}
+
+/** One Sortie's supervisor status: whether it acts, and who paused it and when. */
+export interface SupervisorStatus {
+  /** Sortie's "idle", "running", "paused", "budget_exhausted" or "unavailable"; "off" when it serves no status. */
+  status: string;
+  paused_at: number | null;
+  paused_by: string | null;
+  reason: string | null;
+}
+
+/** Sortie's supervisor: whether it acts, and what it did lately. The status
+ * is that of the Sortie that dispatches the project. */
+export interface Supervisor extends SupervisorStatus {
+  /** Each Sortie that reports a supervisor, this project's own first. Absent from an older backend. */
+  sorties?: (SupervisorStatus & { name: string | null; own: boolean })[];
+  /** The recent actions on this project's stories and on none, newest first. */
+  actions: SupervisorAction[];
+  total: number;
 }
 
 export type PlanStatus = "needs_spec" | "draft" | "held" | "ready" | "released" | "frozen" | "building" | "in_review" | "click_proofs" | "merging" | "needs_rereview" | "delivered" | "delivery_unconfirmed";
@@ -162,6 +206,8 @@ export interface MergedGraph {
   sync?: SyncStatus | null;
   /** The project home, computed with the graph. Absent from an older backend. */
   home?: HomeDoc | null;
+  /** Sortie's supervisor, for a project Sortie dispatches; null when Sortie reports none. */
+  supervisor?: Supervisor | null;
   /** What each worker does and what waits on it. Absent from an older backend. */
   fleet?: Fleet | null;
   sortie: {

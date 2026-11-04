@@ -7,10 +7,11 @@
   import HomeLanes from "./HomeLanes.svelte";
   import HomeNeeds from "./HomeNeeds.svelte";
   import HomeTimeline from "./HomeTimeline.svelte";
+  import SupervisorPanel from "./SupervisorPanel.svelte";
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsessions, onfaultdone, onseen, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsupervisor, onsessions, onfaultdone, onseen, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -21,6 +22,8 @@
     onapprove: (keys: string[]) => Promise<string | null>;
     onanswer: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
+    /** Pause or resume a Sortie's supervisor, by the Sortie's name, null for this project's; resolves to an error message, or null. */
+    onsupervisor?: (op: "pause" | "resume", sortie: string | null) => Promise<string | null>;
     /** Give a story its session budget holds more sessions; resolves to an error message, or null. */
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
     /** Mark a platform fault's person action done; resolves to an error message, or null. */
@@ -109,6 +112,8 @@
     {/if}
 
     <HomeNeeds items={home.not_ready} questions={home.questions ?? []} faults={home.faults ?? []} expiredHolds={home.expired_holds ?? []} notifications={home.notifications ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onfaultdone} {onseen} />
+
+    <SupervisorPanel supervisor={doc.supervisor} {slug} dispatched={!!doc.sortie.dispatched} reachable={doc.sortie.reachable} oncontrol={onsupervisor} />
 
     <section class="progress" aria-labelledby="ms-h">
       <h2 id="ms-h">Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2>

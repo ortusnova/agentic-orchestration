@@ -78,6 +78,16 @@
     }
   }
 
+  async function supervise(op: "pause" | "resume", sortie: string | null = null): Promise<string | null> {
+    try {
+      await projectApi(slug).supervisor(op, sortie);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return `${op === "pause" ? "Pausing" : "Resuming"} the supervisor needs the approver role.`;
+      return err instanceof Error ? err.message : "Sortie did not take that.";
+    }
+  }
+
   async function seeNotifications(ids: number[]): Promise<string | null> {
     try {
       await projectApi(slug).seeNotifications(ids);
@@ -151,7 +161,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions} onfaultdone={faultDone} onseen={seeNotifications}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsupervisor={supervise} onsessions={sessions} onfaultdone={faultDone} onseen={seeNotifications}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />
