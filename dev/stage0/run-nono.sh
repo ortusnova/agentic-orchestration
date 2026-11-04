@@ -41,7 +41,8 @@ esac
 . "$KIT/egress-credentials.sh"
 egress_credentials || die "could not read the egress credentials"
 # nono reads its credentials only here; refresh-token.sh restarts both
-# nonos onto a fresher Claude token, using this expiry.
+# nonos onto a fresher Claude token, using this expiry, or onto a valid one
+# when api.anthropic.com refuses theirs.
 if [[ -z ${1:-} ]]; then "$KIT/anthropic-token.py" --expiry > "$STAGE0_HOME/nono-token-expiry"; fi
 NONO_PROXY_PASS=$(cat "$STAGE0_HOME/nono-pass")
 export NONO_PROXY_PASS NONO_NO_UPDATE_CHECK=1

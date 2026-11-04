@@ -1,5 +1,5 @@
 [Unit]
-Description=Ortus Nova stage 0: check the Claude token every 10 minutes
+Description=Ortus Nova stage 0: probe the Claude token nono holds every 10 minutes
 
 [Timer]
 OnBootSec=5min
