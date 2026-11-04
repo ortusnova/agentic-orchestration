@@ -43,6 +43,10 @@ type Job struct {
 	Attempt  int
 	Requires protocol.Requires
 	Run      protocol.Run
+	// Egress, when not nil, is served as run.egress, in the form of
+	// agent-platform/job-egress-policy. Run.Egress, when set, is served
+	// as it is instead, such as a malformed policy.
+	Egress *protocol.Egress
 	// Seed is the bundle served at the run's seed path.
 	Seed []byte
 	// StdioInput is sent to the agent, one message each, once the
@@ -585,6 +589,15 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 	if run.SeedPath == "" {
 		run.SeedPath = "/jobs/" + j.ID + "/attempts/" + strconv.Itoa(j.Attempt) + "/seed"
 	}
+	if len(run.Egress) == 0 && j.Egress != nil {
+		b, err := json.Marshal(wireEgress(*j.Egress))
+		if err != nil {
+			f.mu.Unlock()
+			problem(w, http.StatusInternalServerError, "bad_egress", err.Error())
+			return
+		}
+		run.Egress = b
+	}
 	stored := j
 	stored.Run = run
 	f.jobs[k] = stored
@@ -593,7 +606,36 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 		Job:   protocol.Job{ID: j.ID, Attempt: j.Attempt, Issue: protocol.Issue{ID: "id-" + j.ID, Identifier: j.ID, Title: "fake " + j.ID}, Requires: j.Requires},
 		Lease: protocol.Lease{Expires: exp.UTC()}, Run: run, Flows: flowsOut,
 	})
-	f.record(Event{Kind: "poll", Status: 200, Job: j.ID, Attempt: j.Attempt})
+	// The event's body is the run.egress served, if any.
+	f.record(Event{Kind: "poll", Status: 200, Job: j.ID, Attempt: j.Attempt, Body: run.Egress})
+}
+
+// wireEgress is e as Sortie sends it: a source, both policies, and
+// every list empty, never null.
+func wireEgress(e protocol.Egress) protocol.Egress {
+	if e.Source == nil {
+		e.Source = &protocol.EgressSource{}
+	}
+	for _, p := range []**protocol.EgressPolicy{&e.Harness, &e.Repository} {
+		w := protocol.EgressPolicy{}
+		if *p != nil {
+			w = **p
+		}
+		if w.Hosts == nil {
+			w.Hosts = []protocol.EgressHost{}
+		}
+		if w.UDP == nil {
+			w.UDP = []protocol.EgressUDP{}
+		}
+		if w.Private == nil {
+			w.Private = []protocol.EgressPrivate{}
+		}
+		*p = &w
+	}
+	if e.CredentialHosts == nil {
+		e.CredentialHosts = []string{}
+	}
+	return e
 }
 
 // live returns the attempt's lease when id holds it live.

@@ -8,6 +8,7 @@ package fakemachine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,24 @@ type Backend struct {
 	mu       sync.Mutex
 	machines []*Machine
 	foreign  []machine.Listed
+	refused  map[string][]string
+}
+
+// Refuse records that the machine named name, now or once it exists,
+// was refused host, as smolvm records an egress refusal.
+func (b *Backend) Refuse(name, host string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refused == nil {
+		b.refused = map[string][]string{}
+	}
+	b.refused[name] = append(b.refused[name], host)
+}
+
+// EgressEvent is one refusal as the fake prints it.
+type EgressEvent struct {
+	Host   string `json:"host"`
+	Action string `json:"action"`
 }
 
 // Name implements [machine.Backend].
@@ -109,7 +128,7 @@ func (b *Backend) Create(_ context.Context, spec machine.Spec) (machine.Machine,
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Machine{spec: spec, root: root, ctx: ctx, cancel: cancel, addrs: map[string]string{}}
+	m := &Machine{b: b, spec: spec, root: root, ctx: ctx, cancel: cancel, addrs: map[string]string{}}
 	for _, f := range spec.Forwards {
 		var lc net.ListenConfig
 		ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
@@ -159,6 +178,7 @@ type ExecRecord struct {
 
 // Machine is a fake machine.
 type Machine struct {
+	b         *Backend
 	spec      machine.Spec
 	root      string
 	ctx       context.Context
@@ -280,6 +300,23 @@ func (m *Machine) Stop(context.Context) error {
 		m.stoppedAt = time.Now()
 	}
 	return nil
+}
+
+// EgressEvents implements [machine.EgressEventer]: the refusals
+// [Backend.Refuse] recorded, while the machine is not deleted, as
+// smolvm forgets a deleted machine's.
+func (m *Machine) EgressEvents(context.Context) ([]byte, error) {
+	if m.Deleted() {
+		return nil, errors.New("fakemachine: machine is deleted")
+	}
+	m.b.mu.Lock()
+	hosts := slices.Clone(m.b.refused[m.spec.Name])
+	m.b.mu.Unlock()
+	events := make([]EgressEvent, 0, len(hosts))
+	for _, h := range hosts {
+		events = append(events, EgressEvent{Host: h, Action: "refused"})
+	}
+	return json.Marshal(events)
 }
 
 // Delete implements [machine.Machine]. The directory stays, so a test

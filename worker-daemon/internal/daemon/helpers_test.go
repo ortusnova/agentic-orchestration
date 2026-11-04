@@ -102,6 +102,28 @@ func fakeAgent() int {
 	} else if d, err := time.ParseDuration(os.Getenv("AGENT_DELAY")); err == nil {
 		time.Sleep(d)
 	}
+	// AGENT_DIRECT_HOSTS: hosts the agent's HTTP client must reach
+	// directly, not through the egress proxy, by NO_PROXY.
+	if hosts := os.Getenv("AGENT_DIRECT_HOSTS"); hosts != "" {
+		for host := range strings.SplitSeq(hosts, ",") {
+			if p := proxyFor(host); p != "" {
+				fmt.Fprintf(os.Stderr, "%s would go through the proxy %s\n", host, p)
+				return 7
+			}
+			fmt.Printf("direct: %s\n", host)
+		}
+	}
+	// AGENT_PROXIED_HOSTS: hosts the agent's HTTP client must send to
+	// the egress proxy.
+	if hosts := os.Getenv("AGENT_PROXIED_HOSTS"); hosts != "" {
+		for host := range strings.SplitSeq(hosts, ",") {
+			if proxyFor(host) == "" {
+				fmt.Fprintf(os.Stderr, "%s would not go through the proxy\n", host)
+				return 7
+			}
+			fmt.Printf("proxied: %s\n", host)
+		}
+	}
 	if err := modelRequest(); err != nil {
 		fmt.Fprintln(os.Stderr, "model request:", err)
 		return 4
@@ -162,7 +184,16 @@ const testPR = `{"title": "Agent work", "body": "Adds work.txt."}`
 // through the proxy, then HTTP inside the tunnel (the fake egress flow
 // answers in clear).
 func modelRequest() error {
-	pu, err := url.Parse(os.Getenv("HTTPS_PROXY"))
+	host := os.Getenv("AGENT_MODEL_HOST")
+	if host == "" {
+		host = "model.example"
+	}
+	// An HTTP client picks the proxy by HTTPS_PROXY and NO_PROXY.
+	proxy := proxyFor(host)
+	if proxy == "" {
+		return fmt.Errorf("%s would not go through the egress proxy", host)
+	}
+	pu, err := url.Parse(proxy)
 	if err != nil {
 		return err
 	}
@@ -172,7 +203,7 @@ func modelRequest() error {
 	}
 	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := fmt.Fprintf(c, "CONNECT model.example:443 HTTP/1.1\r\nHost: model.example:443\r\nProxy-Authorization: Bearer guest-made-up\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprintf(c, "CONNECT %s:443 HTTP/1.1\r\nHost: %s:443\r\nProxy-Authorization: Bearer guest-made-up\r\n\r\n", host, host); err != nil {
 		return err
 	}
 	br := bufio.NewReader(c)
@@ -185,7 +216,7 @@ func modelRequest() error {
 		return fmt.Errorf("CONNECT: %s", resp.Status)
 	}
 	body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
-	if _, err := fmt.Fprintf(c, "POST /v1/messages HTTP/1.1\r\nHost: model.example\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
+	if _, err := fmt.Fprintf(c, "POST /v1/messages HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n%s", host, len(body), body); err != nil {
 		return err
 	}
 	resp, err = http.ReadResponse(br, nil)
@@ -198,6 +229,16 @@ func modelRequest() error {
 		return fmt.Errorf("model: %s", resp.Status)
 	}
 	return nil
+}
+
+// proxyFor is the proxy an HTTP client sends an HTTPS request to host
+// through, by HTTPS_PROXY and NO_PROXY, or "" when it goes direct.
+func proxyFor(host string) string {
+	u, err := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: host}})
+	if err != nil || u == nil {
+		return ""
+	}
+	return u.String()
 }
 
 func toolCall() error {
@@ -286,6 +327,10 @@ type setup struct {
 	nested any
 	// autoSlots leaves run_slots out, so the slots follow the host.
 	autoSlots bool
+	// workerID replaces the worker id "taichi". A real backend sets it,
+	// so the daemon under test never deletes a live worker's machines as
+	// strays.
+	workerID string
 }
 
 func defaults() setup {
@@ -318,8 +363,12 @@ func newHarness(t *testing.T, s setup) *harness {
 	if usage == nil {
 		usage = []string{self, "fake-usage"}
 	}
+	workerID := s.workerID
+	if workerID == "" {
+		workerID = "taichi"
+	}
 	doc := map[string]any{
-		"worker_id":     "taichi",
+		"worker_id":     workerID,
 		"control_plane": map[string]any{"url": fake.URL()},
 		"run_slots":     1,
 		"reserve":       map[string]any{"mem_gib": s.reserveMem},

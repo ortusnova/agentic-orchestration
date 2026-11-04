@@ -16,10 +16,12 @@ import (
 	"time"
 )
 
-// Smolvm drives the smolvm CLI. A machine gets no network flag, no
-// allowlist and no credential binding, so smolvm gives it no network:
-// its only way out is each forward, a host socket mounted with
-// --mount-socket and served on guest loopback by socat.
+// Smolvm drives the smolvm CLI. A machine gets no credential binding.
+// Without a [Network] it gets no network flag and no allowlist, so
+// smolvm gives it no network: its only way out is each forward, a host
+// socket mounted with --mount-socket and served on guest loopback by
+// socat. With one, it also gets smolvm's virtio-net stack, which
+// reaches only the network's hosts, UDP and private entries.
 type Smolvm struct {
 	// Binary is the smolvm program.
 	Binary string
@@ -73,6 +75,11 @@ func CreateArgs(spec Spec) ([]string, error) {
 	if spec.Nested {
 		args = append(args, "--nested")
 	}
+	netArgs, err := networkArgs(spec.Network)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, netArgs...)
 	var paths []string
 	if spec.Share != "" {
 		paths = append(paths, spec.Share)
@@ -100,6 +107,32 @@ func CreateArgs(spec Spec) ([]string, error) {
 	}
 	for _, f := range spec.Forwards {
 		args = append(args, "--mount-socket", f.HostSocket+":"+guestSocket(f.Name))
+	}
+	return args, nil
+}
+
+// networkArgs are the flags of design D8 for n: virtio-net with private
+// ranges blocked, and each host by name, each UDP entry and each private
+// entry. Never --allow-host, which takes a host's addresses at the
+// machine's start, and never --net, which opens the network unfiltered.
+func networkArgs(n *Network) ([]string, error) {
+	if n == nil {
+		return nil, nil
+	}
+	if len(n.Hosts) == 0 {
+		return nil, errors.New("smolvm: a network with no host pattern: --block-private alone leaves the internet open")
+	}
+	args := []string{"--net-backend", "virtio-net", "--block-private"}
+	for _, l := range []struct {
+		flag string
+		vs   []string
+	}{{"--allow-host-pattern", n.Hosts}, {"--allow-udp", n.UDP}, {"--allow-private", n.Private}} {
+		for _, v := range l.vs {
+			if v == "" || strings.HasPrefix(v, "-") || strings.ContainsAny(v, " \t\n,") {
+				return nil, fmt.Errorf("smolvm: %s value %q is empty or not one entry", l.flag, v)
+			}
+			args = append(args, l.flag, v)
+		}
 	}
 	return args, nil
 }
@@ -315,6 +348,20 @@ func (m *smolvmMachine) Exec(ctx context.Context, e Exec) (int, error) {
 		return -1, err
 	}
 	return 0, nil
+}
+
+// EgressEvents implements [EgressEventer] with smolvm machine
+// egress-events --json.
+func (m *smolvmMachine) EgressEvents(ctx context.Context) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, m.s.Binary, "machine", "egress-events", "--name", m.name, "--json") // #nosec G204 -- argv, no shell
+	cmd.Env = withEnv(m.env)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("smolvm machine egress-events: %w: %s", err, tail(stderr.String()))
+	}
+	return out, nil
 }
 
 func (m *smolvmMachine) Stop(ctx context.Context) error {

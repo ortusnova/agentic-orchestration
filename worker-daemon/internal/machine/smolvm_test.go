@@ -79,13 +79,15 @@ func TestSmolvmLifecycle(t *testing.T) {
 }
 
 // The machine gets no network of its own: no flag that would open one.
-func TestCreateArgsOpenNoNetwork(t *testing.T) {
+// Scenario: Absent. A machine of an offer with no run.egress gets no
+// network flag at all.
+func TestCreateArgsWithoutEgressHaveNoNetwork(t *testing.T) {
 	args, err := CreateArgs(Spec{Name: "m", Pack: "/p.smolmachine", Share: "/s", Forwards: []Forward{{Name: "egress", HostSocket: "/e.sock", GuestPort: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range args {
-		for _, bad := range []string{"--net", "--allow-host", "--credential", "--ssh-agent", "--secret-env"} {
+		for _, bad := range []string{"--net", "--allow-", "--block-private", "--credential", "--ssh-agent", "--secret-env"} {
 			if strings.HasPrefix(a, bad) {
 				t.Errorf("create carries %s", a)
 			}
@@ -93,6 +95,51 @@ func TestCreateArgsOpenNoNetwork(t *testing.T) {
 	}
 	if _, err := CreateArgs(Spec{Name: "m", Pack: "/p", Share: "/a:b"}); err == nil {
 		t.Error("a path with ':' should be refused")
+	}
+}
+
+// Scenario: The flags (design D8). A network gives virtio-net with private
+// ranges blocked, each host by name, each UDP and private entry, and the
+// socket forwards as before; never --allow-host or a bare --net.
+func TestCreateArgsOfANetwork(t *testing.T) {
+	args, err := CreateArgs(Spec{Name: "m", Pack: "/p.smolmachine", Share: "/s",
+		Forwards: []Forward{{Name: "egress", HostSocket: "/e.sock", GuestPort: 1}},
+		Network:  &Network{Hosts: []string{"models.opencode.ai", "*.githubusercontent.com"}, UDP: []string{"0.0.0.0/0:123"}, Private: []string{"192.168.122.0/24"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := " " + strings.Join(args, " ") + " "
+	for _, want := range []string{
+		" --net-backend virtio-net ", " --block-private ",
+		" --allow-host-pattern models.opencode.ai ", " --allow-host-pattern *.githubusercontent.com ",
+		" --allow-udp 0.0.0.0/0:123 ", " --allow-private 192.168.122.0/24 ",
+		" --mount-socket /e.sock:/run/worker-egress.sock ",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("create args lack%s: %s", want, line)
+		}
+	}
+	for i, a := range args {
+		switch {
+		case a == "--allow-host", a == "--net", strings.HasPrefix(a, "--net="), a == "--allow-cidr", a == "--allow-all":
+			t.Errorf("create carries %s: %s", a, line)
+		case strings.HasPrefix(a, "--allow-") && a != "--allow-host-pattern" && a != "--allow-udp" && a != "--allow-private":
+			t.Errorf("create carries %s: %s", a, line)
+		case a == "--net-backend" && args[i+1] != "virtio-net":
+			t.Errorf("net backend %s", args[i+1])
+		}
+	}
+	for _, bad := range []*Network{
+		{},
+		{Hosts: []string{"--net"}},
+		{Hosts: []string{"a.example,b.example"}},
+		{UDP: []string{""}},
+		{UDP: []string{"0.0.0.0/0:123"}},
+		{Private: []string{"192.168.122.0/24"}},
+	} {
+		if _, err := CreateArgs(Spec{Name: "m", Pack: "/p", Network: bad}); err == nil {
+			t.Errorf("network %+v should be refused", bad)
+		}
 	}
 }
 

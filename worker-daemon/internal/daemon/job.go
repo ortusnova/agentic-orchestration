@@ -48,6 +48,12 @@ type job struct {
 	// inputEnv holds the image's environment values (config
 	// smolvm.images env_files), KEY=VALUE, set before the machine starts.
 	inputEnv []string
+	// noProxy holds the hosts the machine reaches directly, as NO_PROXY
+	// writes them; empty for a machine with no network.
+	noProxy []string
+	// networked says the machine has a network, whose refusals are
+	// kept before it is deleted.
+	networked bool
 
 	ctx    context.Context
 	cancel context.CancelCauseFunc
@@ -241,6 +247,9 @@ func (j *job) dispose() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if j.networked {
+		j.d.keepRefusals(ctx, j.log, j.id(), j.attempt(), m)
+	}
 	if err := m.Delete(ctx); err != nil {
 		j.log.Error("deleting the machine failed", slog.String("machine", m.Name()), slog.String("error", err.Error()))
 		if state == protocol.MachineStopped {
@@ -322,6 +331,17 @@ func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
 	if img.LibDir != "" {
 		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
 	}
+	network, plan, err := offerNetwork(j.offer)
+	if err != nil {
+		return machine.Spec{}, config.Image{}, err
+	}
+	spec.Network = network
+	j.networked = network != nil
+	j.noProxy = nil
+	if network != nil {
+		j.noProxy = plan.NoProxy()
+	}
+	logNetwork(j.log, network, plan)
 	return spec, img, nil
 }
 
@@ -549,7 +569,10 @@ func (j *job) agentEnv(m machine.Machine) []string {
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
 		env = append(env, k+"="+proxy)
 	}
-	env = append(env, "NO_PROXY=127.0.0.1,localhost", "no_proxy=127.0.0.1,localhost",
+	// What the machine reaches directly bypasses the proxy; a credential
+	// host and every undeclared host go to the egress forward.
+	noProxy := strings.Join(append([]string{"127.0.0.1", "localhost"}, j.noProxy...), ",")
+	env = append(env, "NO_PROXY="+noProxy, "no_proxy="+noProxy,
 		MCPURLEnv+"=http://"+m.GuestAddr(protocol.FlowMCP)+"/",
 		StepFileEnv+"="+machine.GuestShare+"/"+StepFile)
 	return append(env, j.inputEnv...)
