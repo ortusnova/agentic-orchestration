@@ -263,6 +263,13 @@ func (f *Fake) Unserve(job string, attempt int) {
 	f.unserved[key(job, attempt)] = true
 }
 
+// Serve serves the attempt's stdio stream again after [Fake.Unserve].
+func (f *Fake) Serve(job string, attempt int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.unserved, key(job, attempt))
+}
+
 // Streams counts the stdio streams the attempt opened.
 func (f *Fake) Streams(job string, attempt int) int {
 	n := 0

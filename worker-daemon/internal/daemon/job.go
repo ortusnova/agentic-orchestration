@@ -74,11 +74,10 @@ func (j *job) listeners() []net.Addr {
 }
 
 // lost reports that the attempt is no longer the daemon's to report:
-// the control plane ended it, no longer wants it, or accepted no
-// heartbeat for longer than the lease.
+// the control plane ended it or no longer wants it.
 func (j *job) lost() bool {
 	cause := context.Cause(j.ctx)
-	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone) || errors.Is(cause, errSilent)
+	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone)
 }
 
 // release ends a job the control plane no longer wants: the agent stops
@@ -152,7 +151,7 @@ func (j *job) heartbeats() {
 			j.stopMachine()
 			return
 		case time.Since(accepted) > j.d.leaseDuration():
-			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine, sending no report",
+			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine and reporting the attempt failed",
 				slog.Duration("lease", j.d.leaseDuration()), slog.String("error", err.Error()))
 			j.cancel(errSilent)
 			j.stopMachine()
@@ -225,6 +224,9 @@ func (j *job) finish(work func(dir string) (string, string)) {
 	if j.lost() {
 		j.log.Info("attempt ended by the control plane; not reporting", slog.String("machine", machineState))
 		return
+	}
+	if errors.Is(context.Cause(j.ctx), errSilent) {
+		outcome, reason = protocol.OutcomeFailed, errSilent.Error()
 	}
 	j.d.report(j.log, j.id(), j.attempt(), protocol.Report{Outcome: outcome, Reason: reason, Machine: machineState})
 }
@@ -655,13 +657,16 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine, adopted bool) (in
 // again after it broke.
 var errStdioNotServed = errors.New("the stdio stream was not served again")
 
-// redialStdio dials the stdio stream until the control plane serves it.
-// It gives up when the job ends, as at a lost lease, when the control
-// plane refuses the job's token or answers that it no longer wants the
-// job, or after a lease of tries.
+// redialStdio dials the stdio stream until the control plane serves it,
+// for as long as the job's heartbeats renew its lease: the lease says
+// the control plane still wants the job, however long it takes to serve
+// the stream again, as a Sortie that adopts the run again may. It gives
+// up when the job ends, as when the lease is lost or can no longer be
+// renewed, when the control plane answers that it no longer wants the
+// job (410), or when it refuses the job's token.
 func (j *job) redialStdio(ctx context.Context) (*stdio.Conn, error) {
 	var conn *stdio.Conn
-	err := j.retry(ctx, "stdio stream", func() (bool, error) {
+	err := j.retryWhileLeased(ctx, "stdio stream", func() (bool, error) {
 		c, err := j.flows.DialStdio(ctx)
 		if err != nil {
 			refused, ok := errors.AsType[*stdio.RefusedError](err)
@@ -702,8 +707,19 @@ func retryableFlow(err error) bool {
 // between tries up to a heartbeat interval. A failure that says the
 // control plane no longer wants the job releases it.
 func (j *job) retry(ctx context.Context, what string, try func() (again bool, err error)) error {
+	return j.tries(ctx, what, true, try)
+}
+
+// retryWhileLeased calls try as retry does, with no bound of its own:
+// the job's heartbeats end the job, and so the tries, when its lease is
+// lost or can no longer be renewed.
+func (j *job) retryWhileLeased(ctx context.Context, what string, try func() (again bool, err error)) error {
+	return j.tries(ctx, what, false, try)
+}
+
+func (j *job) tries(ctx context.Context, what string, bounded bool, try func() (again bool, err error)) error {
 	wait := 100 * time.Millisecond
-	deadline := time.Now().Add(j.d.leaseDuration())
+	start := time.Now()
 	for {
 		again, err := try()
 		if err == nil {
@@ -716,7 +732,7 @@ func (j *job) retry(ctx context.Context, what string, try func() (again bool, er
 		if !again {
 			return err
 		}
-		if time.Now().After(deadline) {
+		if bounded && time.Since(start) > j.d.leaseDuration() {
 			return fmt.Errorf("%s: not served within a lease (%s): %w", what, j.d.leaseDuration(), err)
 		}
 		j.log.Debug("retrying", slog.String("what", what), slog.String("error", err.Error()), slog.Duration("in", wait))
