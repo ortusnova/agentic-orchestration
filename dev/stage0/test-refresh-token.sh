@@ -155,6 +155,10 @@ expect "a refusal that says neither revoked nor invalid: no restart, no fault" q
 run KIT_NONO=503 TOKEN= RETRYING="$waiting"
 expect "an API error: no restart, no fault" quiet
 
+timer=$KIT/units/ortus-stage0-token.timer
+expect "the timer probes every 10 minutes, with no systemd slack" \
+  eval "grep -qx 'OnUnitActiveSec=10min' '$timer' && grep -qx 'AccuracySec=1s' '$timer'"
+
 if grep -q 'fresh-token' "$CALLS.argv"; then echo "FAIL: a Claude token is on curl's command line"; failed=1; fi
 
 exit $failed

@@ -4,6 +4,7 @@ Description=Ortus Nova stage 0: probe the Claude token nono holds every 10 minut
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=10min
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target
