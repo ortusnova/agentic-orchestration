@@ -3,9 +3,10 @@
 # (control-plane/internal/egress/live_test.go): the pinned nono with the
 # control plane's egress profile and the credentials on p1, through the
 # egress gate, with a fake Sortie for introspection. Calls api.anthropic.com
-# once, with the Claude subscription, and Firecrawl's keyless search
-# (mcp.firecrawl.dev) once, for opencode's websearch. Uses its own ports and
-# CA, so the running units are untouched.
+# once, with the Claude subscription, and api.github.com once, with the kit's
+# GitHub token, each through its placeholder, and checks that nono refuses
+# every other host, a harness host such as registry.npmjs.org too. Uses its
+# own ports and CA, so the running units are untouched.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
