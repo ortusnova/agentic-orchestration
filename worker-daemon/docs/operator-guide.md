@@ -258,7 +258,8 @@ job's directory under `state_dir` keeps its record (`job.json`: the
 offer without its tokens, and the seed once the agent may run). The
 stdio stream breaks, and Sortie keeps the run and waits for it. At its
 next start, before its first check-in, the daemon adopts each job it
-left:
+left, and logs `jobs left by the last start` with how many it
+`adopted` and how many it did not (`not_adopted`):
 
 - It takes the job's offer again from Sortie with
   `POST /api/v1/workers/jobs/{job}/attempts/{attempt}/resume`, which

@@ -80,6 +80,9 @@ func TestADaemonRestartKeepsTheJob(t *testing.T) {
 	if n := h.fake.Count("resume", "ONS-7", 1); n != 1 {
 		t.Errorf("resumes %d, want the adopted job's one", n)
 	}
+	if !strings.Contains(h.logs.String(), `msg="jobs left by the last start" adopted=1 not_adopted=0`) {
+		t.Errorf("the new daemon did not sum up what it adopted:\n%s", h.logs.String())
+	}
 }
 
 // Scenario: a Sortie that cannot resume an attempt (no resume route).
