@@ -54,7 +54,7 @@ type Spec struct {
 	Network *Network
 }
 
-// Network is a machine's egress allowlist (design D8): smolvm's
+// Network is a machine's egress allowlist (designs D8 and D15): smolvm's
 // virtio-net stack with private ranges blocked, reaching only these.
 type Network struct {
 	// Hosts are DNS names, or *. and a domain, matched by name when
@@ -64,6 +64,9 @@ type Network struct {
 	UDP []string
 	// Private entries are private CIDRs the machine still reaches.
 	Private []string
+	// Deny are the CIDRs the machine is refused, checked before
+	// anything is allowed: the private ranges less Private (design D15).
+	Deny []string
 }
 
 // EgressEventer is a machine whose egress refusals can be read, as

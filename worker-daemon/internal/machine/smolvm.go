@@ -111,10 +111,12 @@ func CreateArgs(spec Spec) ([]string, error) {
 	return args, nil
 }
 
-// networkArgs are the flags of design D8 for n: virtio-net with private
-// ranges blocked, and each host by name, each UDP entry and each private
-// entry. Never --allow-host, which takes a host's addresses at the
-// machine's start, and never --net, which opens the network unfiltered.
+// networkArgs are the flags of designs D8, D15 and D16 for n: virtio-net
+// with private ranges blocked, each CIDR of the deny set denied, and
+// each host by name, each UDP entry and each private entry allowed.
+// Never --allow-host, which takes a host's addresses at the machine's
+// start, never --allow-private, which reopens nothing beside a pattern,
+// and never --net, which opens the network unfiltered.
 func networkArgs(n *Network) ([]string, error) {
 	if n == nil {
 		return nil, nil
@@ -122,11 +124,14 @@ func networkArgs(n *Network) ([]string, error) {
 	if len(n.Hosts) == 0 {
 		return nil, errors.New("smolvm: a network with no host pattern: --block-private alone leaves the internet open")
 	}
+	if len(n.Deny) == 0 {
+		return nil, errors.New("smolvm: a network with no deny set: a declared name could answer a private address")
+	}
 	args := []string{"--net-backend", "virtio-net", "--block-private"}
 	for _, l := range []struct {
 		flag string
 		vs   []string
-	}{{"--allow-host-pattern", n.Hosts}, {"--allow-udp", n.UDP}, {"--allow-private", n.Private}} {
+	}{{"--deny-cidr", n.Deny}, {"--allow-host-pattern", n.Hosts}, {"--allow-udp", n.UDP}, {"--allow-cidr", n.Private}} {
 		for _, v := range l.vs {
 			if v == "" || strings.HasPrefix(v, "-") || strings.ContainsAny(v, " \t\n,") {
 				return nil, fmt.Errorf("smolvm: %s value %q is empty or not one entry", l.flag, v)

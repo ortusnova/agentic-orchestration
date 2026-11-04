@@ -52,6 +52,7 @@ func logNetwork(log *slog.Logger, n *machine.Network, plan egress.Plan) {
 	for _, p := range plan.Private {
 		log.Info("egress: private range allowed", slog.String("cidr", p))
 	}
+	log.Info("egress: private ranges denied", slog.String("cidrs", strings.Join(n.Deny, ",")))
 	for _, h := range plan.Withheld {
 		log.Warn("egress: host left on the egress flow: it is or covers a credential host", slog.String("host", h))
 	}

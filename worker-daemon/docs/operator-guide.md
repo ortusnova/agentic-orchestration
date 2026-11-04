@@ -320,20 +320,33 @@ lower-case DNS name or `*.` and a name of two labels or more (never `*`,
 `*.com`, a port or an address), an empty `reason`, a CIDR with host bits
 set, a port outside 1-65535 (a string, `N` or `N-M`, or a number), or a
 `private` entry outside the private ranges (`10.0.0.0/8`,
-`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) refuses the job, as
-above. A valid one maps to smolvm's flags (design D8):
+`172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), or overlapping loopback
+or link-local, refuses the job, as above, naming the entry. A valid one
+maps to smolvm's flags (designs D8, D15 and D16):
 
 | `run.egress` | smolvm flag |
 |---|---|
 | present | `--net-backend virtio-net --block-private` |
+| present: design D15's ranges, less the `private` entries | `--deny-cidr <cidr>` for each of `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`, `127.0.0.0/8`, `fc00::/7`, `fe80::/10`, `::1/128`; a range that holds a `private` entry is split into the largest CIDRs that hold none of its addresses |
 | each host of `harness.hosts` and `repository.hosts`, once | `--allow-host-pattern <host>` (an exact name or `*.domain`) |
 | each `udp` entry | `--allow-udp <cidr>:<port>` (`<port>` is `N` or `N-M`) |
-| each `private` entry | `--allow-private <cidr>` |
+| each `private` entry | `--allow-cidr <cidr>` |
 | a host that is, or is covered by or covers, a host of `credential_hosts` or of `run.credentials` | nothing: it stays on the `egress` flow |
 | absent | no network flag: no network |
 
+smolvm lets a machine reach every address it resolved for an allowed
+name, private or not, so without the deny set a declared name whose
+answer is a LAN address would reach the LAN (DNS rebinding); smolvm
+checks `--deny-cidr` before anything is allowed. A `private` entry of
+`192.168.1.0/30`, for example, gives `--allow-cidr 192.168.1.0/30` and,
+for `192.168.0.0/16`, `--deny-cidr 192.168.0.0/24`, `192.168.1.4/30`,
+`192.168.1.8/29`, … `192.168.64.0/18`, `192.168.128.0/17`. Loopback and
+link-local are always denied whole. The job's log names the deny set
+(`egress: private ranges denied cidrs=…`).
+
 The daemon never uses `--allow-host`, which fixes a host's addresses when
-the machine starts, a bare `--net`, or any flag that widens egress. The
+the machine starts, `--allow-private`, which reopens nothing beside a
+pattern, a bare `--net`, or any flag that widens egress. The
 socket forwards stay as they are. A policy with no host allowed
 directly, every host a credential host, gives no network, even with
 `udp` or `private` entries: smolvm filters by name only beside a host
@@ -523,6 +536,26 @@ asks the machine's resolver (design D9). The end-to-end test runs the
 daemon under a worker id and a job id of its own, so on a worker host it
 neither deletes the live worker's machines as strays nor names a machine
 as one of its jobs.
+
+With `WORKER_DAEMON_E2E_PRIVATE_NAME`, a name whose answer is a private
+address with a listener on `WORKER_DAEMON_E2E_PRIVATE_PORT` (default
+`443`), the policy declares that name too, and the machine must be
+refused it by name and by address, with both refusals in
+`state_dir/refusals`, while `WORKER_DAEMON_E2E_ALLOWED` is still reached
+(design D15). The test resolves the name itself and fails if its answer
+is not a private address or nothing listens there. Give the name that
+answer without changing the host's DNS:
+`internal/daemon/testdata/private-name-netns.sh NAME ADDR` runs the test
+in a network namespace of its own (`pasta --config-net`) whose
+`/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers `NAME`
+with `ADDR` and forwards the rest to `$UPSTREAM` (default `9.9.9.9`). It
+needs pasta, unshare and dnsmasq; the other variables pass through, and
+the machine is deleted by name after the run:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/base.smolmachine \
+  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.202
+```
 
 Three end-to-end tests run the daemon against the real Sortie data plane:
 `TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and
