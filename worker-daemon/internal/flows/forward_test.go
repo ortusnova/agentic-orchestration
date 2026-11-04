@@ -2,6 +2,7 @@ package flows
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,22 +15,66 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 )
 
-// A plain proxied request reaches the egress flow with the job's token
-// in place of whatever the guest sent.
-func TestEgressPlainRequest(t *testing.T) {
-	seen := make(chan string, 1)
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen <- r.Header.Get("Proxy-Authorization") + " " + r.URL.String()
-		_, _ = w.Write([]byte("ok"))
+// connectProxy stands in for the egress flow behind the control plane's
+// front: it takes only CONNECT, records each one's target, token and job,
+// refuses the hosts in refuse with 407, and answers HTTP inside every
+// other tunnel itself, as a preview does.
+type connectProxy struct {
+	*httptest.Server
+	seen   chan string
+	inside chan string
+	refuse map[string]bool
+}
+
+func newConnectProxy(t *testing.T) *connectProxy {
+	p := &connectProxy{seen: make(chan string, 16), inside: make(chan string, 16), refuse: map[string]bool{}}
+	p.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "the egress flow takes CONNECT only", http.StatusMethodNotAllowed)
+			return
+		}
+		p.seen <- r.Host + " " + r.Header.Get("Proxy-Authorization") + " " + r.Header.Get(protocol.JobHeader)
+		if p.refuse[r.Host] {
+			http.Error(w, "the job token does not admit the egress flow", http.StatusProxyAuthRequired)
+			return
+		}
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = rw.WriteString("HTTP/1.1 200 Connection established\r\n\r\n")
+		_ = rw.Flush()
+		for {
+			req, err := http.ReadRequest(rw.Reader)
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, req.Body)
+			p.inside <- req.Method + " " + req.Host + req.URL.RequestURI() + " " + req.Header.Get("Proxy-Authorization")
+			resp := "home"
+			if _, err := fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(resp), resp); err != nil {
+				return
+			}
+		}
 	}))
-	defer up.Close()
+	t.Cleanup(p.Close)
+	return p
+}
+
+// A plain proxied request, such as a browser's for a preview's http://
+// address, reaches the egress flow as a CONNECT to its host's port 80 with
+// the job's token and identifier, and goes inside that tunnel with no
+// token: the control plane's front takes only CONNECT on its egress route.
+func TestEgressPlainRequestGoesThroughATunnel(t *testing.T) {
+	up := newConnectProxy(t)
 	u, _ := url.Parse(up.URL)
-	e := &Egress{Upstream: u, Token: secret.New("egress-token")}
+	e := &Egress{Upstream: u, Token: secret.New("egress-token"), Job: "ONS-7"}
 	fwd := httptest.NewServer(e)
 	defer fwd.Close()
 	pu, _ := url.Parse(fwd.URL)
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
-	req, _ := http.NewRequest(http.MethodGet, "http://model.example/v1/models", nil)
+	req, _ := http.NewRequest(http.MethodGet, "http://ons-7.preview.p1.example/api/auth/mode?x=1", nil)
 	req.Header.Set("Proxy-Authorization", "Bearer guest-made-up")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -37,15 +82,30 @@ func TestEgressPlainRequest(t *testing.T) {
 	}
 	b, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if string(b) != "ok" {
-		t.Fatalf("body %q", b)
+	if resp.StatusCode != http.StatusOK || string(b) != "home" {
+		t.Fatalf("answer %d %q", resp.StatusCode, b)
 	}
-	if got := <-seen; got != "Bearer egress-token http://model.example/v1/models" {
-		t.Errorf("upstream saw %q", got)
+	if got := <-up.seen; got != "ons-7.preview.p1.example:80 Bearer egress-token ONS-7" {
+		t.Errorf("the egress flow saw the CONNECT %q", got)
+	}
+	if got := <-up.inside; got != "GET ons-7.preview.p1.example/api/auth/mode?x=1 " {
+		t.Errorf("inside the tunnel %q, want the request with no token", got)
 	}
 	if e.Requests() != 1 {
 		t.Errorf("requests = %d", e.Requests())
 	}
+
+	// An explicit port is kept.
+	resp, err = client.Get("http://ons-7.preview.p1.example:8080/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got := <-up.seen; !strings.HasPrefix(got, "ons-7.preview.p1.example:8080 ") {
+		t.Errorf("the egress flow saw the CONNECT %q", got)
+	}
+	<-up.inside
+
 	// Not a proxy request.
 	resp, err = http.Get(fwd.URL + "/x")
 	if err != nil {
@@ -54,6 +114,26 @@ func TestEgressPlainRequest(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("origin-form request = %d, want 400", resp.StatusCode)
+	}
+}
+
+// A refusal of the tunnel reaches the guest as the egress flow gave it.
+func TestEgressPlainRequestRefused(t *testing.T) {
+	up := newConnectProxy(t)
+	up.refuse["ons-8.preview.p1.example:80"] = true
+	u, _ := url.Parse(up.URL)
+	fwd := httptest.NewServer(&Egress{Upstream: u, Token: secret.New("expired")})
+	defer fwd.Close()
+	pu, _ := url.Parse(fwd.URL)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
+	resp, err := client.Get("http://ons-8.preview.p1.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired || !strings.Contains(string(b), "does not admit") {
+		t.Errorf("answer %d %q, want the flow's 407", resp.StatusCode, b)
 	}
 }
 

@@ -280,7 +280,7 @@ func forwards(dir string) []machine.Forward {
 // host sockets in dir.
 func (j *job) serveForwarders(dir string) error {
 	eg := j.flows.Flows[protocol.FlowEgress]
-	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls}
+	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls, Job: j.id()}
 	mcp := &flows.MCP{Job: j.flows}
 	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
 	for _, f := range forwards(dir) {

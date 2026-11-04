@@ -25,6 +25,10 @@ const (
 	// DefaultIdentityHeader names the worker when the configuration
 	// names no other header.
 	DefaultIdentityHeader = "X-Sortie-Worker-Identity"
+	// JobHeader names the job on each CONNECT of the egress forwarder.
+	// It is a claim: the egress gate admits by the job token, and logs
+	// the claim only beside a refusal, as the job it was meant for.
+	JobHeader = "X-Sortie-Job"
 )
 
 // Routes of the control plane, under its URL.
