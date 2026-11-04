@@ -59,7 +59,7 @@ type Daemon struct {
 	// adopted starts each job adopted from the last start, once the
 	// first check-in is done.
 	adopted []func()
-	wg   sync.WaitGroup
+	wg      sync.WaitGroup
 
 	// The machines no Sortie started, as last listed, and when each
 	// was first seen.
