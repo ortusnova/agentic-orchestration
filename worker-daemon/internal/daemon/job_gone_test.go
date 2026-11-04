@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -74,12 +75,11 @@ func TestAJobCancelledWhileItRunsIsReleased(t *testing.T) {
 	released(t, h)
 }
 
-// Scenario: an older Sortie keeps the lease of a job but never serves
-// its stdio stream again. The daemon dials it again for no longer than a
-// lease, then ends the attempt: the machine is deleted and one failure
-// is reported, naming the stream.
-func TestAStreamNeverServedAgainEndsTheJob(t *testing.T) {
-	h := newHarness(t, defaults())
+// streamUnserved holds ONS-7's agent mid-turn, then breaks its stream
+// while Sortie keeps renewing the lease but serves no stream, as while a
+// Sortie that adopts the run again is slow to.
+func streamUnserved(t *testing.T, h *harness) {
+	t.Helper()
 	h.offerJob("ONS-7", 1, map[string]string{"AGENT_MODE": "hold-first"}, func(j *fakecp.Job) { j.KeepInputOpen = true })
 	h.waitFor("the agent to hold its turn", 20*time.Second, func() bool {
 		return strings.Contains(h.fake.StdioOutput("ONS-7", 1), "holding")
@@ -87,18 +87,70 @@ func TestAStreamNeverServedAgainEndsTheJob(t *testing.T) {
 	h.fake.Unserve("ONS-7", 1)
 	h.fake.Restart("ONS-7", 1)
 	h.fake.Up()
+}
+
+// waitLeases waits until n leases' worth of the job's heartbeats were
+// accepted after now.
+func waitLeases(t *testing.T, h *harness, n int) {
+	t.Helper()
+	since := len(h.fake.Beats("ONS-7", 1))
+	beats := 3 * n
+	h.waitFor(fmt.Sprintf("%d accepted heartbeats", beats), time.Duration(n)*10*time.Second, func() bool {
+		return len(h.fake.Beats("ONS-7", 1))-since >= beats
+	})
+}
+
+// Scenario: Sortie takes long to adopt the run again. While its
+// heartbeats renew the lease, the daemon keeps dialing the stream, for
+// as many leases as it takes; once Sortie serves the stream the job goes
+// on and succeeds, reported once.
+func TestASlowReadoptionKeepsTheJob(t *testing.T) {
+	h := newHarness(t, defaults())
+	streamUnserved(t, h)
+	waitLeases(t, h, 5)
+	if n := h.fake.Count("report", "ONS-7", 1); n != 0 {
+		t.Fatalf("the daemon reported %d times while Sortie renewed the lease: %s", n, h.describe())
+	}
+	if h.machine("ONS-7", 1).Deleted() {
+		t.Fatal("the daemon deleted the machine while Sortie renewed the lease")
+	}
+	h.fake.Serve("ONS-7", 1)
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	reports := h.reports("ONS-7", 1)
+	if len(reports) != 1 || reports[0].Outcome != protocol.OutcomeSucceeded {
+		raw, _ := json.Marshal(reports)
+		t.Errorf("reports %s, want one success", raw)
+	}
+}
+
+// Scenario: Sortie cancels the job while the daemon redials its
+// stream: the 410 releases it, the machine is deleted and nothing is
+// reported.
+func TestACancelWhileRedialingReleasesTheJob(t *testing.T) {
+	h := newHarness(t, defaults())
+	streamUnserved(t, h)
+	waitLeases(t, h, 2)
+	h.fake.Cancel("ONS-7", 1)
+	released(t, h)
+}
+
+// Scenario: Sortie refuses the heartbeats (503) for longer than the
+// lease while the stream is not served: the lease can no longer be
+// renewed, so the daemon ends the job, deletes the machine and reports
+// the attempt failed once.
+func TestHeartbeatsRefusedPastTheLeaseFailTheJob(t *testing.T) {
+	h := newHarness(t, defaults())
+	streamUnserved(t, h)
+	h.fake.AnswerHeartbeat("ONS-7", 1, http.StatusServiceUnavailable)
 	m := h.machine("ONS-7", 1)
-	h.waitFor("the report", 10*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
 	if !m.Deleted() {
-		t.Errorf("the machine was not deleted before the report")
+		t.Error("the machine was not deleted")
 	}
 	reports := h.reports("ONS-7", 1)
-	if len(reports) != 1 || reports[0].Outcome != protocol.OutcomeFailed || !strings.Contains(reports[0].Reason, "stdio") || reports[0].Machine != protocol.MachineDeleted {
+	if len(reports) != 1 || reports[0].Outcome != protocol.OutcomeFailed || !strings.Contains(reports[0].Reason, "lease") {
 		raw, _ := json.Marshal(reports)
-		t.Errorf("reports %s, want one failure naming the stdio stream, its machine deleted", raw)
-	}
-	if n := h.fake.Count("result", "ONS-7", 1) + h.fake.Count("usage", "ONS-7", 1); n != 0 {
-		t.Errorf("sent %d result or usage requests for an attempt whose stream never came back", n)
+		t.Errorf("reports %s, want one failure naming the lease", raw)
 	}
 }
 
