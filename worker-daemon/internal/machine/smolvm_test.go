@@ -98,21 +98,25 @@ func TestCreateArgsWithoutEgressHaveNoNetwork(t *testing.T) {
 	}
 }
 
-// Scenario: The flags (design D8). A network gives virtio-net with private
-// ranges blocked, each host by name, each UDP and private entry, and the
-// socket forwards as before; never --allow-host or a bare --net.
+// Scenario: The flags (designs D8, D15 and D16). A network gives
+// virtio-net with private ranges blocked, its deny set denied, each host
+// by name, each UDP entry, each private entry by --allow-cidr, and the
+// socket forwards as before; never --allow-host, --allow-private or a
+// bare --net.
 func TestCreateArgsOfANetwork(t *testing.T) {
+	deny := []string{"10.0.0.0/8", "192.168.0.0/17", "fc00::/7"}
 	args, err := CreateArgs(Spec{Name: "m", Pack: "/p.smolmachine", Share: "/s",
 		Forwards: []Forward{{Name: "egress", HostSocket: "/e.sock", GuestPort: 1}},
-		Network:  &Network{Hosts: []string{"models.opencode.ai", "*.githubusercontent.com"}, UDP: []string{"0.0.0.0/0:123"}, Private: []string{"192.168.122.0/24"}}})
+		Network: &Network{Hosts: []string{"models.opencode.ai", "*.githubusercontent.com"}, UDP: []string{"0.0.0.0/0:123"},
+			Private: []string{"192.168.128.0/17"}, Deny: deny}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	line := " " + strings.Join(args, " ") + " "
 	for _, want := range []string{
-		" --net-backend virtio-net ", " --block-private ",
+		" --net-backend virtio-net --block-private --deny-cidr 10.0.0.0/8 --deny-cidr 192.168.0.0/17 --deny-cidr fc00::/7 --allow-host-pattern ",
 		" --allow-host-pattern models.opencode.ai ", " --allow-host-pattern *.githubusercontent.com ",
-		" --allow-udp 0.0.0.0/0:123 ", " --allow-private 192.168.122.0/24 ",
+		" --allow-udp 0.0.0.0/0:123 ", " --allow-cidr 192.168.128.0/17 ",
 		" --mount-socket /e.sock:/run/worker-egress.sock ",
 	} {
 		if !strings.Contains(line, want) {
@@ -121,9 +125,9 @@ func TestCreateArgsOfANetwork(t *testing.T) {
 	}
 	for i, a := range args {
 		switch {
-		case a == "--allow-host", a == "--net", strings.HasPrefix(a, "--net="), a == "--allow-cidr", a == "--allow-all":
+		case a == "--allow-host", a == "--net", strings.HasPrefix(a, "--net="), a == "--allow-private", a == "--allow-all":
 			t.Errorf("create carries %s: %s", a, line)
-		case strings.HasPrefix(a, "--allow-") && a != "--allow-host-pattern" && a != "--allow-udp" && a != "--allow-private":
+		case strings.HasPrefix(a, "--allow-") && a != "--allow-host-pattern" && a != "--allow-udp" && a != "--allow-cidr":
 			t.Errorf("create carries %s: %s", a, line)
 		case a == "--net-backend" && args[i+1] != "virtio-net":
 			t.Errorf("net backend %s", args[i+1])
@@ -131,11 +135,13 @@ func TestCreateArgsOfANetwork(t *testing.T) {
 	}
 	for _, bad := range []*Network{
 		{},
-		{Hosts: []string{"--net"}},
-		{Hosts: []string{"a.example,b.example"}},
-		{UDP: []string{""}},
-		{UDP: []string{"0.0.0.0/0:123"}},
-		{Private: []string{"192.168.122.0/24"}},
+		{Hosts: []string{"ghcr.io"}},
+		{Hosts: []string{"--net"}, Deny: deny},
+		{Hosts: []string{"a.example,b.example"}, Deny: deny},
+		{Hosts: []string{"ghcr.io"}, Deny: []string{""}},
+		{UDP: []string{""}, Deny: deny},
+		{UDP: []string{"0.0.0.0/0:123"}, Deny: deny},
+		{Private: []string{"192.168.122.0/24"}, Deny: deny},
 	} {
 		if _, err := CreateArgs(Spec{Name: "m", Pack: "/p", Network: bad}); err == nil {
 			t.Errorf("network %+v should be refused", bad)

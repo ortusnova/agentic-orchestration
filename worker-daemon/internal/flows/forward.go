@@ -86,13 +86,29 @@ func (e *Egress) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport:     e.transport,
 		FlushInterval: -1,
 	}
+	r, cancel := detached(r)
+	defer cancel()
 	rp.ServeHTTP(w, r)
+}
+
+// detached is r with a context that the guest's half-close does not
+// cancel. net/http cancels a request's context when it reads EOF from
+// the client, and a guest that writes its request and then closes its
+// write side, as `printf ... | socat - TCP:...` does, still waits for
+// the answer: the upstream request ends when the upstream answers, or
+// when writing that answer to a guest that is gone fails. The context
+// has a Done channel, closed by the returned cancel, so that a
+// ReverseProxy does not watch CloseNotify, which the same EOF fires.
+func detached(r *http.Request) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	return r.WithContext(ctx), cancel
 }
 
 func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
 	e.requests.Add(1)
 	addr, useTLS := e.upstreamAddr()
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	// Not r's context: the guest's half-close cancels it (see detached).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
 	var d net.Dialer
 	up, err := d.DialContext(ctx, "tcp", addr)
@@ -216,6 +232,8 @@ func (m *MCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	m.calls.Add(1)
+	r, cancel := detached(r)
+	defer cancel()
 	m.rp.ServeHTTP(w, r)
 }
 

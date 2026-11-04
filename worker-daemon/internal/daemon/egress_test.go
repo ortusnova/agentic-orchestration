@@ -3,6 +3,9 @@ package daemon_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/netip"
 	"os"
 	"slices"
 	"strings"
@@ -34,8 +37,9 @@ func scenarioEgress() *protocol.Egress {
 }
 
 // Scenario: The flags. The offer's run.egress becomes the machine's
-// network, and its create arguments are those of design D8, with nothing
-// that allows the credential host.
+// network, and its create arguments are those of designs D8 and D15,
+// every private range denied, with nothing that allows the credential
+// host.
 //
 // Scenario: A model request. NO_PROXY holds the hosts allowed directly,
 // so the credential host and an undeclared host still go to the egress
@@ -67,6 +71,9 @@ func TestTheOffersPolicyIsTheMachinesNetwork(t *testing.T) {
 		if !strings.Contains(line, w) {
 			t.Errorf("create args lack%s: %s", w, line)
 		}
+	}
+	if got := flagValues(args, "--deny-cidr"); !slices.Equal(got, d15) {
+		t.Errorf("--deny-cidr = %v, want design D15's ranges %v", got, d15)
 	}
 	for _, a := range args {
 		if a == "--allow-host" || a == "--net" || strings.Contains(a, "anthropic") {
@@ -133,7 +140,7 @@ func TestNoPolicyNoNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, a := range args {
-		if strings.HasPrefix(a, "--net") || strings.HasPrefix(a, "--allow-") || a == "--block-private" {
+		if strings.HasPrefix(a, "--net") || strings.HasPrefix(a, "--allow-") || strings.HasPrefix(a, "--deny-") || a == "--block-private" {
 			t.Errorf("create args carry %s", a)
 		}
 	}
@@ -245,5 +252,88 @@ func TestRefusalsAreKeptWithTheRun(t *testing.T) {
 	}
 	if rec.Job != "ONS-30" || rec.Attempt != 1 || !strings.Contains(string(rec.Events), `"pastebin.com"`) {
 		t.Errorf("refusal record = %s, want pastebin.com for ONS-30 attempt 1", b)
+	}
+}
+
+// d15 is design D15's ranges, in its order.
+var d15 = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128"}
+
+// flagValues is the value of each flag in args, in order.
+func flagValues(args []string, flag string) []string {
+	var out []string
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			out = append(out, args[i+1])
+		}
+	}
+	return out
+}
+
+// Scenario: A declared private range. The entry is allowed by
+// --allow-cidr and left out of the deny set, every other address of
+// 192.168.0.0/16 is denied, and --allow-private is never passed.
+func TestADeclaredPrivateRange(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offerJob("ONS-7", 1, nil, func(j *fakecp.Job) {
+		j.Egress = &protocol.Egress{Repository: &protocol.EgressPolicy{
+			Hosts:   []protocol.EgressHost{{Host: "ghcr.io", Reason: "images"}},
+			Private: []protocol.EgressPrivate{{CIDR: "192.168.1.0/30", Reason: "the lab's switch"}},
+		}}
+	})
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+	args, err := machine.CreateArgs(h.machine("ONS-7", 1).Spec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := flagValues(args, "--allow-cidr"); !slices.Equal(got, []string{"192.168.1.0/30"}) {
+		t.Errorf("--allow-cidr = %v, want 192.168.1.0/30", got)
+	}
+	if slices.Contains(args, "--allow-private") {
+		t.Errorf("create args carry --allow-private: %v", args)
+	}
+	entry := netip.MustParsePrefix("192.168.1.0/30")
+	lan := netip.MustParsePrefix("192.168.0.0/16")
+	denied := new(big.Int)
+	for _, d := range flagValues(args, "--deny-cidr") {
+		p := netip.MustParsePrefix(d)
+		if p.Overlaps(entry) {
+			t.Errorf("--deny-cidr %s covers an address of 192.168.1.0/30", d)
+		}
+		if lan.Contains(p.Addr()) {
+			denied.Add(denied, new(big.Int).Lsh(big.NewInt(1), uint(32-p.Bits())))
+		}
+	}
+	if want := big.NewInt(1<<16 - 4); denied.Cmp(want) != 0 {
+		t.Errorf("--deny-cidr covers %s addresses of 192.168.0.0/16, want %s, every one but the entry's", denied, want)
+	}
+	if !strings.Contains(h.logs.String(), "egress: private ranges denied") {
+		t.Error("the job's log does not name the denied ranges")
+	}
+}
+
+// Scenario: Loopback stays denied. A private entry of loopback,
+// link-local or a public range gets no machine and one failed report
+// that names the entry.
+func TestAPrivateEntryOfLoopbackGetsNoMachine(t *testing.T) {
+	for i, cidr := range []string{"127.0.0.0/8", "fe80::/64", "8.8.8.0/24"} {
+		t.Run(cidr, func(t *testing.T) {
+			h := newHarness(t, defaults())
+			id := fmt.Sprintf("ONS-%d", 40+i)
+			h.offerJob(id, 1, nil, func(j *fakecp.Job) {
+				j.Egress = &protocol.Egress{Repository: &protocol.EgressPolicy{
+					Hosts:   []protocol.EgressHost{{Host: "ghcr.io", Reason: "images"}},
+					Private: []protocol.EgressPrivate{{CIDR: cidr, Reason: "r"}},
+				}}
+			})
+			h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", id, 1) > 0 })
+			time.Sleep(300 * time.Millisecond)
+			r := h.reports(id, 1)
+			if len(r) != 1 || r[0].Outcome != protocol.OutcomeFailed || !strings.Contains(r[0].Reason, "run.egress.repository.private[0].cidr: "+cidr) {
+				t.Fatalf("reports = %+v, want one failure naming %s", r, cidr)
+			}
+			if n := len(h.backend.Machines()); n != 0 {
+				t.Errorf("%d machines, want none", n)
+			}
+		})
 	}
 }

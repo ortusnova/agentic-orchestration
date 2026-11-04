@@ -49,6 +49,31 @@ var privateRanges = []netip.Prefix{
 	netip.MustParsePrefix("fc00::/7"),
 }
 
+// alwaysDenied are the loopback and link-local ranges: denied whole,
+// whatever the policy says.
+var alwaysDenied = []netip.Prefix{
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("::1/128"),
+}
+
+// DeniedRanges are the ranges of design D15, in its order: a machine
+// with a network is denied each of them, less the policy's private
+// entries, so that a declared name whose answer is a private address is
+// refused.
+var DeniedRanges = []netip.Prefix{
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("::1/128"),
+}
+
 // Parse reads run.egress strictly: an unknown member, a host that is
 // neither a DNS name nor *. and a domain, a CIDR or port that does not
 // parse, or a private entry outside the private ranges is an error that
@@ -118,7 +143,10 @@ func checkPolicy(at string, p *protocol.EgressPolicy) error {
 		if err != nil {
 			return fmt.Errorf("%s.private[%d].cidr: %w", at, i, err)
 		}
-		if !slices.ContainsFunc(privateRanges, func(r netip.Prefix) bool { return r.Bits() <= pf.Bits() && r.Contains(pf.Addr()) }) {
+		if slices.ContainsFunc(alwaysDenied, pf.Overlaps) {
+			return fmt.Errorf("%s.private[%d].cidr: %s overlaps loopback or link-local, which stay denied", at, i, pr.CIDR)
+		}
+		if !slices.ContainsFunc(privateRanges, func(r netip.Prefix) bool { return within(pf, r) }) {
 			return fmt.Errorf("%s.private[%d].cidr: %s is not within a private range", at, i, pr.CIDR)
 		}
 		if err := checkReason(pr.Reason); err != nil {
@@ -175,6 +203,57 @@ func cidr(s string) (netip.Prefix, error) {
 	return p, nil
 }
 
+// within reports whether every address of p is in r.
+func within(p, r netip.Prefix) bool { return r.Bits() <= p.Bits() && r.Contains(p.Addr()) }
+
+// DenySet is design D15's deny set for a policy's private entries, which
+// [Parse] has checked: each of [DeniedRanges], in order, less the
+// entries, the range that holds an entry split into the largest CIDRs
+// that hold no address of it, in address order. The union of the deny
+// set and the entries is the D15 ranges exactly.
+func DenySet(private []string) []string {
+	var keep []netip.Prefix
+	for _, s := range private {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			keep = append(keep, p.Masked())
+		}
+	}
+	var out []string
+	for _, r := range DeniedRanges {
+		for _, p := range subtract(r, keep) {
+			out = append(out, p.String())
+		}
+	}
+	return out
+}
+
+// subtract is p less every prefix of keep, as the largest CIDRs, in
+// address order.
+func subtract(p netip.Prefix, keep []netip.Prefix) []netip.Prefix {
+	if slices.ContainsFunc(keep, func(k netip.Prefix) bool { return within(p, k) }) {
+		return nil
+	}
+	if !slices.ContainsFunc(keep, p.Overlaps) {
+		return []netip.Prefix{p}
+	}
+	lo, hi := halves(p)
+	return append(subtract(lo, keep), subtract(hi, keep)...)
+}
+
+// halves splits p, which is shorter than a single address, in two.
+func halves(p netip.Prefix) (lo, hi netip.Prefix) {
+	bits := p.Bits()
+	lo = netip.PrefixFrom(p.Addr(), bits+1)
+	if p.Addr().Is4() {
+		b := p.Addr().As4()
+		b[bits/8] |= 0x80 >> (bits % 8)
+		return lo, netip.PrefixFrom(netip.AddrFrom4(b), bits+1)
+	}
+	b := p.Addr().As16()
+	b[bits/8] |= 0x80 >> (bits % 8)
+	return lo, netip.PrefixFrom(netip.AddrFrom16(b), bits+1)
+}
+
 // checkPort accepts a port, N, or a range, N-M, within 1 to 65535.
 func checkPort(s string) error {
 	lo, hi, isRange := strings.Cut(s, "-")
@@ -202,7 +281,8 @@ type Plan struct {
 	Hosts []Host
 	// UDP entries are cidr:port, each with --allow-udp.
 	UDP []string
-	// Private entries are CIDRs, each with --allow-private.
+	// Private entries are CIDRs, each with --allow-cidr and left out
+	// of the deny set (designs D15 and D16).
 	Private []string
 	// Withheld are the policies' hosts left out because they are, or
 	// cover, a credential host.
@@ -277,12 +357,15 @@ func (p Plan) Empty() bool { return len(p.Hosts) == 0 && len(p.UDP) == 0 && len(
 // beside a host pattern: --block-private with only --allow-udp or
 // --allow-private leaves the public internet and the LAN open (operator
 // guide, "smolvm's filters, as measured"), so a plan's UDP and private
-// entries alone give no network.
+// entries alone give no network. A network denies the private ranges
+// less the plan's private entries (design D15): smolvm otherwise lets
+// the machine reach any address resolved for an allowed name, private
+// or not.
 func (p Plan) Network() *machine.Network {
 	if len(p.Hosts) == 0 {
 		return nil
 	}
-	n := &machine.Network{UDP: slices.Clone(p.UDP), Private: slices.Clone(p.Private)}
+	n := &machine.Network{UDP: slices.Clone(p.UDP), Private: slices.Clone(p.Private), Deny: DenySet(p.Private)}
 	for _, h := range p.Hosts {
 		n.Hosts = append(n.Hosts, h.Name)
 	}
