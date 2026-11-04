@@ -33,8 +33,8 @@ const (
 	PollPath    = "/api/v1/workers/poll"
 )
 
-// AttemptPath returns the path of an attempt's heartbeat or report
-// route; action is "heartbeat" or "report".
+// AttemptPath returns the path of an attempt's heartbeat, report or
+// resume route; action is "heartbeat", "report" or "resume".
 func AttemptPath(job string, attempt int, action string) string {
 	return "/api/v1/workers/jobs/" + url.PathEscape(job) + "/attempts/" + strconv.Itoa(attempt) + "/" + action
 }
@@ -223,6 +223,15 @@ const (
 	ResultPRPart = "pr"
 	// MaxPRFile bounds the pr part.
 	MaxPRFile = 64 << 10
+	// ResultStatusPart holds the agent's .sortie/status.
+	ResultStatusPart = "status"
+	// MaxStatusFile bounds the status part.
+	MaxStatusFile = 4 << 10
+	// ResultCriteriaPart holds a criteria review's .sortie/criteria.json,
+	// its verdict on each acceptance criterion.
+	ResultCriteriaPart = "criteria"
+	// MaxCriteriaFile bounds the criteria part.
+	MaxCriteriaFile = 64 << 10
 )
 
 // Usage is the body the daemon posts on the usage flow: the attempt's

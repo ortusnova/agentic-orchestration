@@ -21,7 +21,7 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
-// Errors the worker API answers with 409.
+// Errors the worker API answers with 409, and with 410.
 var (
 	// ErrNotCheckedIn is a poll before the control plane knows the
 	// worker.
@@ -29,6 +29,10 @@ var (
 	// ErrLeaseLost is a heartbeat or report for an attempt the worker
 	// no longer holds.
 	ErrLeaseLost = errors.New("cp: lease lost")
+	// ErrJobGone is a heartbeat or report for an attempt the control
+	// plane no longer wants: it cancelled or finished it, or no longer
+	// knows it. Its message says why.
+	ErrJobGone = errors.New("cp: job gone")
 )
 
 // StatusError is any other refusal.
@@ -185,12 +189,37 @@ func (c *Client) Heartbeat(ctx context.Context, job string, attempt int, beat pr
 	switch status {
 	case http.StatusConflict:
 		return protocol.Lease{}, ErrLeaseLost
+	case http.StatusGone:
+		return protocol.Lease{}, fmt.Errorf("%w: %w", ErrJobGone, refusal("heartbeat", status, b))
 	case http.StatusOK:
 		var l protocol.Lease
 		_ = json.Unmarshal(b, &l)
 		return l, nil
 	}
 	return protocol.Lease{}, refusal("heartbeat", status, b)
+}
+
+// Resume takes an attempt's offer again, with new flow tokens, as a
+// daemon that restarted needs it: it keeps no token at rest. A 404 is a
+// control plane that cannot resume an attempt.
+func (c *Client) Resume(ctx context.Context, job string, attempt int) (*protocol.Offer, error) {
+	status, b, err := c.do(ctx, "resume", protocol.AttemptPath(job, attempt, "resume"), nil)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case http.StatusOK:
+		var o protocol.Offer
+		if err := json.Unmarshal(b, &o); err != nil {
+			return nil, fmt.Errorf("cp: resume: unreadable offer: %w", err)
+		}
+		return &o, nil
+	case http.StatusConflict:
+		return nil, ErrLeaseLost
+	case http.StatusGone:
+		return nil, fmt.Errorf("%w: %w", ErrJobGone, refusal("resume", status, b))
+	}
+	return nil, refusal("resume", status, b)
 }
 
 // Report ends an attempt with its outcome.
@@ -204,6 +233,8 @@ func (c *Client) Report(ctx context.Context, job string, attempt int, r protocol
 		return nil
 	case http.StatusConflict:
 		return ErrLeaseLost
+	case http.StatusGone:
+		return fmt.Errorf("%w: %w", ErrJobGone, refusal("report", status, b))
 	}
 	return refusal("report", status, b)
 }

@@ -120,6 +120,13 @@ func fakeAgent() int {
 	if err := os.WriteFile(".sortie/pr.json", []byte(testPR), 0o600); err != nil {
 		return 6
 	}
+	for env, file := range map[string]string{"AGENT_STATUS": ".sortie/status", "AGENT_CRITERIA": ".sortie/criteria.json"} {
+		if v := os.Getenv(env); v != "" {
+			if err := os.WriteFile(file, []byte(v), 0o600); err != nil {
+				return 6
+			}
+		}
+	}
 	gitSteps := [][]string{{"add", "-A"}, {"-c", "user.name=agent", "-c", "user.email=agent@example.invalid", "commit", "-q", "-m", "agent work"}}
 	switch os.Getenv("AGENT_GIT") {
 	case "none":
@@ -134,6 +141,12 @@ func fakeAgent() int {
 			fmt.Fprintln(os.Stderr, "git:", err)
 			return 7
 		}
+	}
+	// wait-input: the turn is done, and the agent waits for its input
+	// to close, as an agent between turns waits for the next prompt.
+	if os.Getenv("AGENT_MODE") == "wait-input" {
+		fmt.Println("waiting for input")
+		_, _ = io.Copy(io.Discard, in)
 	}
 	fmt.Println("done")
 	if code, err := strconv.Atoi(os.Getenv("AGENT_EXIT")); err == nil {
@@ -361,6 +374,27 @@ func (h *harness) start() {
 			h.t.Errorf("Run: %v", err)
 		}
 	}()
+}
+
+// restartDaemon stops the daemon as systemd stops it and starts a new
+// one on the same host: the same configuration, state directory and
+// machines.
+func (h *harness) restartDaemon() {
+	h.t.Helper()
+	h.stop()
+	h.startNewDaemon()
+}
+
+// startNewDaemon starts a new daemon on the host, after h.stop.
+func (h *harness) startNewDaemon() {
+	h.t.Helper()
+	d, err := daemon.New(daemon.Options{Config: h.cfg, Probe: h.probe, Backend: h.backend,
+		Log: slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.d, h.done = d, make(chan struct{})
+	h.start()
 }
 
 func (h *harness) stop() {

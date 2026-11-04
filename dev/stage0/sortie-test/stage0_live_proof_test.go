@@ -66,7 +66,8 @@ var liveProofPromptRules = []string{
 	"`Result: proven` or `Result: unproven`",
 	"`Commit: ` with the full sha of `git rev-parse HEAD`",
 	"the step table, one row per step you ran, `| Step | Command | Result |`",
-	"sets the pull request's `live-proof` status, which Sortie's merge requires",
+	"sets the pull request's `live-proof` status, which the merge requires",
+	"lets the supervisor merge it once CI passes",
 	"Never rewrite a commit that is already pushed",
 	"Do not push",
 }
@@ -118,7 +119,7 @@ func TestStage0_ALiveProofRequestStartsTheLiveProofJob(t *testing.T) {
 func TestStage0_AHomelabLiveProofRunsOnTaichi(t *testing.T) {
 	cfg := loadStage0(t, "WORKFLOW.md")
 	repos := cfg.Environment.Remote.Repositories
-	i := slices.IndexFunc(repos, func(r config.SmolvmRepository) bool { return r.Name == "homelab" })
+	i := slices.IndexFunc(repos, func(r config.Repository) bool { return r.Name == "homelab" })
 	if i < 0 {
 		t.Fatal("the workflow lists no homelab repository")
 	}
@@ -248,8 +249,10 @@ func TestStage0_TheReviewNamesALiveCriterion(t *testing.T) {
 		"A criterion that needs a live run this machine cannot do",
 		"is settled by a live proof, not by reasoning about it",
 		"`live proof needed:`",
+		"record its verdict `live-proof`",
 		"Do not stop `blocked` for it",
-		"Sortie does not merge the pull request until that job's result comment proves the criterion at its head",
+		"Sortie does not merge the pull request; the supervisor requests a live-proof job",
+		"merges the pull request only once that job's result comment proves the criterion at its head",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("review prompt lacks %q", want)
@@ -258,14 +261,14 @@ func TestStage0_TheReviewNamesALiveCriterion(t *testing.T) {
 }
 
 // The triage passes over a live-proof job's result comment, which the kit
-// reads, as it does over the preview's: it starts no fix run.
+// reads, and over a click-proofs record, which Sortie's merge reads: it
+// starts no fix run. It lets the kit's preview comment through, which starts
+// the review on the preview.
 func TestStage0_TheTriagePassesOverALiveProofResult(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("no node on PATH: the machines run the triage with the pack's node")
-	}
-	script := loadStage0(t, "WORKFLOW.md").Reactions["review_comments"].Triage.Script
 	result := map[string]any{"id": "issuecomment-3", "reviewer": "brian", "body": liveProofResultMarker + "\nResult: proven\nCommit: deadbeef\n"}
 	operator := map[string]any{"id": "issuecomment-4", "reviewer": "brian", "body": "Quote " + liveProofResultMarker + " in the docs."}
+	preview := map[string]any{"id": "issuecomment-5", "reviewer": "brian", "body": previewComment(uiHeadSHA)}
+	record := map[string]any{"id": "issuecomment-6", "reviewer": "brian", "body": ClickProofsMarker + " " + uiHeadSHA + "\n\n- The worker column: pass."}
 	for _, tc := range []struct {
 		name     string
 		comments []map[string]any
@@ -274,28 +277,46 @@ func TestStage0_TheTriagePassesOverALiveProofResult(t *testing.T) {
 		{"the result", []map[string]any{result}, "handled"},
 		{"an operator's comment that names the marker", []map[string]any{operator}, "dispatch-agent"},
 		{"both", []map[string]any{result, operator}, "dispatch-agent"},
+		{"the preview's comment", []map[string]any{preview}, "dispatch-agent"},
+		{"the result and the preview's comment", []map[string]any{result, preview}, "dispatch-agent"},
+		{"a click-proofs record", []map[string]any{record}, "handled"},
+		{"a click-proofs record and an operator's comment", []map[string]any{record, operator}, "dispatch-agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			input, out := filepath.Join(dir, "input.json"), filepath.Join(dir, "result.json")
-			doc, _ := json.Marshal(map[string]any{"schema_version": 1, "reaction_kind": "review", "subject": tc.comments})
-			if err := os.WriteFile(input, doc, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			cmd := exec.Command("sh", "-c", script)
-			cmd.Dir = dir
-			cmd.Env = append(os.Environ(), "SORTIE_REACTION_KIND=review", "SORTIE_REACTION_INPUT="+input, "SORTIE_REACTION_RESULT="+out)
-			if b, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("triage: %v: %s", err, b)
-			}
-			raw, err := os.ReadFile(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got struct{ Disposition string }
-			if err := json.Unmarshal(raw, &got); err != nil || got.Disposition != tc.want {
-				t.Errorf("disposition = %q (%v), want %s", got.Disposition, err, tc.want)
+			if got := runTriage(t, tc.comments); got != tc.want {
+				t.Errorf("disposition = %q, want %s", got, tc.want)
 			}
 		})
 	}
+}
+
+// runTriage runs the kit's review_comments triage on comments, as Sortie
+// runs it on the machine, and returns its disposition.
+func runTriage(t *testing.T, comments []map[string]any) string {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("no node on PATH: the machines run the triage with the pack's node")
+	}
+	script := loadStage0(t, "WORKFLOW.md").Reactions["review_comments"].Triage.Script
+	dir := t.TempDir()
+	input, out := filepath.Join(dir, "input.json"), filepath.Join(dir, "result.json")
+	doc, _ := json.Marshal(map[string]any{"schema_version": 1, "reaction_kind": "review", "subject": comments})
+	if err := os.WriteFile(input, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "SORTIE_REACTION_KIND=review", "SORTIE_REACTION_INPUT="+input, "SORTIE_REACTION_RESULT="+out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("triage: %v: %s", err, b)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Disposition string }
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("triage result %s: %v", raw, err)
+	}
+	return got.Disposition
 }

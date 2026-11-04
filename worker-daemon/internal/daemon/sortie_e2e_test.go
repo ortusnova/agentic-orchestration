@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,7 +118,18 @@ func sortieBins(t *testing.T) (sortie, edge string) {
 // .sortie/pr.json, and ends the turn. It exits when its input closes.
 // It reports no usage and streams no output on the protocol, so the
 // worker's usage reports alone decide how Sortie accounts for the run.
+// With the argument hold, it answers no prompt: the turn lasts until
+// the agent's input closes.
 func fakeACPAgent() int {
+	hold := len(os.Args) > 2 && os.Args[2] == "hold"
+	// hold-first holds the first start's turn only: a later start in
+	// the same workspace works.
+	if len(os.Args) > 2 && os.Args[2] == "hold-first" {
+		if _, err := os.Stat(".held"); errors.Is(err, os.ErrNotExist) {
+			_ = os.WriteFile(".held", nil, 0o600)
+			hold = true
+		}
+	}
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 8<<20)
 	out := json.NewEncoder(os.Stdout)
@@ -139,6 +151,8 @@ func fakeACPAgent() int {
 				"agentInfo": map[string]any{"name": "fake-acp-agent", "version": "1"}})
 		case msg.Method == "session/new":
 			answer(msg.ID, map[string]any{"sessionId": "fake-session-1"})
+		case msg.Method == "session/prompt" && hold:
+			fmt.Fprintln(os.Stderr, "fake-acp-agent: holding the turn")
 		case msg.Method == "session/prompt":
 			if err := acpWork(); err != nil {
 				fmt.Fprintln(os.Stderr, "fake-acp-agent:", err)
@@ -372,11 +386,38 @@ type sortieRun struct {
 	nono     *fakeNono
 	upstream string
 	api      string
+	dir      string
+	// newDaemon builds a daemon on the run's host; stopDaemon stops the
+	// one running.
+	newDaemon  func() *daemon.Daemon
+	stopDaemon func()
+}
+
+// startDaemon starts a daemon on the run's host, stopped at the test's
+// end unless stopped before.
+func (r *sortieRun) startDaemon() {
+	d := r.newDaemon()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := d.Run(ctx); err != nil {
+			r.t.Errorf("daemon: %v", err)
+		}
+	}()
+	var once sync.Once
+	r.stopDaemon = func() { once.Do(func() { cancel(); <-done }) }
+	stop := r.stopDaemon
+	r.t.Cleanup(stop)
 }
 
 type sortieSetup struct {
 	// usage is the daemon's usage command; nil configures none.
 	usage []string
+	// hold makes the agent hold its turn until its input closes.
+	hold bool
+	// holdFirst holds the first agent start's turn only.
+	holdFirst bool
 }
 
 const e2eWorkflow = `---
@@ -400,7 +441,7 @@ workspace:
 db_path: {{dir}}/sortie.db
 agent:
   kind: agent-client-protocol
-  command: {{agent}} fake-acp-agent
+  command: {{agent}} fake-acp-agent{{agent_args}}
   max_turns: 1
   read_timeout_ms: 30000
 environment:
@@ -433,7 +474,7 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	r := &sortieRun{t: t, forge: newFakeGitea(t), nono: newFakeNono(t), upstream: filepath.Join(dir, "upstream.git")}
+	r := &sortieRun{t: t, forge: newFakeGitea(t), nono: newFakeNono(t), upstream: filepath.Join(dir, "upstream.git"), dir: dir}
 
 	// The local forge's repository: main with one commit.
 	runGit(t, dir, "init", "-q", "--bare", "upstream.git")
@@ -450,8 +491,15 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
   "priority": 1, "state": "Todo", "labels": [], "url": "http://tracker.invalid/ONS-7"}]`
 	sortiePort, edgePort := freePort(t), freePort(t)
 	r.api = "http://127.0.0.1:" + strconv.Itoa(sortiePort)
+	agentArgs := ""
+	if s.hold {
+		agentArgs = " hold"
+	}
+	if s.holdFirst {
+		agentArgs = " hold-first"
+	}
 	wf := strings.NewReplacer("{{dir}}", dir, "{{forge}}", r.forge.URL, "{{sortie_port}}", strconv.Itoa(sortiePort),
-		"{{edge_port}}", strconv.Itoa(edgePort), "{{agent}}", self).Replace(e2eWorkflow)
+		"{{edge_port}}", strconv.Itoa(edgePort), "{{agent}}", self, "{{agent_args}}", agentArgs).Replace(e2eWorkflow)
 	nonoAddr := strings.TrimPrefix(r.nono.URL, "http://")
 	edgeCfg, _ := json.Marshal(map[string]any{
 		"sortie": r.api, "control_token_file": filepath.Join(dir, "sortie-token"),
@@ -519,26 +567,20 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 	r.daemon = &syncBuffer{}
 	r.backend = &fakemachine.Backend{Dir: t.TempDir()}
 	probe := &fakeProbe{s: hostinfo.Snapshot{OS: "linux", Arch: "amd64", CPUs: 8, MemAvailableGiB: 32, DiskAvailableGiB: 100}}
-	d, err := daemon.New(daemon.Options{Config: cfg, Probe: probe, Backend: r.backend,
-		Log: slog.New(slog.NewTextHandler(r.daemon, &slog.HandlerOptions{Level: slog.LevelDebug}))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if err := d.Run(ctx); err != nil {
-			t.Errorf("daemon: %v", err)
+	r.newDaemon = func() *daemon.Daemon {
+		d, err := daemon.New(daemon.Options{Config: cfg, Probe: probe, Backend: r.backend,
+			Log: slog.New(slog.NewTextHandler(r.daemon, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+		if err != nil {
+			t.Fatal(err)
 		}
-	}()
+		return d
+	}
 	t.Cleanup(func() {
-		cancel()
-		<-done
 		if t.Failed() {
 			t.Logf("daemon log:\n%s", r.daemon.String())
 		}
 	})
+	r.startDaemon()
 	return r
 }
 
@@ -695,5 +737,75 @@ func TestUnknownAmountOverTheWire(t *testing.T) {
 	}
 	if got.Unaccounted < 1 || got.TokensMeasured {
 		t.Errorf("run = measured %v, unaccounted turns %d; want spend occurred, amount unknown", got.TokensMeasured, got.Unaccounted)
+	}
+}
+
+// Scenario: Sortie cancels a job over the wire. ONS-7 moves to a
+// terminal state while its agent holds the turn on the worker, and
+// Sortie cancels the run. The worker releases the job: its machine is
+// deleted and no report of the attempt is accepted. A Sortie that
+// answers 410 for a job it no longer wants makes the daemon log the
+// release.
+func TestACancelledJobIsReleasedOverTheWire(t *testing.T) {
+	r := newSortieRun(t, sortieSetup{hold: true})
+	r.waitFor("the agent to hold its turn", 60*time.Second, func() bool {
+		return strings.Contains(r.daemon.String(), `msg="agent starting" job=ONS-7 attempt=1`) &&
+			strings.Contains(r.sortie.out.String(), "turn started")
+	})
+	machines := r.backend.Machines()
+	if len(machines) != 1 {
+		t.Fatalf("machines %d, want ONS-7's one", len(machines))
+	}
+	issues := `[{"id": "id-ONS-7", "identifier": "ONS-7", "title": "Speak the wire", "description": "One attempt over the wire.",
+  "priority": 1, "state": "Done", "labels": [], "url": "http://tracker.invalid/ONS-7"}]`
+	if err := os.WriteFile(filepath.Join(r.dir, "issues.json"), []byte(issues), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.waitFor("the machine to be deleted", 60*time.Second, machines[0].Deleted)
+	r.waitFor("the job to end", 30*time.Second, func() bool {
+		return strings.Contains(r.daemon.String(), "not reporting") || strings.Contains(r.daemon.String(), "report refused")
+	})
+	logs := r.daemon.String()
+	if strings.Contains(logs, `msg=reported job=ONS-7`) {
+		t.Errorf("Sortie accepted a report of the cancelled attempt:\n%s", logs)
+	}
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, "no longer wants the job") {
+			t.Log(line)
+		}
+	}
+}
+
+// Scenario: the worker daemon restarts over the wire. A real Sortie runs
+// ONS-7 while its agent holds the turn on the worker; the daemon stops
+// and a new one starts on the same host. The job's machine is kept, the
+// new daemon resumes the attempt, and Sortie keeps the run: it succeeds
+// as attempt 1, with one run and one machine.
+func TestADaemonRestartKeepsTheRunOverTheWire(t *testing.T) {
+	r := newSortieRun(t, sortieSetup{holdFirst: true})
+	r.waitFor("the agent to hold its turn", 60*time.Second, func() bool {
+		return strings.Contains(r.daemon.String(), `msg="agent starting" job=ONS-7 attempt=1`) &&
+			strings.Contains(r.sortie.out.String(), "turn started")
+	})
+	machines := r.backend.Machines()
+	if len(machines) != 1 {
+		t.Fatalf("machines %d, want ONS-7's one", len(machines))
+	}
+	r.stopDaemon()
+	if machines[0].Deleted() || !machines[0].StoppedAt().IsZero() {
+		t.Fatal("the stopping daemon stopped or deleted the job's machine")
+	}
+	r.startDaemon()
+	got := r.finishedRun()
+	if got.Status != "succeeded" || got.Attempt != 1 {
+		t.Fatalf("run = %+v, want attempt 1 succeeded", got)
+	}
+	if n := len(r.backend.Machines()); n != 1 {
+		t.Errorf("machines %d, want the one machine kept across the restart", n)
+	}
+	for _, want := range []string{"job adopted from the last start", "job resumed", `msg=reported job=ONS-7 attempt=1 outcome=succeeded`} {
+		if !strings.Contains(r.daemon.String(), want) {
+			t.Errorf("the daemon's log lacks %q", want)
+		}
 	}
 }

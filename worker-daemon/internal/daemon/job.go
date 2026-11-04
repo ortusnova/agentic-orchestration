@@ -73,12 +73,57 @@ func (j *job) listeners() []net.Addr {
 	return out
 }
 
-func (j *job) lost() bool { return errors.Is(context.Cause(j.ctx), errLeaseLost) }
+// lost reports that the attempt is no longer the daemon's to report:
+// the control plane ended it, no longer wants it, or accepted no
+// heartbeat for longer than the lease.
+func (j *job) lost() bool {
+	cause := context.Cause(j.ctx)
+	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone) || errors.Is(cause, errSilent)
+}
+
+// release ends a job the control plane no longer wants: the agent stops
+// with the job's context, run deletes the machine, which frees what the
+// job reserved, and nothing more is reported.
+func (j *job) release(why error) {
+	if j.ctx.Err() != nil {
+		return
+	}
+	j.log.Warn("the control plane no longer wants the job: stopping the agent and deleting the machine", slog.String("why", why.Error()))
+	j.cancel(errJobGone)
+}
+
+// gone reports whether err is the control plane's answer that it no
+// longer wants the job: 410 on the worker API or a flow.
+func gone(err error) bool {
+	if errors.Is(err, cp.ErrJobGone) {
+		return true
+	}
+	if se, ok := errors.AsType[*flows.StatusError](err); ok && se.Status == http.StatusGone {
+		return true
+	}
+	if re, ok := errors.AsType[*stdio.RefusedError](err); ok && re.Status == http.StatusGone {
+		return true
+	}
+	return false
+}
+
+// releaseIfGone releases the job when err says the control plane no
+// longer wants it, and returns err.
+func (j *job) releaseIfGone(err error) error {
+	if gone(err) {
+		j.release(err)
+	}
+	return err
+}
 
 // heartbeats renews the lease every heartbeat_ms until the run ends. A
-// 409 ends the attempt: the machine stops at once and nothing is
-// reported.
+// 409 ends the attempt and a 410 releases the job: the machine stops at
+// once and nothing is reported. Any other failure is retried at the
+// next beat, until no heartbeat was accepted for longer than the lease:
+// the control plane can then no longer hold the job, which ends as for
+// a 409.
 func (j *job) heartbeats() {
+	accepted := time.Now()
 	for {
 		interval := j.d.heartbeatInterval()
 		select {
@@ -95,12 +140,24 @@ func (j *job) heartbeats() {
 		default:
 		}
 		switch {
+		case err == nil:
+			accepted = time.Now()
 		case errors.Is(err, cp.ErrLeaseLost):
 			j.log.Warn("heartbeat answered 409: stopping the machine, sending no report")
 			j.cancel(errLeaseLost)
 			j.stopMachine()
 			return
-		case err != nil:
+		case gone(err):
+			j.release(err)
+			j.stopMachine()
+			return
+		case time.Since(accepted) > j.d.leaseDuration():
+			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine, sending no report",
+				slog.Duration("lease", j.d.leaseDuration()), slog.String("error", err.Error()))
+			j.cancel(errSilent)
+			j.stopMachine()
+			return
+		default:
 			j.log.Warn("heartbeat failed", slog.String("error", err.Error()))
 		}
 	}
@@ -125,21 +182,49 @@ func (j *job) stopMachine() {
 	j.mu.Unlock()
 }
 
+// left reports that the daemon is stopping and leaves the job, its
+// machine and its state to its next start.
+func (j *job) left() bool { return errors.Is(context.Cause(j.ctx), errLeave) }
+
 func (j *job) run() {
+	j.finish(j.execute)
+}
+
+// finish runs the job with work, then ends it: it deletes the machine
+// and reports the outcome, unless the control plane ended the job, or
+// the daemon is stopping, which leaves the job as it is for its next
+// start.
+func (j *job) finish(work func(dir string) (string, string)) {
 	defer j.d.finished(j)
 	defer close(j.done)
 	dir := j.d.JobDir(j.id(), j.attempt())
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		if !j.left() {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	defer j.closeServers()
 
-	outcome, reason := j.execute(dir)
+	outcome, reason := work(dir)
+	if j.left() {
+		j.mu.Lock()
+		m := j.m
+		j.mu.Unlock()
+		name := ""
+		if m != nil {
+			name = m.Name()
+		}
+		j.log.Info("job left running for the daemon's next start", slog.String("machine", name))
+		return
+	}
 	machineState := j.dispose()
+	if errors.Is(context.Cause(j.ctx), errJobGone) {
+		j.log.Info("job released: the control plane no longer wants the job; not reporting", slog.String("machine", machineState))
+		return
+	}
 	if j.lost() {
 		j.log.Info("attempt ended by the control plane; not reporting", slog.String("machine", machineState))
 		return
-	}
-	if errors.Is(context.Cause(j.ctx), errShutdown) {
-		outcome, reason = protocol.OutcomeFailed, errShutdown.Error()
 	}
 	j.d.report(j.log, j.id(), j.attempt(), protocol.Report{Outcome: outcome, Reason: reason, Machine: machineState})
 }
@@ -181,6 +266,63 @@ func failed(format string, args ...any) (string, string) {
 	return protocol.OutcomeFailed, fmt.Sprintf(format, args...)
 }
 
+// forwards are the job's forwarders, each a host socket in dir.
+func forwards(dir string) []machine.Forward {
+	return []machine.Forward{
+		{Name: protocol.FlowEgress, HostSocket: filepath.Join(dir, "egress.sock"), GuestPort: EgressGuestPort},
+		{Name: protocol.FlowMCP, HostSocket: filepath.Join(dir, "mcp.sock"), GuestPort: MCPGuestPort},
+	}
+}
+
+// serveForwarders serves the job's egress and mcp forwarders on their
+// host sockets in dir.
+func (j *job) serveForwarders(dir string) error {
+	eg := j.flows.Flows[protocol.FlowEgress]
+	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls}
+	mcp := &flows.MCP{Job: j.flows}
+	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
+	for _, f := range forwards(dir) {
+		s, err := flows.Serve(f.HostSocket, handlers[f.Name])
+		if err != nil {
+			return err
+		}
+		j.mu.Lock()
+		j.servers = append(j.servers, s)
+		j.mu.Unlock()
+	}
+	return nil
+}
+
+// spec is the spec of the job's machine, its state in dir.
+func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
+	pack, err := j.d.cfg.Smolvm.Pack(j.offer.Run.Image)
+	if err != nil {
+		return machine.Spec{}, config.Image{}, err
+	}
+	r := j.offer.Job.Requires
+	img := j.d.cfg.Smolvm.Images[j.offer.Run.Image]
+	user := j.d.cfg.Smolvm.User
+	if img.User != "" {
+		user = img.User
+	}
+	mounts, err := j.mounts(img)
+	if err != nil {
+		return machine.Spec{}, config.Image{}, fmt.Errorf("host folders: %w", err)
+	}
+	spec := machine.Spec{
+		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
+		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
+		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt()),
+			machine.LabelWorker: j.d.cfg.WorkerID},
+		Share: filepath.Join(dir, "share"), Forwards: forwards(dir),
+		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
+	}
+	if img.LibDir != "" {
+		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
+	}
+	return spec, img, nil
+}
+
 // execute runs the job and returns its outcome and reason.
 func (j *job) execute(dir string) (string, string) {
 	ctx := j.ctx
@@ -196,56 +338,24 @@ func (j *job) execute(dir string) (string, string) {
 	if err := os.Chmod(share, 0o777); err != nil { // #nosec G302 -- holds no secret; its parent is 0700
 		return failed("job directory: %v", err)
 	}
-
-	eg := j.flows.Flows[protocol.FlowEgress]
-	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls}
-	mcp := &flows.MCP{Job: j.flows}
-	forwards := []machine.Forward{
-		{Name: protocol.FlowEgress, HostSocket: filepath.Join(dir, "egress.sock"), GuestPort: EgressGuestPort},
-		{Name: protocol.FlowMCP, HostSocket: filepath.Join(dir, "mcp.sock"), GuestPort: MCPGuestPort},
+	if err := j.save(dir, nil); err != nil {
+		return failed("job state: %v", err)
 	}
-	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
-	for _, f := range forwards {
-		s, err := flows.Serve(f.HostSocket, handlers[f.Name])
-		if err != nil {
-			return failed("forwarder: %v", err)
-		}
-		j.mu.Lock()
-		j.servers = append(j.servers, s)
-		j.mu.Unlock()
+	if err := j.serveForwarders(dir); err != nil {
+		return failed("forwarder: %v", err)
 	}
 
 	seedFile := filepath.Join(share, "seed.bundle")
-	if err := j.fetchSeed(ctx, seedFile); err != nil {
+	if err := j.releaseIfGone(j.fetchSeed(ctx, seedFile)); err != nil {
 		return failed("workspace seed: %v", err)
 	}
 
-	pack, err := j.d.cfg.Smolvm.Pack(j.offer.Run.Image)
+	spec, img, err := j.spec(dir)
 	if err != nil {
 		return failed("%v", err)
-	}
-	r := j.offer.Job.Requires
-	img := j.d.cfg.Smolvm.Images[j.offer.Run.Image]
-	user := j.d.cfg.Smolvm.User
-	if img.User != "" {
-		user = img.User
-	}
-	mounts, err := j.mounts(img)
-	if err != nil {
-		return failed("host folders: %v", err)
 	}
 	if j.inputEnv, err = imageEnv(img); err != nil {
 		return failed("%v", err)
-	}
-	spec := machine.Spec{
-		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
-		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
-		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt())},
-		Share:  share, Forwards: forwards,
-		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
-	}
-	if img.LibDir != "" {
-		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
 	}
 	m, err := j.d.backend.Create(ctx, spec)
 	if err != nil {
@@ -255,7 +365,9 @@ func (j *job) execute(dir string) (string, string) {
 	j.m, j.state = m, protocol.MachineRunning
 	j.mu.Unlock()
 	if ctx.Err() != nil {
-		j.stopMachine()
+		if !j.left() {
+			j.stopMachine()
+		}
 		return failed("%v", context.Cause(ctx))
 	}
 	j.log.Info("machine running", slog.String("machine", m.Name()))
@@ -274,10 +386,27 @@ func (j *job) execute(dir string) (string, string) {
 			return failed("setup %d: %v", i+1, err)
 		}
 	}
+	// From here on the job is the agent's: a daemon that restarts
+	// adopts it and starts the agent again.
+	if err := j.save(dir, &seed); err != nil {
+		return failed("job state: %v", err)
+	}
+	return j.agentAndResult(m, share, seed, false)
+}
 
-	code, runErr := j.runAgent(ctx, m)
+// agentAndResult runs the agent, then reports usage and returns the
+// result. An adopted job dials the stream again before its agent
+// starts, as after a break.
+func (j *job) agentAndResult(m machine.Machine, share string, seed seed, adopted bool) (string, string) {
+	ctx := j.ctx
+	code, runErr := j.runAgent(ctx, m, adopted)
 	if ctx.Err() != nil {
 		return failed("%v", context.Cause(ctx))
+	}
+	if errors.Is(runErr, errStdioNotServed) {
+		// The attempt is not open on the control plane: it would take
+		// neither usage nor a result.
+		return failed("agent: %v", runErr)
 	}
 	// Usage goes before the result: once the control plane has the
 	// result it finishes the attempt, and a later report could find the
@@ -492,16 +621,22 @@ func (j *job) setup(ctx context.Context, m machine.Machine, script string) error
 // frame. A stream that breaks before the control plane closed the
 // agent's input, as when Sortie restarts, does not end the job: the
 // daemon stops the agent, keeps the machine, dials the stream again
-// until the control plane serves it or the lease ends, and starts the
+// until the control plane serves it, for at most a lease, and starts the
 // agent again in the same workspace, where the restarted control plane
 // resumes the agent's session.
-func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
+func (j *job) runAgent(ctx context.Context, m machine.Machine, adopted bool) (int, error) {
 	if j.offer.Run.Command == "" {
 		return -1, errors.New("the run names no command")
 	}
-	conn, err := j.flows.DialStdio(ctx)
+	var conn *stdio.Conn
+	var err error
+	if adopted {
+		conn, err = j.redialStdio(ctx)
+	} else {
+		conn, err = j.flows.DialStdio(ctx)
+	}
 	if err != nil {
-		return -1, err
+		return -1, j.releaseIfGone(err)
 	}
 	for {
 		code, broken, err := j.runAgentOnce(ctx, m, conn)
@@ -516,9 +651,14 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 	}
 }
 
+// errStdioNotServed is a stdio stream the control plane did not serve
+// again after it broke.
+var errStdioNotServed = errors.New("the stdio stream was not served again")
+
 // redialStdio dials the stdio stream until the control plane serves it.
-// It gives up when the job ends, as at a lost lease, or when the control
-// plane refuses the job's token: then it no longer knows the job.
+// It gives up when the job ends, as at a lost lease, when the control
+// plane refuses the job's token or answers that it no longer wants the
+// job, or after a lease of tries.
 func (j *job) redialStdio(ctx context.Context) (*stdio.Conn, error) {
 	var conn *stdio.Conn
 	err := j.retry(ctx, "stdio stream", func() (bool, error) {
@@ -530,6 +670,9 @@ func (j *job) redialStdio(ctx context.Context) (*stdio.Conn, error) {
 		conn = c
 		return false, nil
 	})
+	if err != nil && ctx.Err() == nil {
+		err = fmt.Errorf("%w: %w", errStdioNotServed, err)
+	}
 	return conn, err
 }
 
@@ -554,14 +697,27 @@ func retryableFlow(err error) bool {
 	return err != nil
 }
 
-// retry calls try until it succeeds, reports its failure final, or the
-// job ends, waiting longer between tries up to a heartbeat interval.
+// retry calls try until it succeeds, reports its failure final, the
+// job ends, or a lease has passed since the first try, waiting longer
+// between tries up to a heartbeat interval. A failure that says the
+// control plane no longer wants the job releases it.
 func (j *job) retry(ctx context.Context, what string, try func() (again bool, err error)) error {
 	wait := 100 * time.Millisecond
+	deadline := time.Now().Add(j.d.leaseDuration())
 	for {
 		again, err := try()
-		if err == nil || !again {
+		if err == nil {
+			return nil
+		}
+		if gone(err) {
+			j.release(err)
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		if !again {
 			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: not served within a lease (%s): %w", what, j.d.leaseDuration(), err)
 		}
 		j.log.Debug("retrying", slog.String("what", what), slog.String("error", err.Error()), slog.Duration("in", wait))
 		select {
@@ -583,7 +739,7 @@ func (j *job) runAgentOnce(ctx context.Context, m machine.Machine, conn *stdio.C
 	var broken atomic.Bool
 	stdin, stdinW := io.Pipe()
 	go func() {
-		closed, err := pumpStdin(conn, stdinW)
+		closed, err := pumpStdin(conn, stdinW, func() []byte { return j.sortieFiles(ctx, m) })
 		if !closed {
 			broken.Store(true)
 			stopAgent()
@@ -627,7 +783,9 @@ func (j *job) runAgentOnce(ctx context.Context, m machine.Machine, conn *stdio.C
 // until C, the stream's end, or a frame the control plane does not send,
 // and reports whether the input closed: C, or an agent that stopped
 // reading. A stream that ends without C is broken; the caller closes w.
-func pumpStdin(c *stdio.Conn, w *io.PipeWriter) (bool, error) {
+// On sortie-stdio/2 it answers each S frame with files, as an F frame,
+// without holding up the input.
+func pumpStdin(c *stdio.Conn, w *io.PipeWriter, files func() []byte) (bool, error) {
 	for {
 		typ, payload, err := c.ReadFrame()
 		switch {
@@ -637,6 +795,9 @@ func pumpStdin(c *stdio.Conn, w *io.PipeWriter) (bool, error) {
 			return false, err
 		case typ == stdio.StdinClosed:
 			return true, nil
+		case typ == stdio.SortieFilesRequest && c.Files():
+			go func() { _ = c.WriteFrame(stdio.SortieFiles, files()) }()
+			continue
 		case typ != stdio.Stdin:
 			return true, fmt.Errorf("unexpected stdio frame type %q from the control plane", typ)
 		}
@@ -655,14 +816,15 @@ func (l lenient) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// guestPRFile is the agent's pull request suggestion, returned beside
-// the bundle.
-const guestPRFile = machine.GuestWorkspace + "/.sortie/pr.json"
+// guestSortieDir is the agent's control directory, whose pull request
+// suggestion, status and criteria verdict are returned beside the bundle.
+const guestSortieDir = machine.GuestWorkspace + "/.sortie/"
 
 // returnResult returns the issue branch on the bundles flow: a bundle of
 // refs/heads/<branch> that leaves out the seed's commits (a branch with
 // nothing new is bundled as its tip alone), and the agent's
-// .sortie/pr.json beside it when there is one. The bundle part is left
+// .sortie/pr.json, .sortie/status and .sortie/criteria.json beside it
+// when there are. The bundle part is left
 // out when the machine has no issue branch.
 func (j *job) returnResult(ctx context.Context, m machine.Machine, share string, s seed) (string, error) {
 	ws := machine.GuestWorkspace
@@ -700,11 +862,17 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 		}
 		bundle = filepath.Join(share, "result.bundle")
 	}
-	pr, err := j.readPR(ctx, m)
+	pr, err := j.readSortieFile(ctx, m, "pr.json", protocol.MaxPRFile)
 	if err != nil {
 		return "", err
 	}
 	res.PR = pr
+	if res.Status, err = j.readSortieFile(ctx, m, "status", protocol.MaxStatusFile); err != nil {
+		return "", err
+	}
+	if res.Criteria, err = j.readSortieFile(ctx, m, "criteria.json", protocol.MaxCriteriaFile); err != nil {
+		return "", err
+	}
 	// A control plane that restarts takes the result once it is back.
 	if err := j.retry(ctx, "result", func() (bool, error) {
 		res.Bundle = nil
@@ -721,30 +889,53 @@ func (j *job) returnResult(ctx context.Context, m machine.Machine, share string,
 	}); err != nil {
 		return "", err
 	}
-	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", bundle != ""), slog.Bool("pr", pr != nil))
-	if pr != nil {
-		note += ", with .sortie/pr.json"
+	j.log.Info("result returned", slog.String("branch", s.Branch), slog.Bool("bundle", bundle != ""), slog.Bool("pr", pr != nil),
+		slog.Bool("status", res.Status != nil), slog.Bool("criteria", res.Criteria != nil))
+	for name, data := range map[string][]byte{"pr.json": pr, "status": res.Status, "criteria.json": res.Criteria} {
+		if data != nil {
+			note += ", with .sortie/" + name
+		}
 	}
 	return note, nil
 }
 
-// readPR returns the agent's .sortie/pr.json, or nil when it wrote
-// none. One over 64 KiB fails the return, as the control plane would
-// refuse it.
-func (j *job) readPR(ctx context.Context, m machine.Machine) ([]byte, error) {
+// sortieFiles is the answer to sortie-stdio/2's S frame: the agent's
+// .sortie files the result returns, as they are now, by file name. A
+// file that cannot be read is left out, as one the agent has not written;
+// the result reads it again.
+func (j *job) sortieFiles(ctx context.Context, m machine.Machine) []byte {
+	files := map[string][]byte{}
+	for name, limit := range map[string]int{"pr.json": protocol.MaxPRFile, "status": protocol.MaxStatusFile, "criteria.json": protocol.MaxCriteriaFile} {
+		data, err := j.readSortieFile(ctx, m, name, limit)
+		if err != nil {
+			j.log.Warn("a .sortie file asked for between turns is left out", slog.String("file", name), slog.String("error", err.Error()))
+			continue
+		}
+		if data != nil {
+			files[name] = data
+		}
+	}
+	b, _ := json.Marshal(files)
+	return b
+}
+
+// readSortieFile returns the agent's .sortie/<name>, or nil when it
+// wrote none. One over limit fails the return, as the control plane
+// would refuse it.
+func (j *job) readSortieFile(ctx context.Context, m machine.Machine, name string, limit int) ([]byte, error) {
 	var out bytes.Buffer
 	script := `test -f "$1" || exit 3; exec cat "$1"`
-	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestPRFile},
-		Stdout: &limited{w: &out, n: protocol.MaxPRFile + 1}, Stderr: io.Discard})
+	code, err := m.Exec(ctx, machine.Exec{Argv: []string{"sh", "-c", script, "sh", guestSortieDir + name},
+		Stdout: &limited{w: &out, n: limit + 1}, Stderr: io.Discard})
 	switch {
 	case err != nil:
-		return nil, fmt.Errorf("reading .sortie/pr.json: %w", err)
+		return nil, fmt.Errorf("reading .sortie/%s: %w", name, err)
 	case code == 3:
 		return nil, nil
 	case code != 0:
-		return nil, fmt.Errorf("reading .sortie/pr.json: exit status %d", code)
-	case out.Len() > protocol.MaxPRFile:
-		return nil, errors.New(".sortie/pr.json exceeds 64 KiB")
+		return nil, fmt.Errorf("reading .sortie/%s: exit status %d", name, code)
+	case out.Len() > limit:
+		return nil, fmt.Errorf(".sortie/%s exceeds %d bytes", name, limit)
 	}
 	return out.Bytes(), nil
 }

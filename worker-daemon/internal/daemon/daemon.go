@@ -106,8 +106,9 @@ func (d *Daemon) leaseDuration() time.Duration { return time.Duration(d.lease.Lo
 
 func (d *Daemon) jobsDir() string { return filepath.Join(d.cfg.StateDir, "jobs") }
 
-// Run works until ctx ends, then stops every job's machine, reports
-// those jobs as failed, and returns.
+// Run adopts the jobs the last start left, works until ctx ends, then
+// leaves every running job, its machine and its state to the next start,
+// reporting nothing, and returns.
 func (d *Daemon) Run(ctx context.Context) error {
 	if err := os.MkdirAll(d.jobsDir(), 0o700); err != nil {
 		return fmt.Errorf("daemon: state_dir: %w", err)
@@ -118,6 +119,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.backendOK.Store(true)
 	}
 	d.log.Info("worker daemon starting", slog.String("worker", d.cfg.WorkerID), slog.String("control_plane", d.cfg.ControlPlane.URL))
+	d.adopt(ctx)
 	backoff := time.Second
 	for {
 		err := d.checkIn(ctx)
@@ -127,6 +129,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.log.Warn("check-in failed; retrying", slog.String("error", err.Error()), slog.Duration("in", backoff))
 		select {
 		case <-ctx.Done():
+			d.shutdown()
 			return nil
 		case <-time.After(backoff):
 		}
@@ -364,6 +367,9 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 		case errors.Is(err, cp.ErrLeaseLost):
 			log.Warn("report refused: the lease is gone", slog.String("outcome", r.Outcome))
 			return
+		case errors.Is(err, cp.ErrJobGone):
+			log.Warn("report refused: the control plane no longer wants the job", slog.String("outcome", r.Outcome), slog.String("error", err.Error()))
+			return
 		case errors.As(err, &se) && se.Status < 500:
 			log.Error("report refused", slog.String("error", err.Error()))
 			return
@@ -379,7 +385,8 @@ func (d *Daemon) report(log *slog.Logger, id string, attempt int, r protocol.Rep
 
 var (
 	errLeaseLost = errors.New("the control plane ended the attempt: lease lost")
-	errShutdown  = errors.New("worker daemon shut down")
+	errJobGone   = errors.New("the control plane no longer wants the job")
+	errSilent    = errors.New("no heartbeat accepted for longer than the lease")
 )
 
 func (d *Daemon) shutdown() {
@@ -390,7 +397,7 @@ func (d *Daemon) shutdown() {
 	}
 	d.mu.Unlock()
 	for _, j := range jobs {
-		j.cancel(errShutdown)
+		j.cancel(errLeave)
 	}
 	done := make(chan struct{})
 	go func() { d.wg.Wait(); close(done) }()

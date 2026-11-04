@@ -99,6 +99,8 @@ type Machine interface {
 const (
 	// LabelJob is on every machine the daemon creates for a job.
 	LabelJob = "worker-daemon.job"
+	// LabelWorker names the worker whose daemon created the machine.
+	LabelWorker = "worker-daemon.worker"
 	// LabelSortieManaged is on every machine a Sortie's smolvm
 	// environment creates on its own host.
 	LabelSortieManaged = "sortie.managed"
@@ -119,6 +121,13 @@ func (l Listed) Unmanaged() bool {
 	_, job := l.Labels[LabelJob]
 	_, sortie := l.Labels[LabelSortieManaged]
 	return !job && !sortie
+}
+
+// Reopener is a backend that takes again a machine it created before,
+// as a daemon that restarts takes its jobs' machines: spec is the spec
+// the machine was created with. It returns nil when the machine is gone.
+type Reopener interface {
+	Reopen(ctx context.Context, spec Spec) (Machine, error)
 }
 
 // Lister is a backend that lists every machine on its host.

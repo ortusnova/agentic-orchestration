@@ -153,11 +153,16 @@ type Result struct {
 	Bundle io.Reader
 	// PR is the agent's .sortie/pr.json; nil leaves the part out.
 	PR []byte
+	// Status is the agent's .sortie/status; nil leaves the part out.
+	Status []byte
+	// Criteria is a criteria review's .sortie/criteria.json; nil leaves
+	// the part out.
+	Criteria []byte
 }
 
 // UploadResult returns the result on the bundles flow: POST
 // /jobs/{job}/attempts/{attempt}/result, multipart/form-data with the
-// part bundle and the optional part pr.
+// part bundle and the optional parts pr, status and criteria.
 func (j *Job) UploadResult(ctx context.Context, res Result) error {
 	path := protocol.ResultPath(j.ID, j.Attempt)
 	pr, pw := io.Pipe()
@@ -193,12 +198,22 @@ func writeResult(mw *multipart.Writer, res Result) error {
 			return err
 		}
 	}
-	if res.PR != nil {
-		w, err := part(protocol.ResultPRPart, "pr.json", "application/json")
+	for _, f := range []struct {
+		name, file, contentType string
+		data                    []byte
+	}{
+		{protocol.ResultPRPart, "pr.json", "application/json", res.PR},
+		{protocol.ResultStatusPart, "status", "text/plain", res.Status},
+		{protocol.ResultCriteriaPart, "criteria.json", "application/json", res.Criteria},
+	} {
+		if f.data == nil {
+			continue
+		}
+		w, err := part(f.name, f.file, f.contentType)
 		if err != nil {
 			return err
 		}
-		if _, err := w.Write(res.PR); err != nil {
+		if _, err := w.Write(f.data); err != nil {
 			return err
 		}
 	}
@@ -224,7 +239,8 @@ func (j *Job) PostUsage(ctx context.Context, u protocol.Usage) error {
 }
 
 // DialStdio opens the job's stdio stream: GET
-// /jobs/{job}/attempts/{attempt} with Upgrade: sortie-stdio/1. A ws or
+// /jobs/{job}/attempts/{attempt} with Upgrade: sortie-stdio/2, or
+// sortie-stdio/1 from a control plane that knows only that. A ws or
 // wss flow URL is dialled as http or https.
 func (j *Job) DialStdio(ctx context.Context) (*stdio.Conn, error) {
 	a := j.Flows[protocol.FlowStdio]

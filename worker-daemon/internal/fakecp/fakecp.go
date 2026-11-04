@@ -1,6 +1,6 @@
 // Package fakecp is a fake control plane for tests. It serves worker
 // API protocol 1 as Sortie does under environment.kind remote (the same
-// routes, bodies, header checks and 400, 401 and 409 answers), and the
+// routes, bodies, header checks and 400, 401, 409 and 410 answers), and the
 // five data-plane flows of each job it offers, each behind that job's
 // flow token. It records every request in order.
 package fakecp
@@ -51,6 +51,10 @@ type Job struct {
 	// KeepInputOpen leaves the agent's input open after StdioInput:
 	// no C frame is sent.
 	KeepInputOpen bool
+	// AskFilesAfter, once the agent's standard output holds it, has the
+	// fake ask a sortie-stdio/2 worker for the agent's .sortie files (S),
+	// as Sortie does after a turn; on the answer (F) it closes the input.
+	AskFilesAfter string
 }
 
 type lease struct {
@@ -58,6 +62,9 @@ type lease struct {
 	expires time.Time
 	ended   bool
 	lost    bool
+	// gone is an attempt Sortie cancelled: its heartbeat, report and
+	// flows answer 410 job_gone.
+	gone bool
 }
 
 // Fake is a fake control plane.
@@ -67,6 +74,8 @@ type Fake struct {
 	LeaseMS int64
 	// IdentityHeader names the worker; default X-Sortie-Worker-Identity.
 	IdentityHeader string
+	// NoResume answers the resume route 404, as a Sortie that has none.
+	NoResume bool
 
 	mu       sync.Mutex
 	events   []Event
@@ -80,6 +89,9 @@ type Fake struct {
 	// down answers every request 502, as a proxy in front of a Sortie
 	// that is restarting does.
 	down bool
+	// unserved holds the attempts whose stdio stream is answered 404,
+	// as an attempt Sortie has not opened, while their lease is kept.
+	unserved map[string]bool
 }
 
 // attemptData is what the worker sent on an attempt's flows.
@@ -94,6 +106,8 @@ type attemptData struct {
 	breaks int
 	result *Result
 	usage  []protocol.Usage
+	// sortieFiles is the worker's answer to the files request.
+	sortieFiles map[string][]byte
 }
 
 // Result is what the worker returned on the bundles flow.
@@ -102,6 +116,10 @@ type Result struct {
 	Bundle []byte
 	// PR is the pr part; nil when the worker left it out.
 	PR []byte
+	// Status is the status part; nil when the worker left it out.
+	Status []byte
+	// Criteria is the criteria part; nil when the worker left it out.
+	Criteria []byte
 	// ContentType is the request's media type.
 	ContentType string
 }
@@ -111,7 +129,8 @@ func key(job string, attempt int) string { return job + "#" + strconv.Itoa(attem
 // New starts a fake on loopback.
 func New() *Fake {
 	f := &Fake{LeaseMS: 3000, jobs: map[string]Job{}, tokens: map[string]map[string]string{}, leases: map[string]*lease{},
-		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{}}
+		workers: map[string]protocol.Declaration{}, answer: map[string]int{}, attempts: map[string]*attemptData{},
+		unserved: map[string]bool{}}
 	f.Server = httptest.NewServer(f)
 	return f
 }
@@ -208,6 +227,33 @@ func (f *Fake) Up() {
 	}
 }
 
+// Cancel ends the attempt as a Sortie that no longer wants the job
+// does: its heartbeat, report and flows answer 410 job_gone from now on,
+// and its open stdio stream, if any, is closed without the C frame.
+func (f *Fake) Cancel(job string, attempt int) {
+	f.mu.Lock()
+	k := key(job, attempt)
+	if l := f.leases[k]; l != nil {
+		l.gone = true
+	}
+	a := f.data(k)
+	c := a.stream
+	a.stream = nil
+	f.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// Unserve answers the attempt's stdio stream 404, as an attempt Sortie
+// has not opened, while its heartbeats keep the lease: the worker never
+// gets its stream back.
+func (f *Fake) Unserve(job string, attempt int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unserved[key(job, attempt)] = true
+}
+
 // Streams counts the stdio streams the attempt opened.
 func (f *Fake) Streams(job string, attempt int) int {
 	n := 0
@@ -290,6 +336,15 @@ func (f *Fake) Result(job string, attempt int) (Result, bool) {
 		return *r, true
 	}
 	return Result{}, false
+}
+
+// SortieFiles is the worker's answer to the request for the agent's
+// .sortie files, by file name.
+func (f *Fake) SortieFiles(job string, attempt int) (map[string][]byte, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	files := f.data(key(job, attempt)).sortieFiles
+	return files, files != nil
 }
 
 // Usage is the latest usage the worker reported for the attempt: its
@@ -387,6 +442,13 @@ func (f *Fake) workerAPI(w http.ResponseWriter, r *http.Request) {
 		f.heartbeat(w, id, job, attempt, body)
 	case "report":
 		f.report(w, id, job, attempt, body)
+	case "resume":
+		if f.NoResume {
+			http.NotFound(w, r)
+			f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusNotFound})
+			return
+		}
+		f.resume(w, id, job, attempt)
 	default:
 		http.NotFound(w, r)
 	}
@@ -538,6 +600,12 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, bod
 		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: code})
 		return
 	}
+	if l := f.leases[k]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone: Sortie withdrew attempt "+strconv.Itoa(attempt)+" of job "+job)
+		f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
 	l := f.live(id, job, attempt)
 	if l == nil {
 		f.mu.Unlock()
@@ -550,6 +618,46 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, bod
 	f.mu.Unlock()
 	reply(w, http.StatusOK, protocol.Lease{Expires: exp.UTC()})
 	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200, Body: body})
+}
+
+// resume hands the worker that holds the attempt's live lease its offer
+// again with new tokens, as Sortie does; the earlier tokens end.
+func (f *Fake) resume(w http.ResponseWriter, id, job string, attempt int) {
+	k := key(job, attempt)
+	f.mu.Lock()
+	if l := f.leases[k]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone")
+		f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
+	l := f.live(id, job, attempt)
+	if l == nil {
+		f.mu.Unlock()
+		problem(w, http.StatusConflict, "lease_lost", "no live lease")
+		f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusConflict})
+		return
+	}
+	l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
+	j := f.jobs[k]
+	toks := map[string]string{}
+	flowsOut := map[string]map[string]string{}
+	for _, name := range protocol.Flows {
+		toks[name] = newToken()
+		u := f.Server.URL + "/flows/" + name
+		if name == protocol.FlowEgress {
+			u = f.Server.URL
+		}
+		flowsOut[name] = map[string]string{"url": u, "token": toks[name]}
+	}
+	f.tokens[k] = toks
+	exp := l.expires
+	f.mu.Unlock()
+	reply(w, http.StatusOK, wireOffer{
+		Job:   protocol.Job{ID: j.ID, Attempt: j.Attempt, Issue: protocol.Issue{ID: "id-" + j.ID, Identifier: j.ID, Title: "fake " + j.ID}, Requires: j.Requires},
+		Lease: protocol.Lease{Expires: exp.UTC()}, Run: j.Run, Flows: flowsOut,
+	})
+	f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusOK})
 }
 
 func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body []byte) {
@@ -565,6 +673,12 @@ func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body [
 		return
 	}
 	f.mu.Lock()
+	if l := f.leases[key(job, attempt)]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone")
+		f.record(Event{Kind: "report", Job: job, Attempt: attempt, Status: http.StatusGone, Body: body})
+		return
+	}
 	l := f.live(id, job, attempt)
 	if l == nil {
 		f.mu.Unlock()
@@ -630,6 +744,21 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get(protocol.ProtocolHeader) != "1" {
 		problem(w, http.StatusBadRequest, "unsupported_protocol", "send "+protocol.ProtocolHeader+": 1")
 		f.record(Event{Kind: "bad-protocol", Job: job, Attempt: attempt, Status: 400})
+		return
+	}
+	f.mu.Lock()
+	l := f.leases[key(job, attempt)]
+	gone := l != nil && l.gone
+	unserved := f.unserved[key(job, attempt)] && flow == protocol.FlowStdio
+	f.mu.Unlock()
+	if gone && f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
+		problem(w, http.StatusGone, "job_gone", "the job's attempt has ended; release its machine")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
+	if unserved {
+		problem(w, http.StatusNotFound, "not_found", "the attempt is not open")
+		f.record(Event{Kind: flow, Job: job, Attempt: attempt, Status: http.StatusNotFound})
 		return
 	}
 	if !f.authorized(flow, job, attempt, r.Header.Get("Authorization")) {
@@ -704,8 +833,20 @@ func (f *Fake) result(w http.ResponseWriter, r *http.Request, job string, attemp
 				return
 			}
 			res.PR = b
+		case protocol.ResultStatusPart:
+			if len(b) > protocol.MaxStatusFile {
+				refuse(http.StatusRequestEntityTooLarge, "the status part exceeds 4 KiB")
+				return
+			}
+			res.Status = b
+		case protocol.ResultCriteriaPart:
+			if len(b) > protocol.MaxCriteriaFile {
+				refuse(http.StatusRequestEntityTooLarge, "the criteria part exceeds 64 KiB")
+				return
+			}
+			res.Criteria = b
 		default:
-			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr", part.FormName()))
+			refuse(http.StatusBadRequest, fmt.Sprintf("unknown result part %q; valid: bundle, pr, status, criteria", part.FormName()))
 			return
 		}
 	}
@@ -765,7 +906,7 @@ func (f *Fake) usageReport(w http.ResponseWriter, r *http.Request, job string, a
 	f.record(Event{Kind: "usage", Job: job, Attempt: attempt, Status: 204, Body: b})
 }
 
-// stdio upgrades to sortie-stdio/1, sends the job's StdioInput as I
+// stdio upgrades to sortie-stdio/2 (or 1), sends the job's StdioInput as I
 // frames and then C, unless KeepInputOpen, and reads the worker's O, E
 // and X frames. A stream that ends before X is broken.
 func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt int) {
@@ -805,9 +946,17 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 	defer func() {
 		f.mu.Lock()
 		a.streamEnded = true
+		if a.exit == nil && a.stream == c {
+			// The worker broke the stream, as a daemon that restarts
+			// breaks it: as Sortie does, the attempt is served again, and
+			// the next stream's input closes after StdioInput.
+			a.stream, a.streamOpened = nil, false
+			a.breaks++
+		}
 		f.mu.Unlock()
 		f.record(Event{Kind: "stdio-end", Job: job, Attempt: attempt})
 	}()
+	asked := false
 	for {
 		typ, payload, err := c.ReadFrame()
 		if err != nil {
@@ -815,8 +964,17 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 		}
 		f.mu.Lock()
 		switch typ {
+		case stdio.SortieFiles:
+			files := map[string][]byte{}
+			if json.Unmarshal(payload, &files) == nil {
+				a.sortieFiles = files
+			}
 		case stdio.Stdout:
 			a.stdout.Write(payload)
+			if j.AskFilesAfter != "" && !asked && c.Files() && strings.Contains(a.stdout.String(), j.AskFilesAfter) {
+				asked = true
+				_ = c.WriteFrame(stdio.SortieFilesRequest, nil)
+			}
 		case stdio.Stderr:
 			a.stderr.Write(payload)
 		case stdio.Exit:
@@ -828,6 +986,10 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 		f.record(Event{Kind: "stdio-" + string(typ), Job: job, Attempt: attempt, Body: payload})
 		if typ == stdio.Exit {
 			return
+		}
+		if typ == stdio.SortieFiles && c.Files() {
+			_ = c.WriteFrame(stdio.StdinClosed, nil)
+			continue
 		}
 		if typ != stdio.Stdout && typ != stdio.Stderr {
 			return
