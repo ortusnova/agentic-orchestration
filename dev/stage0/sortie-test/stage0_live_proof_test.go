@@ -83,7 +83,7 @@ var liveProofPromptRules = []string{
 func TestStage0_ALiveProofRequestStartsTheLiveProofJob(t *testing.T) {
 	w := loadStage0Fix(t, "WORKFLOW.md")
 	h := newSupervisorHarness(t, stateWithReviewReaction(t, "id-41", 41))
-	got := h.o.Supervisor().FixRun(t.Context(), "id-41-ident", liveProofMessage("ONS-41"))
+	got := h.o.Supervisor().FixRun(t.Context(), "id-41-ident", liveProofMessage("ONS-41"), "")
 	if got.Status != SupervisorDone {
 		t.Fatalf("the live-proof job's fix run = %+v, want done", got)
 	}
@@ -155,6 +155,78 @@ func TestStage0_AHomelabLiveProofRunsOnTaichi(t *testing.T) {
 	}
 	if cred == nil || !slices.Equal(cred.Hosts, []string{"api.github.com"}) {
 		t.Errorf("credentials = %+v, want github_api for api.github.com only", offer.Run.Credentials)
+	}
+}
+
+// Scenario: A live proof that needs nested KVM or smolvm. The supervisor's
+// live-proof request names the workflow's nested profile, and the kit
+// starts the job as a fix run with it (stage0-live-proofs): Sortie, with the
+// kit's workflow, schedules the job with that profile, and its matcher
+// offers it to the fake worker taichi, which declares nested, in the
+// live-proof pack, and never to p1's worker, which does not. The job is
+// still seeded from the story's own repository, agentic-orchestration, and
+// holds the forge's credential only as a placeholder. A profile the
+// workflow does not declare is refused.
+func TestStage0_ANestedLiveProofRunsOnTaichiNeverOnP1(t *testing.T) {
+	cfg := loadStage0(t, "WORKFLOW.md")
+	profile, ok := cfg.Environment.Remote.JobProfile("nested")
+	if !ok || !slices.Contains(profile.Requires.Capabilities, "nested") || profile.Image != "live-proof.smolmachine" {
+		t.Fatalf("the workflow's nested profile = %+v, %v; want the live-proof pack, requiring nested", profile, ok)
+	}
+
+	h := newSupervisorHarness(t, stateWithReviewReaction(t, "id-134", 134))
+	h.o.workflowManager = &stubWorkflowManager{config: cfg}
+	sup := h.o.Supervisor()
+	if got := sup.RequestLiveProof(t.Context(), "id-134-ident", "boot a machine inside the job machine", "nested"); got.Status != SupervisorDone {
+		t.Fatalf("the supervisor's request with the nested profile = %+v, want done", got)
+	}
+	if got := sup.FixRun(t.Context(), "id-134-ident", liveProofMessage("ONS-134"), "gpu"); got.Code != "unknown_profile" {
+		t.Fatalf("a fix run with an undeclared profile = %+v, want unknown_profile", got)
+	}
+	if got := sup.FixRun(t.Context(), "id-134-ident", liveProofMessage("ONS-134"), "nested"); got.Status != SupervisorDone {
+		t.Fatalf("the live-proof job's fix run = %+v, want done", got)
+	}
+	var retry *RetryEntry
+	onLoop(t, h.o, func() { retry = h.o.state.RetryAttempts["id-134"] })
+	if retry == nil || retry.ReactionKind != ReactionKindReview || retry.JobProfile != "nested" {
+		t.Fatalf("scheduled run = %+v, want a review fix run with the nested profile", retry)
+	}
+
+	repos := cfg.Environment.Remote.Repositories
+	i := slices.IndexFunc(repos, func(r config.Repository) bool { return r.Name == "agentic-orchestration" })
+	if i < 0 {
+		t.Fatal("the workflow lists no agentic-orchestration repository")
+	}
+	cfg.Environment.SetRepository(&repos[i])
+	ctx := withJobProfile(context.Background(), retry.JobProfile)
+	job := remoteJob(ctx, cfg, domain.Issue{ID: "id-134", Identifier: "ONS-134", Title: "Stage-0 kit: a live-proof job profile"}, nil, "agent-client-protocol", "agent-acp")
+	if got := issueRequires(cfg, domain.Issue{ID: "id-134", Identifier: "ONS-134"}, retry.JobProfile); !slices.Contains(got.Capabilities, "nested") {
+		t.Errorf("the dispatch check reads %+v, want the profile's nested", got)
+	}
+
+	m := worker.NewMatcher(worker.NewTTLLeaser(time.Minute), time.Now, nil)
+	free := worker.Free{CPU: 32, MemGiB: 128, DiskGiB: 500}
+	m.CheckIn("p1", worker.Declaration{OS: "linux", Arch: "amd64", KVM: true, Backends: []string{"smolvm"}, RunSlots: 5, Free: free})
+	m.Submit(job)
+	if offer, ok, err := m.Poll("p1"); ok || err != nil {
+		t.Fatalf("p1 was offered the nested live proof: %+v, %v", offer.Job, err)
+	}
+	m.CheckIn("taichi", worker.Declaration{OS: "linux", Arch: "amd64", KVM: true, Nested: true, Backends: []string{"smolvm"}, RunSlots: 7, Free: free})
+	if offer, ok, err := m.Poll("p1"); ok || err != nil {
+		t.Fatalf("p1 was offered the nested live proof with taichi checked in: %+v, %v", offer.Job, err)
+	}
+	offer, ok, err := m.Poll("taichi")
+	if !ok || err != nil {
+		t.Fatalf("taichi was not offered the nested live proof: %v", err)
+	}
+	if offer.Run.Image != "live-proof.smolmachine" {
+		t.Errorf("image = %q, want the live-proof pack", offer.Run.Image)
+	}
+	if got := offer.Run.Env["SORTIE_GITHUB_TOKEN"]; got != credentialPlaceholder("github_api") {
+		t.Errorf("SORTIE_GITHUB_TOKEN = %q, want the github_api placeholder", got)
+	}
+	if r := cfg.Environment.Remote.Repository; r == nil || r.Name != "agentic-orchestration" {
+		t.Errorf("the job's repository = %+v, want the story's own", r)
 	}
 }
 

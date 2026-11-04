@@ -167,7 +167,7 @@ func TestNoFlowReachesTheEdge(t *testing.T) {
 // (unknown_sub_key): the allowed hosts are nono's (egress-profile.json),
 // and IS_SANDBOX is the worker image's, not a pass_env.
 func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
-	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository"}
+	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository", "profiles"}
 	key := regexp.MustCompile(`^    ([a-z_]+):`)
 	in := false
 	for _, line := range workflowFrontMatter(t) {
@@ -191,6 +191,21 @@ func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
 			if m := keys.FindStringSubmatch(l); m != nil && !slices.Contains(repoKeys, m[1]) {
 				t.Errorf("repository %s has %s, which a remote repository does not take", name, m[1])
 			}
+		}
+	}
+	// A job profile takes an image and its requires, nothing else.
+	profileKey := regexp.MustCompile(`^        ([a-z_]+):`)
+	in = false
+	for _, line := range workflowFrontMatter(t) {
+		switch {
+		case line == "    profiles:":
+			in = true
+			continue
+		case in && !strings.HasPrefix(line, "      "):
+			in = false
+		}
+		if m := profileKey.FindStringSubmatch(line); in && m != nil && m[1] != "image" && m[1] != "requires" {
+			t.Errorf("a job profile has %s, which Sortie does not take", m[1])
 		}
 	}
 }

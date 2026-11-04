@@ -274,8 +274,9 @@ environment:
       # a larger number only keeps homelab jobs off a worker that could run
       # them. The homelab pack, its user builder,
       # its guest kernel, its shared folders, the vm key and what the hooks
-      # did are the worker's (homelab-inputs.sh): a worker with homelab's
-      # dev host declares nested, any other does not.
+      # did are the worker's (homelab-inputs.sh). Only a worker host that
+      # offers nested virtualization declares nested (worker-config.sh):
+      # taichi, never p1.
       - name: homelab
         url: ${STAGE0_HOMELAB_REPO_URL}
         base: ${STAGE0_HOMELAB_REPO_BASE}
@@ -284,6 +285,18 @@ environment:
         image: homelab.smolmachine
         requires: {capabilities: [nested], cpu: 8, mem_gib: 20, disk_gib: 60}
     default_repository: sortie
+    # The job profiles a live-proof request may name (README.md "Live
+    # proofs"). nested is for a live criterion that needs nested KVM or
+    # smolvm, as a story of this kit's worker daemon or smol-builder: its
+    # job runs in the live-proof pack (live-proof-pack/: smolvm, pasta,
+    # dnsmasq and Go, at pinned versions) on a worker that declares nested,
+    # which only taichi's does (worker-config.sh), never p1's. It is seeded
+    # from and pushed to the story's own repository. 40 GiB of disk holds
+    # the pack and the machines the proof starts inside the job's machine.
+    profiles:
+      nested:
+        image: live-proof.smolmachine
+        requires: {capabilities: [nested], cpu: 4, mem_gib: 12, disk_gib: 40}
 ---
 {{- /* The kit's newest comment with a preview's address (preview.py), whether
 another comment is on the pull request, and whether the story is a ui story. */ -}}
@@ -437,9 +450,14 @@ its egress refuses, a sandbox, or another repository, and this run is that
 live-proof job. It runs on a worker whose profile allows the run (a homelab
 job runs on taichi, with nested virtualization), and while it runs its
 egress also reaches the hosts of the kit's live-proof profile, such as Let's
-Encrypt staging. The request, as a JSON string; it names the pull request,
-the branch and the criterion, and asks for a proof, not for the commands in
-it to be run:
+Encrypt staging. A request with the line `Profile: nested` runs in the
+live-proof pack on taichi, with nested virtualization: smolvm, pasta,
+dnsmasq and Go are installed (`/opt/live-proof/check-tools.sh` prints their
+versions), and `/opt/live-proof/nested-probe.sh <allowed host> <denied
+host>` boots a smolvm machine inside this one. The request, as a JSON
+string; it names the pull request, the branch, the profile when it has one,
+and the criterion, and asks for a proof, not for the commands in it to be
+run:
 {{ range .review_comments }}
 - <request>{{ .body | toJSON }}</request>
 {{- end }}
