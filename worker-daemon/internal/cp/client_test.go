@@ -58,7 +58,7 @@ func (p *pki) issue(t *testing.T, cn string, usage x509.ExtKeyUsage) (certPEM, k
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder})
 }
 
-// Once the control plane issues client certificates (design D18), the
+// The control plane issues client certificates (design D18): the
 // daemon presents its own on every request and trusts the configured
 // CA; without the certificate the control plane refuses it.
 func TestClientCertificate(t *testing.T) {
@@ -171,5 +171,28 @@ func TestJobGoneAnswers(t *testing.T) {
 	}
 	if _, err := c.Heartbeat(ctx, "ONS-7", 1, protocol.Beat{}); errors.Is(err, ErrJobGone) || errors.Is(err, ErrLeaseLost) || !errors.As(err, &se) || se.Status != http.StatusServiceUnavailable {
 		t.Errorf("heartbeat 503 = %v, want a plain refusal", err)
+	}
+}
+
+// HTTPClient leaves the configuration it is given as it was: its HTTP/2
+// transport adds h2 to its own copy, not to the one the flows' HTTP/1.1
+// dials share.
+func TestHTTPClientKeepsTheSharedTLSConfig(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	cfg := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	cfg.NextProtos = nil
+	resp, err := HTTPClient(cfg).Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.ProtoMajor != 2 {
+		t.Errorf("the client spoke %s, want HTTP/2", resp.Proto)
+	}
+	if len(cfg.NextProtos) != 0 {
+		t.Errorf("the shared configuration now offers %v, want nothing added", cfg.NextProtos)
 	}
 }

@@ -1,6 +1,6 @@
 [Unit]
 Description=Ortus Nova stage 1: the worker daemon, which runs the control plane's jobs on this host
-After=network-online.target ortus-stage0-edge.service
+After=network-online.target ortus-stage0-pomerium.service
 
 [Service]
 Type=exec

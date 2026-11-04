@@ -2,7 +2,7 @@
 # also has its own Makefile, with build and release targets.
 
 GO_MODULES := acp-broker smol-builder worker-daemon
-COMPONENTS := workbench $(GO_MODULES)
+COMPONENTS := workbench control-plane $(GO_MODULES)
 
 .PHONY: help test lint check-latest licenses no-placeholder specs dist
 
@@ -17,9 +17,8 @@ lint: licenses no-placeholder specs ## Lint every component, check the license c
 	@set -e; for c in $(COMPONENTS); do echo "== $$c: lint"; $(MAKE) -s -C $$c lint; done
 	@echo "== dev/stage0: lint"; $(MAKE) -s -C dev/stage0 lint
 
-check-latest: ## Fail when a Go component's dependency, or the kit's nono, is behind its latest stable release (network)
-	@set -e; for m in $(GO_MODULES); do echo "== $$m: check-latest"; $(MAKE) -s -C $$m check-latest; done
-	@echo "== dev/stage0: check-latest"; $(MAKE) -s -C dev/stage0 check-latest
+check-latest: ## Fail when a Go component's dependency, or the control plane's Pomerium or nono, is behind its latest stable release (network)
+	@set -e; for m in $(GO_MODULES) control-plane; do echo "== $$m: check-latest"; $(MAKE) -s -C $$m check-latest; done
 
 # smolvm rejects every request that carries its credential-placeholder prefix,
 # so an agent that reads it in this repository breaks its own session. The

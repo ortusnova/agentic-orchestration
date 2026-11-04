@@ -2,8 +2,10 @@ package daemon_test
 
 // The daemon against the real Sortie data plane: Sortie's plan-bench
 // binary under environment.kind remote, with a file tracker and a local
-// forge (a bare repository and a fake Gitea API), reached through the
-// stage-1 edge (dev/stage0/edge), whose egress goes to a fake nono. The
+// forge (a bare repository and a fake Gitea API), reached with a client
+// certificate through a stand-in for the control plane's Pomerium
+// (front_e2e_test.go), whose egress route goes to the control plane's
+// egress gate (control-plane/cmd/cp-egress) and on to a fake nono. The
 // agent is this test binary speaking the Agent Client Protocol.
 
 import (
@@ -21,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ const (
 	e2eProject      = "ortusnova/app"
 )
 
-// sortieBins are the Sortie and edge binaries, built once per test run
+// sortieBins are the Sortie and egress gate binaries, built once per test run
 // into sortieBinDir.
 var (
 	sortieBinOnce sync.Once
@@ -69,7 +70,7 @@ func buildSortieBins() {
 		sortieBinSkip = fmt.Sprintf("Sortie's source with its data plane is not at %s: run git submodule update --init sortie, or set WORKER_DAEMON_SORTIE_SRC", src)
 		return
 	}
-	edge, err := filepath.Abs("../../../dev/stage0/edge")
+	cp, err := filepath.Abs("../../../control-plane")
 	if err != nil {
 		sortieBinErr = err
 		return
@@ -79,7 +80,7 @@ func buildSortieBins() {
 		sortieBinErr = err
 		return
 	}
-	for _, b := range []struct{ dir, pkg, out string }{{src, "./cmd/sortie", "sortie"}, {edge, ".", "stage0-edge"}} {
+	for _, b := range []struct{ dir, pkg, out string }{{src, "./cmd/sortie", "sortie"}, {cp, "./cmd/cp-egress", "cp-egress"}} {
 		cmd := exec.Command("go", "build", "-o", filepath.Join(sortieBinDir, b.out), b.pkg)
 		cmd.Dir = b.dir
 		cmd.Env = os.Environ()
@@ -94,7 +95,7 @@ func buildSortieBins() {
 	}
 }
 
-func sortieBins(t *testing.T) (sortie, edge string) {
+func sortieBins(t *testing.T) (sortie, gate string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipped in -short: builds and runs Sortie")
@@ -109,7 +110,7 @@ func sortieBins(t *testing.T) (sortie, edge string) {
 	if sortieBinErr != nil {
 		t.Fatal(sortieBinErr)
 	}
-	return filepath.Join(sortieBinDir, "sortie"), filepath.Join(sortieBinDir, "stage0-edge")
+	return filepath.Join(sortieBinDir, "sortie"), filepath.Join(sortieBinDir, "cp-egress")
 }
 
 // fakeACPAgent speaks the Agent Client Protocol on its standard streams,
@@ -190,8 +191,8 @@ func acpWork() error {
 	return nil
 }
 
-// fakeNono is nono's proxy as the edge reaches it: CONNECT with the
-// edge's Basic credential, then, inside the tunnel, a model API in
+// fakeNono is nono's proxy as the egress gate reaches it: CONNECT with
+// the gate's Basic credential, then, inside the tunnel, a model API in
 // clear.
 type fakeNono struct {
 	*httptest.Server
@@ -379,7 +380,8 @@ func runGit(t *testing.T, dir string, args ...string) string {
 type sortieRun struct {
 	t        *testing.T
 	sortie   *process
-	edge     *process
+	gate     *process
+	front    *front
 	daemon   *syncBuffer
 	backend  *fakemachine.Backend
 	forge    *fakeGitea
@@ -451,11 +453,11 @@ environment:
     backend: smolvm
     requires: {cpu: 1, mem_gib: 1, disk_gib: 1}
     flows:
-      stdio: {url: "http://127.0.0.1:{{edge_port}}/stdio"}
-      egress: {url: "http://127.0.0.1:{{edge_port}}"}
-      mcp: {url: "http://127.0.0.1:{{edge_port}}/mcp"}
-      bundles: {url: "http://127.0.0.1:{{edge_port}}/bundles"}
-      usage: {url: "http://127.0.0.1:{{edge_port}}/usage"}
+      stdio: {url: "https://127.0.0.1:{{front_port}}/stdio"}
+      egress: {url: "https://127.0.0.1:{{front_port}}"}
+      mcp: {url: "https://127.0.0.1:{{front_port}}/mcp"}
+      bundles: {url: "https://127.0.0.1:{{front_port}}/bundles"}
+      usage: {url: "https://127.0.0.1:{{front_port}}/usage"}
     lease_ttl_ms: 6000
     repository:
       url: {{dir}}/upstream.git
@@ -468,7 +470,7 @@ Work on {{ .issue.identifier }}: {{ .issue.title }}
 
 func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 	t.Helper()
-	sortieBin, edgeBin := sortieBins(t)
+	sortieBin, gateBin := sortieBins(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -489,8 +491,12 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 
 	issues := `[{"id": "id-ONS-7", "identifier": "ONS-7", "title": "Speak the wire", "description": "One attempt over the wire.",
   "priority": 1, "state": "Todo", "labels": [], "url": "http://tracker.invalid/ONS-7"}]`
-	sortiePort, edgePort := freePort(t), freePort(t)
+	sortiePort, gatePort := freePort(t), freePort(t)
 	r.api = "http://127.0.0.1:" + strconv.Itoa(sortiePort)
+	gateAddr := "127.0.0.1:" + strconv.Itoa(gatePort)
+	pki := newFrontPKI(t, "taichi")
+	r.front = startFront(t, pki, r.api, gateAddr)
+	frontPort := strings.TrimPrefix(r.front.URL, "https://127.0.0.1:")
 	agentArgs := ""
 	if s.hold {
 		agentArgs = " hold"
@@ -499,19 +505,10 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 		agentArgs = " hold-first"
 	}
 	wf := strings.NewReplacer("{{dir}}", dir, "{{forge}}", r.forge.URL, "{{sortie_port}}", strconv.Itoa(sortiePort),
-		"{{edge_port}}", strconv.Itoa(edgePort), "{{agent}}", self, "{{agent_args}}", agentArgs).Replace(e2eWorkflow)
+		"{{front_port}}", frontPort, "{{agent}}", self, "{{agent_args}}", agentArgs).Replace(e2eWorkflow)
 	nonoAddr := strings.TrimPrefix(r.nono.URL, "http://")
-	edgeCfg, _ := json.Marshal(map[string]any{
-		"sortie": r.api, "control_token_file": filepath.Join(dir, "sortie-token"),
-		"workers": []map[string]any{{"name": "taichi", "port": edgePort}},
-		"flows": map[string]string{
-			"stdio": r.api + "/api/v1/flows/stdio", "mcp": r.api + "/mcp",
-			"bundles": r.api + "/api/v1/flows/bundles", "usage": r.api + "/api/v1/flows/usage",
-		},
-		"egress": nonoAddr, "egress_pass_file": filepath.Join(dir, "nono-pass"),
-	})
 	for name, content := range map[string]string{
-		"issues.json": issues, "WORKFLOW.md": wf, "sortie-token": e2eControlToken + "\n", "nono-pass": e2eNonoPass + "\n", "edge.json": string(edgeCfg),
+		"issues.json": issues, "WORKFLOW.md": wf, "sortie-token": e2eControlToken + "\n", "nono-pass": e2eNonoPass + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
@@ -530,9 +527,10 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	})
-	r.edge = start(t, "edge", exec.Command(edgeBin, "-debug", "-config", filepath.Join(dir, "edge.json")))
-	r.waitFor("the edge to listen", 30*time.Second, func() bool {
-		c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(edgePort))
+	r.gate = start(t, "egress gate", exec.Command(gateBin, "-listen", gateAddr, "-sortie", r.api,
+		"-control-token-file", filepath.Join(dir, "sortie-token"), "-nono", nonoAddr, "-nono-pass-file", filepath.Join(dir, "nono-pass")))
+	r.waitFor("the egress gate to listen", 30*time.Second, func() bool {
+		c, err := net.Dial("tcp", gateAddr)
 		if err != nil {
 			return false
 		}
@@ -540,21 +538,24 @@ func newSortieRun(t *testing.T, s sortieSetup) *sortieRun {
 		return true
 	})
 
-	// The worker daemon, on fake machines, dials the edge only.
+	// The worker daemon, on fake machines, dials the front only, with the
+	// certificate the control plane issued it.
 	state, err := os.MkdirTemp("", "wd")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(state) })
 	doc := map[string]any{
-		"worker_id":     "taichi",
-		"control_plane": map[string]any{"url": "http://127.0.0.1:" + strconv.Itoa(edgePort)},
-		"run_slots":     1,
-		"reserve":       map[string]any{"mem_gib": 1},
-		"floor":         map[string]any{"disk_gib": 1},
-		"state_dir":     state,
-		"smolvm":        map[string]any{"packs": map[string]string{testImage: "/packs/agent.smolmachine"}},
-		"log_level":     "debug",
+		"worker_id": "taichi",
+		"control_plane": map[string]any{"url": r.front.URL, "tls": map[string]any{
+			"cert_file": pki.certFile, "key_file": pki.keyFile, "ca_file": pki.caFile,
+		}},
+		"run_slots": 1,
+		"reserve":   map[string]any{"mem_gib": 1},
+		"floor":     map[string]any{"disk_gib": 1},
+		"state_dir": state,
+		"smolvm":    map[string]any{"packs": map[string]string{testImage: "/packs/agent.smolmachine"}},
+		"log_level": "debug",
 	}
 	if s.usage != nil {
 		doc["usage_commands"] = map[string][]string{"*": s.usage}
@@ -634,21 +635,16 @@ func (r *sortieRun) finishedRun() run {
 	return got[len(got)-1]
 }
 
-// admitted returns the flows the edge admitted, from its debug log.
+// admitted returns the flows the front routed for the worker, and the
+// egress tunnel the gate opened for ONS-7 attempt 1 from its log.
 func (r *sortieRun) admitted() map[string]int {
-	out := map[string]int{}
-	re := regexp.MustCompile(`msg="flow admitted" worker=taichi flow=(\w+) job=ONS-7 attempt=1`)
-	for _, m := range re.FindAllStringSubmatch(r.edge.out.String(), -1) {
-		out[m[1]]++
-	}
-	if strings.Contains(r.edge.out.String(), `msg="egress tunnel" worker=taichi job=ONS-7 attempt=1`) {
-		out["egress"]++
-	}
+	out := r.front.admitted()
+	out["egress tunnel"] = strings.Count(r.gate.out.String(), `msg="egress tunnel" worker=taichi job=ONS-7 attempt=1`)
 	return out
 }
 
 // Scenario: One attempt over the wire. A worker runs ONS-7 attempt 1
-// against Sortie's data plane, through the edge: it fetches the seed,
+// against Sortie's data plane, through the front: it fetches the seed,
 // carries the agent's stdio in frames ending with X, posts the result
 // with pr, and posts usage, each with its own token, and Sortie opens the
 // pull request.
@@ -684,20 +680,25 @@ func TestOneAttemptOverTheWire(t *testing.T) {
 			b, got.TokensMeasured, got.Unaccounted)
 	}
 
-	// Every flow went through the edge, each admitted by its own token:
-	// the edge admits a request only when its token's grant names the
-	// flow of the path.
+	// Every flow went through the front, as the worker its certificate
+	// names; Sortie admitted each by its own token, and the egress gate
+	// the model request by the egress token.
 	admitted := r.admitted()
-	for _, flow := range []string{"bundles", "stdio", "usage", "egress"} {
+	for _, flow := range []string{"control", "bundles", "stdio", "usage", "egress", "egress tunnel"} {
 		if admitted[flow] == 0 {
-			t.Errorf("the edge admitted no %s request for ONS-7 attempt 1; admitted %v", flow, admitted)
+			t.Errorf("no %s request went through the front for ONS-7 attempt 1; admitted %v", flow, admitted)
 		}
 	}
 	if admitted["bundles"] < 2 {
 		t.Errorf("want the seed and the result on bundles, got %d requests", admitted["bundles"])
 	}
-	if strings.Contains(r.edge.out.String(), "flow refused") {
-		t.Errorf("the edge refused a flow request:\n%s", r.edge.out.String())
+	for _, id := range r.front.identities() {
+		if id != "taichi" {
+			t.Errorf("the front named the worker %q, want taichi from its certificate", id)
+		}
+	}
+	if strings.Contains(r.gate.out.String(), "egress refused") {
+		t.Errorf("the egress gate refused a request:\n%s", r.gate.out.String())
 	}
 	if r.nono.count() == 0 {
 		t.Error("the agent's model request did not reach nono")

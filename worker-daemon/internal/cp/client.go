@@ -80,6 +80,12 @@ func TLSConfig(t config.TLS) (*tls.Config, error) {
 // HTTPClient returns a client that dials directly, never through a
 // proxy from the environment, with tlsConfig.
 func HTTPClient(tlsConfig *tls.Config) *http.Client {
+	// The transport adds h2 to the configuration it is given; a clone
+	// keeps that off the configuration the flows' raw HTTP/1.1 dials
+	// (stdio, the egress CONNECT) share.
+	if tlsConfig != nil {
+		tlsConfig = tlsConfig.Clone()
+	}
 	return &http.Client{Transport: &http.Transport{
 		Proxy:               nil,
 		TLSClientConfig:     tlsConfig,
