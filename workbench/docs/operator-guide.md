@@ -120,6 +120,7 @@ uv run workbench hash-password > ~/.config/plan-workbench-password-hash   # type
 | `WORKBENCH_SORTIE_NAME` | No | The name of the host the Sortie at `WORKBENCH_SORTIE_URL` runs on, as the workers' lanes show it (default `sortie`), such as `p1`. |
 | `WORKBENCH_SORTIES` | No | Other Sorties whose workers the workbench shows, and to which it sends answers, session grants and session views of the stories they hold: `name=url`, separated by commas, such as `taichi=http://127.0.0.1:7681` for taichi's homelab Sortie through an SSH forward. Lower-case names. Each one's control token is in `WORKBENCH_SORTIE_TOKEN_<NAME>`, or in the file `WORKBENCH_SORTIE_TOKEN_<NAME>_FILE` names, `<NAME>` in capitals with `_` for `-`. The stage-0 kit sets these from the files `$STAGE0_HOME/sorties/<name>.env` and `<name>.token`; with one Sortie on p1 it sets none (the retired `huly-tunnel.sh` wrote them for taichi's homelab Sortie). |
 | `WORKBENCH_SORTIE_PROXY_<NAME>` | No | The proxy through which the workbench reaches the brokers of the runs that Sortie holds, which listen on its host's loopback: `socks5://host:port`, such as `socks5://127.0.0.1:7781`, the SOCKS forward in the SSH connection that forwards taichi's Sortie. Without it, the workbench connects to the broker address Sortie gives, which only works on Sortie's own host. |
+| `WORKBENCH_NOTIFY_TOKENS` | To take Sortie's notifications | A directory of `<host>.token` files, mode 0600: the token each host's Sortie posts its notifications with. Unset, the notifications endpoint refuses every post. See "Sortie's notifications". |
 | `WORKBENCH_NOTIFY_KIND` | No | The operator's channel, where each open question is pushed: `slack`, `discord`, `telegram` or `webhook`. Unset, nothing is pushed. See "Questions on the operator's channel". |
 | `WORKBENCH_NOTIFY_CREDENTIAL_FILE` | With a channel | The file that holds the channel's webhook URL, or the Telegram bot's token. The workbench refuses one that anyone but its owner may write. |
 | `WORKBENCH_NOTIFY_CHAT_ID` | With `telegram` | The Telegram chat the bot posts to. |
@@ -251,6 +252,22 @@ An `approver` answers in the box. The workbench sends the text through Sortie's 
 #### Questions on other Sorties
 
 More than one Sortie may run a project's stories, such as p1's and taichi's in the stage-0 kit. The workbench reads the parks of every Sortie in `WORKBENCH_SORTIES` too, at the same poll, and lists their questions with its own Sortie's; each one says which Sortie holds it ("on taichi's Sortie"). An answer goes to the answer API of the Sortie that holds the question, never to another. A Sortie that cannot be read keeps the questions it last reported until it answers again.
+
+#### Sortie's notifications
+
+Each Sortie's notifications (its workflow's `notifications` list) reach the workbench through Sortie's `webhook` backend, with an entry such as:
+
+```yaml
+notifications:
+  - kind: webhook
+    url: $SORTIE_WORKBENCH_NOTIFY_URL   # http://<workbench>/api/notifications/<host>/<token>
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments,
+             escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
+```
+
+The backend sends no header of its own, so the URL carries the host's name and its token, the content of `<host>.token` in `WORKBENCH_NOTIFY_TOKENS`; keep the URL in Sortie's environment, not in the workflow file. `POST /api/notifications/<host>/<token>` takes the JSON body the backend posts (`notification_id`, `timestamp`, `identifier`, `event_type`, `title`, `body`, `agent_text`, `escalation`, …) and answers `202`; a wrong or missing token, or a host with no token, gets `401`, a body that is not the backend's `400`, and nothing is kept. The token never reaches the access log. Sortie sending the same notification again (the same `notification_id` from the same host) keeps the first.
+
+The workbench keeps each notification in `workbench.db` and links it to the story whose tracker identifier it names, and, when that story has an open question parked at or before it was sent, to that question. The home's **Needs a person** shows them under **From Sortie**: every unread one, and every one of a question still open. Each is unread until a person marks it seen (`POST /api/projects/<slug>/notifications/seen`, `{"ids": [...]}`), which records who saw it. While its question stays open, the newest notification of it is unread again 4 hours after it was sent, and every 4 hours after that ("still open after 4 hours"); once the question is answered or released it is not unread again, and once seen it leaves the list. `GET /api/projects/<slug>/notifications` lists every one kept of the project's stories, seen or not. A notification of a story that is in no project is kept and shown nowhere.
 
 #### Questions on the operator's channel
 

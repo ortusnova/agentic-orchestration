@@ -55,6 +55,7 @@ export function projectApi(slug: string) {
     answer: (key: string, text: string) => request<{ answered: string; identifier: string }>("POST", `${p}/stories/answer`, { key, text }),
     supervisor: (op: "pause" | "resume", sortie: string | null = null) =>
       request<{ supervisor: Supervisor | null }>("POST", `${p}/supervisor/${op}${sortie ? `?sortie=${encodeURIComponent(sortie)}` : ""}`),
+    seeNotifications: (ids: number[]) => request<{ seen: number }>("POST", `${p}/notifications/seen`, { ids }),
     grantSessions: (key: string, sessions: number) =>
       request<{ granted: number; sortie: string }>("POST", `${p}/stories/sessions`, { key, sessions }),
     faultDone: (id: string) =>

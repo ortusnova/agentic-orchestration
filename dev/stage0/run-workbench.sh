@@ -56,6 +56,9 @@ if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
   notify=(WORKBENCH_NOTIFY_KIND="$STAGE0_NOTIFY_KIND" WORKBENCH_NOTIFY_CHAT_ID="${STAGE0_NOTIFY_CHAT_ID:-}"
     WORKBENCH_NOTIFY_CREDENTIAL_FILE="$STAGE0_HOME/notify-credential")
 fi
+# The notifications each host's Sortie posts (notify-channel.sh): the
+# workbench takes those with the host's token in this directory.
+export WORKBENCH_NOTIFY_TOKENS=$STAGE0_HOME/notify-tokens
 WB=$STAGE0_KIT_ROOT/workbench
 home=$STAGE0_HOME/home sessions=$STAGE0_HOME/sessions port=$STAGE0_WORKBENCH_PORT
 mode=(WORKBENCH_PREVIEWS="$STAGE0_HOME/previews.json")

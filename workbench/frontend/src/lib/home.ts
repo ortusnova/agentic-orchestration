@@ -129,6 +129,52 @@ export interface HomeQuestion extends Question {
   replaced_by?: { key: string; label: string; title: string } | null;
 }
 
+/** What a Sortie's notifications sent the workbench (agent-platform/run-supervision), linked to its story and question. */
+export interface HomeNotification {
+  id: number;
+  /** The host whose Sortie sent it. */
+  host: string;
+  /** Sortie's event type, such as session.stopped or escalation.ci_failure. */
+  event_type: string;
+  severity: string;
+  category: string;
+  title: string;
+  body: string;
+  /** What the agent said, such as the question it stopped on. */
+  agent_text: string;
+  identifier: string;
+  escalation: { kind: string; rule: string; url: string } | null;
+  /** When Sortie sent it, in Unix seconds. */
+  sent_at: number;
+  received_at: number;
+  seen_at: number | null;
+  seen_by: string | null;
+  story: { key: string; label: string; change: string; title: string; url: string | null };
+  /** The open question it is of, which is answered under Answer; null when it is of none. */
+  question: { identifier: string; sortie: string | null; parked_at: number | null } | null;
+  unread: boolean;
+  /** Its question is still open four hours or more after it was sent. */
+  again: boolean;
+}
+
+/** A notification's event in words: "stopped for a person", "CI still fails". */
+export function eventText(n: Pick<HomeNotification, "event_type" | "escalation">): string {
+  const words: Record<string, string> = {
+    "session.stopped": "stopped for a person",
+    "session.failed": "failed",
+    "session.escalated": n.escalation?.kind === "question" ? "asks a person"
+      : n.escalation?.kind === "permission" ? "asks permission" : "escalated to a person",
+    "escalation.ci_failure": "CI still fails",
+    "escalation.review_comments": "review comments need a person",
+    "escalation.bot_review": "a bot review needs a person",
+    "escalation.merge_conflicts": "still conflicts with its base",
+    "escalation.auto_merge": "could not be merged",
+    "escalation.merge_completion": "merged, but not finished",
+    "budget.held": "held by its budget",
+  };
+  return words[n.event_type] ?? n.event_type.replace(/[._]/g, " ");
+}
+
 /** A platform fault only a person can clear (agent-platform/run-supervision): asked on the home
  * beside the agents' questions, ranked with them oldest first. Done makes Sortie check it again at once. */
 export interface HomeFault {
@@ -195,7 +241,9 @@ export interface HomeDoc {
   faults?: HomeFault[];
   /** The stories whose supervisor lease ran out with no renewal, ranked after the questions; absent from an older backend. */
   expired_holds?: ExpiredHold[];
-  needs_person: { total: number; questions?: number; faults?: number; expired_holds?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
+  /** What the Sorties' notifications sent: every unread one, and every one of an open question. Absent from an older backend. */
+  notifications?: HomeNotification[];
+  needs_person: { total: number; questions?: number; faults?: number; expired_holds?: number; unread?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
   /** The workers as slot lanes, and what they say of the whole. Absent from an older backend. */
   lanes?: Lanes | null;

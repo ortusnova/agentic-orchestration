@@ -10,6 +10,12 @@
 #   dev/stage0/worker-host.sh carry HOST       copy every merge record of HOST's Sortie
 #                                              into p1's, before HOST's Sortie stops
 #
+# Each worker host also gets its token for the workbench's notifications
+# (notify-channel.sh): minted here, in $STAGE0_HOME/notify-tokens/NAME.token,
+# and copied to the same place in the host's STAGE0_HOME. The tunnel forwards
+# p1's workbench to the host's loopback, on STAGE0_WORKBENCH_TUNNEL_PORT, so a
+# Sortie there posts its notifications to p1's workbench with that token.
+#
 # HOST is an SSH destination that works without a prompt
 # (`ssh -o BatchMode=yes HOST true`). Run stage0.sh first: it sets up the
 # edge and nono. Nothing here restarts Sortie; the edge restarts, so each
@@ -30,6 +36,8 @@ usage() { die "usage: $0 add HOST [NAME] | remove NAME | list | carry HOST"; }
 . "$STAGE0_HOME/stage0.env"
 # shellcheck source=edge-config.sh
 . "$KIT/edge-config.sh"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
 mkdir -p "$STAGE0_WORKERS"
 
 # apply: the edge's configuration and units follow $STAGE0_WORKERS.
@@ -59,7 +67,13 @@ case $cmd in
     # interception. A certificate, not a credential: its key stays on p1.
     ssh -o BatchMode=yes "$host" 'mkdir -p ~/.config/ortus-nova && cat > ~/.config/ortus-nova/egress-ca.crt' \
       < "$STAGE0_HOME/egress-ca/ca.crt" || die "could not copy the egress CA's certificate to $host"
-    (umask 077; printf 'WORKER_HOST=%s\nEDGE_PORT=%s\nWORKER_PORT=%s\n' "$host" "$port" "$STAGE0_EDGE_WORKER_PORT" \
+    # The host's token for the workbench's notifications: the workbench here
+    # takes it, the host's Sortie posts with it through the tunnel.
+    notify_token "$STAGE0_HOME" "$name" || die "could not mint $name's notifications token"
+    ssh -o BatchMode=yes "$host" "umask 077 && mkdir -p $WORKER_HOST_HOME/notify-tokens && cat > $WORKER_HOST_HOME/notify-tokens/$name.token" \
+      < "$STAGE0_HOME/notify-tokens/$name.token" || die "could not copy $name's notifications token to $host"
+    (umask 077; printf 'WORKER_HOST=%s\nEDGE_PORT=%s\nWORKER_PORT=%s\nWORKBENCH_PORT=%s\nWORKBENCH_TUNNEL_PORT=%s\n' \
+      "$host" "$port" "$STAGE0_EDGE_WORKER_PORT" "${STAGE0_WORKBENCH_PORT:-8793}" "$STAGE0_WORKBENCH_TUNNEL_PORT" \
       > "$STAGE0_WORKERS/$name.env")
     apply
     instance=ortus-stage0-worker-tunnel@$name.service
@@ -81,7 +95,7 @@ case $cmd in
     [[ $name =~ $EDGE_WORKER_NAME && -e $STAGE0_WORKERS/$name.env ]] || die "no worker host $name"
     worker_is_local "$name" && die "$name is p1's own worker, which stage0.sh runs"
     systemctl --user disable -q --now "ortus-stage0-worker-tunnel@$name.service" 2>/dev/null || true
-    rm -f "$STAGE0_WORKERS/$name.env"
+    rm -f "$STAGE0_WORKERS/$name.env" "$STAGE0_HOME/notify-tokens/$name.token"
     apply
     echo "removed worker host $name"
     ;;

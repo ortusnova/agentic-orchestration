@@ -19,6 +19,8 @@ from .auth_routes import auth_router, make_checks
 from .config import Config
 from .delivery import GitHubClient
 from .hub import sse
+from .notification_routes import notification_router
+from .notifications import HostTokens, redact_access_log
 from .oidc import OIDCClient
 from .project_routes import project_router
 from .projects import ProjectManager
@@ -45,7 +47,7 @@ def create_app(config: Config, **services) -> FastAPI:
     requests to workers' brokers, and ``github`` the GitHub client that looks up
     the pull requests stories name, and ``peers`` the clients of the other
     Sorties by name, ``channel`` the operator's channel and ``clock`` the
-    time its pushes are counted in."""
+    time its pushes, and the repeats of the notifications, are counted in."""
     sortie = services.get("sortie") or SortieClient(config.sortie_url, config.sortie_token)
     # The other Sorties whose workers the workbench shows, by name.
     peers = services.get("peers")
@@ -55,10 +57,12 @@ def create_app(config: Config, **services) -> FastAPI:
     channel = services.get("channel")
     if channel is None and config.notify_kind:
         channel = Channel(config.notify_kind, config.notify_secret, config.notify_chat_id)
-    alerts = Alerts(channel, config.public_url, config.home / "alerts.json", clock=services.get("clock") or time.time) if channel else None
+    clock = services.get("clock") or time.time
+    alerts = Alerts(channel, config.public_url, config.home / "alerts.json", clock=clock) if channel else None
     registry = Registry(config.home / "workbench.db")
     projects = ProjectManager(config, registry, sortie, services.get("sessions"), services.get("validate"),
-                              broker_transport=services.get("broker_transport"), github=github, peers=peers, alerts=alerts)
+                              broker_transport=services.get("broker_transport"), github=github, peers=peers, alerts=alerts,
+                              clock=clock)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -159,6 +163,9 @@ def create_app(config: Config, **services) -> FastAPI:
     app.include_router(supervisor_router(projects, require_role))
     app.include_router(session_router(projects, require_operator))
     app.include_router(worker_router(projects, require_role))
+    # Each Sortie's notifications, by its webhook backend; the token is in the path.
+    redact_access_log()
+    app.include_router(notification_router(projects, registry, HostTokens(config.notify_tokens_dir), require_operator, clock))
 
     @app.exception_handler(RegistryError)
     async def registry_error(_request: Request, exc: RegistryError) -> JSONResponse:

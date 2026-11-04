@@ -20,7 +20,9 @@
 #     plan-bench (a branch being tried) stays where it is.
 #   - A build that fails puts the previous commit back, and that commit is
 #     not tried again until another one merges (journalctl --user -u
-#     ortus-stage0-deploy says why).
+#     ortus-stage0-deploy says why). A kit change whose stage0.sh failed
+#     runs the previous commit's stage0.sh again, so what the failed run
+#     changed on the host (units, configuration) is the previous commit's.
 #   - It runs under stage0.sh's lock: while a stage0.sh runs, it does
 #     nothing and tries again a minute later.
 set -euo pipefail
@@ -96,6 +98,10 @@ back() {
     say "Sortie back on ${sortie_old:0:8} until another plan-bench commit merges"
     echo "$sortie_new" > "$sortie_failed"
     git -C "$src" checkout -q --detach "$sortie_old"
+  fi
+  if [[ $1 == stage0.sh && -n $kit ]]; then
+    say "running stage0.sh on ${old:0:8} again, to undo what ${new:0:8}'s left"
+    "$LIVE/dev/stage0/stage0.sh" || say "stage0.sh on ${old:0:8} failed too: the host needs a person (journalctl --user -u ortus-stage0-deploy)"
   fi
   resume_left_pause
   exit 1

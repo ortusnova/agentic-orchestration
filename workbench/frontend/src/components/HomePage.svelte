@@ -11,7 +11,7 @@
   import TopBar, { type Tab } from "./TopBar.svelte";
 
   let {
-    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsupervisor, onsessions, onfaultdone, actions,
+    doc, slug, projectName = "", tabs = [], marks = new Set(), onapprove, onanswer, onreplace, onsupervisor, onsessions, onfaultdone, onseen, actions,
   }: {
     doc: MergedGraph;
     slug: string;
@@ -28,6 +28,8 @@
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
     /** Mark a platform fault's person action done; resolves to an error message, or null. */
     onfaultdone?: (id: string) => Promise<string | null>;
+    /** A person saw these notifications; resolves to an error message, or null. */
+    onseen?: (ids: number[]) => Promise<string | null>;
     actions?: Snippet;
   } = $props();
 
@@ -109,7 +111,7 @@
       </section>
     {/if}
 
-    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} faults={home.faults ?? []} expiredHolds={home.expired_holds ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onfaultdone} />
+    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} faults={home.faults ?? []} expiredHolds={home.expired_holds ?? []} notifications={home.notifications ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onfaultdone} {onseen} />
 
     <SupervisorPanel supervisor={doc.supervisor} {slug} dispatched={!!doc.sortie.dispatched} reachable={doc.sortie.reachable} oncontrol={onsupervisor} />
 
