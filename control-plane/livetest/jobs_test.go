@@ -13,6 +13,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -49,7 +52,9 @@ type job struct {
 	l       live
 	t       *testing.T
 	o       offer
-	conn    *tls.Conn
+	raw     []byte         // the poll's answer, as the worker daemon reads it
+	conn    io.WriteCloser // the frames to Sortie, through flowprobe
+	probe   *exec.Cmd
 	wmu     sync.Mutex
 	prompt  chan json.RawMessage // the id of the session/prompt request
 	release chan struct{}
@@ -79,7 +84,7 @@ func takeJobs(t *testing.T, l live, n int) []*job {
 		if err := json.Unmarshal(body, &o); err != nil {
 			t.Fatalf("offer: %v: %s", err, body)
 		}
-		jobs = append(jobs, &job{l: l, t: t, o: o, prompt: make(chan json.RawMessage, 1), release: make(chan struct{}), done: make(chan struct{})})
+		jobs = append(jobs, &job{l: l, t: t, o: o, raw: body, prompt: make(chan json.RawMessage, 1), release: make(chan struct{}), done: make(chan struct{})})
 		return len(jobs) == n
 	})
 	return jobs
@@ -100,35 +105,61 @@ func (j *job) flowURL(flow, path string) string {
 
 func (j *job) token(flow string) string { return j.o.Flows[flow].Token }
 
-// openStdio opens the job's stdio stream through Pomerium and answers
-// the session as an ACP agent until released.
+// openStdio opens the job's stdio stream through Pomerium with the
+// worker daemon's own client (flowprobe stdio), which asks for
+// sortie-stdio/2 as the daemon does, and answers the session as an ACP
+// agent until released.
 func (j *job) openStdio(ctx context.Context) {
 	j.t.Helper()
-	u, err := url.Parse(j.flowURL("stdio", j.o.suffix()))
+	j.flowURL("stdio", j.o.suffix())
+	cmd := j.flowprobe(ctx, "stdio")
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		j.t.Fatal(err)
 	}
-	conn, err := j.l.dial(ctx, j.l.tlsFor(j.t, "p1"))
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		j.t.Fatal(err)
 	}
-	_, err = fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: sortie-stdio/1\r\nAuthorization: Bearer %s\r\n%s: 1\r\n\r\n",
-		u.RequestURI(), u.Host, j.token("stdio"), protocolHeader)
-	if err != nil {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
 		j.t.Fatal(err)
 	}
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
+	br := bufio.NewReader(stdout)
+	proto, err := br.ReadString('\n')
 	if err != nil {
-		j.t.Fatal(err)
+		_ = cmd.Wait()
+		j.t.Fatalf("stdio of %s through the worker daemon's client: %v: %s", j.o.Job.ID, err, stderr.String())
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		j.t.Fatalf("stdio of %s: %s %s", j.o.Job.ID, resp.Status, b)
+	if proto = strings.TrimSpace(proto); proto != "sortie-stdio/2" {
+		j.t.Errorf("stdio of %s agreed %s, want sortie-stdio/2, which the worker daemon asks for first", j.o.Job.ID, proto)
 	}
-	j.conn = conn
+	j.conn, j.probe = stdin, cmd
 	go j.agent(br)
+}
+
+// flowprobe runs the worker daemon's flowprobe (run.sh builds it) with
+// p1's certificate and this job's offer, in the control plane's image
+// on the host's network, where cp.test is this host, so it dials
+// Pomerium by the offer's URLs as a worker host does.
+func (j *job) flowprobe(ctx context.Context, args ...string) *exec.Cmd {
+	j.t.Helper()
+	dir := os.Getenv("CP_LIVE_DIR")
+	if dir == "" || os.Getenv("CP_TAG") == "" {
+		j.t.Fatal("CP_LIVE_DIR and CP_TAG must name run.sh's directory and images")
+	}
+	offerFile := filepath.Join(dir, "offer-"+j.o.Job.ID+".json")
+	if err := os.WriteFile(offerFile, j.raw, 0o600); err != nil {
+		j.t.Fatal(err)
+	}
+	w := filepath.Join(j.l.home, "workers", "p1")
+	argv := []string{"run", "--rm", "-i", "--network", "host", "--add-host", publicHost + ":127.0.0.1", "--user", "0",
+		"-v", dir + ":" + dir + ":ro", "--entrypoint", filepath.Join(dir, "bin", "flowprobe"),
+		"localhost/ortus-nova/control-plane:" + os.Getenv("CP_TAG"),
+		"-offer", offerFile, "-cert", filepath.Join(w, "worker.crt"), "-key", filepath.Join(w, "worker.key"),
+		"-ca", filepath.Join(j.l.home, "ca", "ca.crt")}
+	return exec.CommandContext(ctx, "podman", append(argv, args...)...) // #nosec G204 -- the test's own arguments
 }
 
 func (j *job) frame(kind byte, payload []byte) {
@@ -160,6 +191,10 @@ func (j *job) agent(br *bufio.Reader) {
 			return
 		}
 		switch head[0] {
+		case 'S':
+			// sortie-stdio/2 asks for the agent's .sortie files after a
+			// turn; this agent wrote none.
+			j.frame('F', []byte("{}"))
 		case 'C':
 			code := make([]byte, 4)
 			j.frame('X', code)
@@ -211,6 +246,7 @@ func (j *job) finish() {
 		j.frame('X', make([]byte, 4))
 	}
 	_ = j.conn.Close()
+	_ = j.probe.Wait()
 	_, _, _ = j.l.workerCall(j.t, "p1", "/api/v1/workers"+j.o.suffix()+"/report",
 		map[string]string{"outcome": "failed", "reason": "the live test ends the attempt", "machine": "deleted"}, "")
 }
@@ -405,6 +441,18 @@ func TestJobs(t *testing.T) {
 		}
 	})
 
+	// The worker daemon's own egress forwarder, through Pomerium: the
+	// gate admits its CONNECT to an allowed host, and nono refuses one it
+	// does not list.
+	t.Run("The worker daemon's egress forwarder", func(t *testing.T) {
+		if status := j.daemonConnect(t, "model.cp.test:443"); status != http.StatusOK {
+			t.Errorf("CONNECT model.cp.test:443: %d, want 200", status)
+		}
+		if status := j.daemonConnect(t, "pastebin.com:443"); status == http.StatusOK {
+			t.Error("the forwarder reached pastebin.com")
+		}
+	})
+
 	// Scenario: A disallowed host. An agent requests a host the policy
 	// does not list; nono refuses it.
 	t.Run("A disallowed host", func(t *testing.T) {
@@ -416,6 +464,27 @@ func TestJobs(t *testing.T) {
 			return strings.Contains(logs(t, "cp-nono"), "pastebin.com")
 		})
 	})
+}
+
+// daemonConnect sends a CONNECT for host through the worker daemon's
+// egress forwarder (flowprobe connect), as a guest does, and returns the
+// status it got.
+func (j *job) daemonConnect(t *testing.T, host string) int {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := j.flowprobe(ctx, "connect", host)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("CONNECT %s through the worker daemon's forwarder: %v: %s", host, err, stderr.String())
+	}
+	var status int
+	if _, err := fmt.Sscan(string(out), &status); err != nil {
+		t.Fatalf("flowprobe connect printed %q", out)
+	}
+	return status
 }
 
 // connect sends a CONNECT for host on the job's egress flow and returns

@@ -25,6 +25,9 @@ export CPCTL=$CP_LIVE_DIR/bin/cpctl
 
 mkdir -p "$CP_LIVE_DIR/bin" "$CP_LIVE_DIR/model" "$CP_SORTIE_CONFIG_DIR" "$CP_NONO_DIR"
 (cd "$CP" && go build -o "$CP_LIVE_DIR/bin/" ./cmd/cpctl ./livetest/fakemodel)
+# The worker daemon's own flow clients, which the scenarios drive through
+# Pomerium (livetest/jobs_test.go, flowprobe), static for the image they run in.
+(cd "$CP/../worker-daemon" && CGO_ENABLED=0 go build -o "$CP_LIVE_DIR/bin/" ./internal/flows/flowprobe)
 podman build -q -f "$LIVE/fakemodel.Dockerfile" -t "localhost/ortus-nova/cp-fakemodel:$CP_TAG" "$CP/.." > /dev/null
 
 # The control plane's CA, Pomerium's certificate for cp.test, the generated
