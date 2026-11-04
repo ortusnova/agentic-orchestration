@@ -67,7 +67,11 @@ func (e *Egress) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	e.once.Do(func() {
 		up := httpScheme(e.Upstream)
-		e.transport = &http.Transport{Proxy: http.ProxyURL(up), TLSClientConfig: e.TLS, ResponseHeaderTimeout: 10 * time.Minute}
+		var cfg *tls.Config
+		if e.TLS != nil {
+			cfg = e.TLS.Clone()
+		}
+		e.transport = &http.Transport{Proxy: http.ProxyURL(up), TLSClientConfig: cfg, ResponseHeaderTimeout: 10 * time.Minute}
 	})
 	e.requests.Add(1)
 	rp := &httputil.ReverseProxy{
@@ -104,6 +108,9 @@ func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
 		if cfg.ServerName == "" {
 			cfg.ServerName = e.Upstream.Hostname()
 		}
+		// The CONNECT is written as HTTP/1.1: a configuration that also
+		// offers h2 would let the front agree h2 and drop it.
+		cfg.NextProtos = []string{"http/1.1"}
 		tc := tls.Client(up, cfg)
 		if err := tc.HandshakeContext(ctx); err != nil {
 			_ = up.Close()
