@@ -218,14 +218,11 @@ dispatch:
 
 # Every story runs on a worker (worker-daemon), p1's or a worker host's,
 # chosen by Sortie's matcher from what its job requires, never from a host
-# name (spec store agent-platform/one-sortie). Every worker, p1's own too,
-# reaches Sortie only through the control plane's Pomerium at
-# ${STAGE0_CP_PUBLIC_URL}, with a client certificate from the control
-# plane's CA (control-plane/, design D18); the stage-1 edge and its tunnels
-# are gone. Pomerium names the worker to Sortie from its certificate. The
-# flows are its routes; egress is the egress gate behind its egress route,
-# then nono on p1, which holds the credentials and allows only the hosts
-# control-plane/nono/egress-profile.json lists, for every repository.
+# name (spec store agent-platform/one-sortie). A worker reaches p1's edge at
+# 127.0.0.1:${STAGE0_EDGE_WORKER_PORT} on its own loopback: p1's worker
+# directly, a worker host's through the tunnel p1 opens to it. The flows go
+# through the edge; egress is nono on p1, which holds the credentials and
+# allows only the hosts egress-profile.json lists, for every repository.
 # The remote kind takes no allow_hosts and no pass_env: the hosts are nono's,
 # and IS_SANDBOX is in each worker image's env (worker-config.sh). The hooks
 # are gone too (above). acp-broker on p1 carries each session, so the
@@ -240,11 +237,11 @@ environment:
     image: stage0.smolmachine
     requires: {cpu: 4, mem_gib: 8, disk_gib: 20}
     flows:
-      stdio: {url: "${STAGE0_CP_PUBLIC_URL}/stdio"}
-      egress: {url: "${STAGE0_CP_PUBLIC_URL}"}
-      mcp: {url: "${STAGE0_CP_PUBLIC_URL}/mcp"}
-      bundles: {url: "${STAGE0_CP_PUBLIC_URL}/bundles"}
-      usage: {url: "${STAGE0_CP_PUBLIC_URL}/usage"}
+      stdio: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/stdio"}
+      egress: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}"}
+      mcp: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/mcp"}
+      bundles: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/bundles"}
+      usage: {url: "http://127.0.0.1:${STAGE0_EDGE_WORKER_PORT}/usage"}
     credentials:
       # nono holds the value and replaces it in the job's egress; Sortie reads
       # none under the remote kind (refresh-token.sh keeps nono's fresh).

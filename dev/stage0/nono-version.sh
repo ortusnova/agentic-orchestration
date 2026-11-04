@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# The nono release the stage-0 kit runs on p1, for the egress flow behind
-# Pomerium (README.md), pinned by the SHA-256 of each release archive:
+# The nono release the stage-0 kit runs on p1, for the egress flow of the
+# stage-1 edge (README.md), pinned by the SHA-256 of each release archive:
 # the release's SHA256SUMS.txt, also in nono's flake.nix after each release.
 # To move to a new release, change NONO_VERSION and both sums together;
 # `make -C dev/stage0 check-latest` says when a newer one is out.

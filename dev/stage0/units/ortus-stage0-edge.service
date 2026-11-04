@@ -1,0 +1,12 @@
+[Unit]
+Description=Ortus Nova stage 0: the stage-1 edge, one loopback port per worker host's tunnel
+After=ortus-stage0-sortie.service ortus-stage0-nono.service
+
+[Service]
+Type=exec
+ExecStart=@STAGE0_HOME@/bin/stage0-edge -config @STAGE0_HOME@/edge.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

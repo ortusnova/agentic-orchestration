@@ -1,27 +1,31 @@
 #!/usr/bin/env bash
-# On p1: add a worker host to the control plane's front, or remove one
-# (README.md "Worker hosts"). Each worker host gets a client certificate from
-# the control plane's CA, and Pomerium names the worker to Sortie from it;
-# no tunnel, no port of its own (design D18).
+# On p1: add a worker host to the stage-1 edge, or remove one. Each worker
+# host gets its own SSH tunnel, which p1 opens, and its own edge port, and
+# the edge names the worker by that port (README.md, the stage-1 edge).
 #
-#   dev/stage0/worker-host.sh add HOST [NAME]  issue NAME a certificate and copy it to HOST;
-#                                              the worker is NAME (default: HOST without its
-#                                              user@ and domain)
-#   dev/stage0/worker-host.sh remove NAME      revoke NAME's certificate: Pomerium refuses it on
-#                                              every route from then on
-#   dev/stage0/worker-host.sh list             each listed worker, its expiry and its routes
+#   dev/stage0/worker-host.sh add HOST [NAME]  open the tunnel to HOST; the worker is NAME
+#                                              (default: HOST without its user@)
+#   dev/stage0/worker-host.sh remove NAME      close it and forget the worker
+#   dev/stage0/worker-host.sh list             each worker, its host and its edge port
 #   dev/stage0/worker-host.sh carry HOST       copy every merge record of HOST's Sortie
 #                                              into p1's, before HOST's Sortie stops
 #
+# Each worker host also gets its token for the workbench's notifications
+# (notify-channel.sh): minted here, in $STAGE0_HOME/notify-tokens/NAME.token,
+# and copied to the same place in the host's STAGE0_HOME. The tunnel forwards
+# p1's workbench to the host's loopback, on STAGE0_WORKBENCH_TUNNEL_PORT, so a
+# Sortie there posts its notifications to p1's workbench with that token.
+#
 # HOST is an SSH destination that works without a prompt
 # (`ssh -o BatchMode=yes HOST true`). Run stage0.sh first: it sets up the
-# CA and Pomerium. Nothing here restarts Sortie; Pomerium restarts onto the
-# new worker list, so each worker's requests in flight are cut once and
-# its daemon dials again.
+# edge and nono. Nothing here restarts Sortie; the edge restarts, so each
+# tunnel's requests in flight are cut once.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
+UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
+TEMPLATE=ortus-stage0-worker-tunnel@.service
 # A worker host's STAGE0_HOME, as its own shell sees it (the default there).
 WORKER_HOST_HOME=${STAGE0_WORKER_HOST_HOME:-.local/share/ortus-nova/stage0}
 die() { printf 'worker-host.sh: %s\n' "$*" >&2; exit 1; }
@@ -30,19 +34,20 @@ usage() { die "usage: $0 add HOST [NAME] | remove NAME | list | carry HOST"; }
 [[ -s $STAGE0_HOME/stage0.env ]] || die "$STAGE0_HOME/stage0.env is missing: run dev/stage0/stage0.sh first"
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
-# shellcheck source=front-config.sh
-. "$KIT/front-config.sh"
+# shellcheck source=edge-config.sh
+. "$KIT/edge-config.sh"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
+mkdir -p "$STAGE0_WORKERS"
 
-# front_ready: stage0.sh has set up the CA and cpctl.
-front_ready() {
-  [[ -x $STAGE0_HOME/bin/cpctl && -s $STAGE0_CP_HOME/settings.json ]] \
-    || die "the control plane's front is not set up: run dev/stage0/stage0.sh first"
-}
-
-# apply: Pomerium follows the worker list cpctl rendered.
+# apply: the edge's configuration and units follow $STAGE0_WORKERS.
 apply() {
-  if systemctl --user is-enabled -q ortus-stage0-pomerium.service 2>/dev/null; then
-    systemctl --user restart ortus-stage0-pomerium.service
+  render_edge_config "$STAGE0_HOME/edge.json"
+  mkdir -p "$UNITS"
+  sed -e "s|@STAGE0_HOME@|$STAGE0_HOME|g" "$KIT/units/$TEMPLATE" > "$UNITS/$TEMPLATE"
+  systemctl --user daemon-reload
+  if systemctl --user is-enabled -q ortus-stage0-edge.service 2>/dev/null; then
+    systemctl --user restart ortus-stage0-edge.service
   fi
 }
 
@@ -53,43 +58,46 @@ case $cmd in
     [[ $# == 1 || $# == 2 ]] || usage
     host=$1
     name=${2:-${host#*@}}
-    name=${name%%.*}
     [[ $host =~ ^[A-Za-z0-9._@-]+$ ]] || die "HOST must be a plain SSH destination: $host"
-    [[ $name =~ $FRONT_WORKER_NAME ]] || die "NAME must be a DNS label (lower-case letters, digits, '-'): $name"
-    [[ $name == p1 ]] && die "p1 is the control plane: stage0.sh issues its own worker's certificate"
-    front_ready
+    [[ $name =~ $EDGE_WORKER_NAME ]] || die "NAME must be letters, digits, '.', '_' or '-': $name"
+    [[ $name == p1 ]] && die "p1 is the control plane: stage0.sh runs its worker, with no tunnel"
+    port=$(edge_port "$name")
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" true || die "ssh $host does not work without a prompt"
-    cpctl worker issue "$name" > /dev/null || die "could not issue $name a certificate"
-    dir=$STAGE0_CP_HOME/workers/$name
-    # The certificate and its key, the CA that signs Pomerium's, the egress
-    # CA's certificate, so the worker's machines trust nono's interception
-    # (its key stays on p1), and Pomerium's URL. The key is the one secret
-    # a worker host keeps; it leaves p1 only here, and p1 deletes its copy.
-    ssh -o BatchMode=yes "$host" "mkdir -p -m 700 $STAGE0_WORKER_HOST_CONFIG" || die "could not reach $host"
-    copy() { # copy FILE NAME MODE
-      ssh -o BatchMode=yes "$host" "umask 077 && cat > $STAGE0_WORKER_HOST_CONFIG/$2.tmp && chmod $3 $STAGE0_WORKER_HOST_CONFIG/$2.tmp && mv $STAGE0_WORKER_HOST_CONFIG/$2.tmp $STAGE0_WORKER_HOST_CONFIG/$2" < "$1" \
-        || die "could not copy $2 to $host"
-    }
-    copy "$dir/worker.crt" "${STAGE0_WORKER_TLS_FILES[0]}" 644
-    copy "$dir/worker.key" "${STAGE0_WORKER_TLS_FILES[1]}" 600
-    copy "$dir/ca.crt" "${STAGE0_WORKER_TLS_FILES[2]}" 644
-    copy "$STAGE0_HOME/egress-ca/ca.crt" egress-ca.crt 644
-    copy <(printf '%s\n' "$STAGE0_CP_PUBLIC_URL") control-plane-url 644
-    rm -f "$dir/worker.key"
+    # The egress CA's certificate, so the worker's machines trust nono's
+    # interception. A certificate, not a credential: its key stays on p1.
+    ssh -o BatchMode=yes "$host" 'mkdir -p ~/.config/ortus-nova && cat > ~/.config/ortus-nova/egress-ca.crt' \
+      < "$STAGE0_HOME/egress-ca/ca.crt" || die "could not copy the egress CA's certificate to $host"
+    # The host's token for the workbench's notifications: the workbench here
+    # takes it, the host's Sortie posts with it through the tunnel.
+    notify_token "$STAGE0_HOME" "$name" || die "could not mint $name's notifications token"
+    ssh -o BatchMode=yes "$host" "umask 077 && mkdir -p $WORKER_HOST_HOME/notify-tokens && cat > $WORKER_HOST_HOME/notify-tokens/$name.token" \
+      < "$STAGE0_HOME/notify-tokens/$name.token" || die "could not copy $name's notifications token to $host"
+    (umask 077; printf 'WORKER_HOST=%s\nEDGE_PORT=%s\nWORKER_PORT=%s\nWORKBENCH_PORT=%s\nWORKBENCH_TUNNEL_PORT=%s\n' \
+      "$host" "$port" "$STAGE0_EDGE_WORKER_PORT" "${STAGE0_WORKBENCH_PORT:-8793}" "$STAGE0_WORKBENCH_TUNNEL_PORT" \
+      > "$STAGE0_WORKERS/$name.env")
     apply
-    echo "worker $name: $host holds its certificate (~/$STAGE0_WORKER_HOST_CONFIG); on $host, run STAGE0_PROFILE=worker dev/stage0/stage0.sh to dial $STAGE0_CP_PUBLIC_URL"
+    instance=ortus-stage0-worker-tunnel@$name.service
+    systemctl --user enable -q "$instance"
+    systemctl --user restart "$instance"
+    for _ in $(seq 30); do
+      code=$(ssh -o BatchMode=yes "$host" curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT/" || true)
+      if [[ $code != 000 && -n $code ]]; then
+        echo "worker $name: $host reaches p1's edge at http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT (edge port $port)"
+        exit 0
+      fi
+      sleep 1
+    done
+    die "the tunnel is up but the edge does not answer on $host: journalctl --user -u $instance -u ortus-stage0-edge"
     ;;
   remove)
     [[ $# == 1 ]] || usage
     name=$1
-    [[ $name =~ $FRONT_WORKER_NAME ]] || die "no worker $name"
-    [[ $name == p1 ]] && die "p1 is p1's own worker, which stage0.sh runs"
-    front_ready
-    cpctl worker revoke "$name" > /dev/null || die "no worker $name"
-    # A token the stage-1 edge's add minted for its notifications.
-    rm -f "$STAGE0_HOME/notify-tokens/$name.token"
+    [[ $name =~ $EDGE_WORKER_NAME && -e $STAGE0_WORKERS/$name.env ]] || die "no worker host $name"
+    worker_is_local "$name" && die "$name is p1's own worker, which stage0.sh runs"
+    systemctl --user disable -q --now "ortus-stage0-worker-tunnel@$name.service" 2>/dev/null || true
+    rm -f "$STAGE0_WORKERS/$name.env" "$STAGE0_HOME/notify-tokens/$name.token"
     apply
-    echo "revoked worker $name: Pomerium refuses its certificate on every route"
+    echo "removed worker host $name"
     ;;
   carry)
     # Before a worker host's Sortie stops (its move from the homelab
@@ -112,8 +120,11 @@ case $cmd in
     ;;
   list)
     [[ $# == 0 ]] || usage
-    front_ready
-    cpctl worker list
+    for name in $(worker_names); do
+      host=$(worker_setting "$name" WORKER_HOST)
+      worker_is_local "$name" && host=local
+      printf '%s\t%s\tedge port %s\n' "$name" "$host" "$(worker_setting "$name" EDGE_PORT)"
+    done
     ;;
   *) usage ;;
 esac

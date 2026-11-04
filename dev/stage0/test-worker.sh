@@ -4,7 +4,7 @@
 # agent-platform/one-sortie): the worker daemon's configuration, which the
 # daemon itself checks (worker-daemon check), gives every worker the same
 # images and a homelab job what the homelab Sortie gave its machines; p1's
-# own worker dials Pomerium too; a worker host's Sortie and p1's Huly tunnels
+# own worker needs no tunnel; a worker host's Sortie and p1's Huly tunnels
 # are retired; the retired homelab profile moves only when a person says so;
 # and a second run changes nothing.
 set -euo pipefail
@@ -41,18 +41,14 @@ conf=$STAGE0_HOME/worker.json
 
 # A worker without homelab's inputs: the stage-0 pack, with the egress CA,
 # and no nested.
-url=https://p1.example.org:8443
-tls=("$tmp/cp-worker.crt" "$tmp/cp-worker.key" "$tmp/cp-ca.crt")
-render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 "$daemon" check -config "$conf" > "$tmp/out" 2>&1 && ok "the daemon accepts the configuration" || fail "check: $(cat "$tmp/out")"
 grep -q '"stage0.smolmachine": "'"$STAGE0_PACK"'"' "$conf" && ok "the stage-0 pack is stage0.smolmachine, as the workflow names it" || fail "packs: $(cat "$conf")"
 grep -q '"nested": false' "$conf" && ok "a worker without homelab's inputs does not declare nested" || fail "nested: $(cat "$conf")"
 grep -q '"ORTUS_EGRESS_CA": "'"$tmp/ca.crt"'"' "$conf" && grep -q 'update-ca-certificates' "$conf" \
   && ok "every machine trusts the egress CA's interception" || fail "CA: $(cat "$conf")"
 grep -q '"IS_SANDBOX": "1"' "$conf" && ok "the agent runs with IS_SANDBOX, which the remote kind does not pass" || fail "IS_SANDBOX: $(cat "$conf")"
-grep -q '"url": "https://p1.example.org:8443"' "$conf" \
-  && grep -q '"tls": {"cert_file": "'"$tmp/cp-worker.crt"'", "key_file": "'"$tmp/cp-worker.key"'", "ca_file": "'"$tmp/cp-ca.crt"'"}' "$conf" \
-  && ok "the worker dials Pomerium with its client certificate" || fail "url: $(cat "$conf")"
+grep -q '"url": "http://127.0.0.1:7700"' "$conf" && ok "the worker dials the edge on its own loopback" || fail "url: $(cat "$conf")"
 for host in p1 taichi; do
   if grep -v '"worker_id"' "$conf" | grep -q "\"$host\""; then fail "the configuration names the host $host beyond worker_id"; fi
 done
@@ -61,15 +57,15 @@ done
 # a fixed 2 left taichi, 32 CPUs and 91 GiB, with 18 CPUs and 42 GiB free
 # while a job waited on its slots (2026-11-03).
 if grep -q '"run_slots"' "$conf"; then fail "run_slots is written without STAGE0_WORKER_SLOTS: $(cat "$conf")"; else ok "without STAGE0_WORKER_SLOTS the daemon sizes the slots from the host"; fi
-STAGE0_WORKER_SLOTS=4 render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+STAGE0_WORKER_SLOTS=4 render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 grep -q '"run_slots": 4,' "$conf" && "$daemon" check -config "$conf" > "$tmp/out" 2>&1 \
   && ok "STAGE0_WORKER_SLOTS sets run_slots" || fail "override: $(cat "$conf" "$tmp/out")"
 for bad in 0 -1 two; do
-  if STAGE0_WORKER_SLOTS=$bad render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}" 2> /dev/null; then
+  if STAGE0_WORKER_SLOTS=$bad render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt" 2> /dev/null; then
     fail "STAGE0_WORKER_SLOTS=$bad was taken"
   else ok "STAGE0_WORKER_SLOTS=$bad is refused"; fi
 done
-STAGE0_WORKER_SLOTS='' render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+STAGE0_WORKER_SLOTS='' render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 grep -q '"run_slots"' "$conf" && fail "an empty STAGE0_WORKER_SLOTS wrote run_slots" || ok "an empty STAGE0_WORKER_SLOTS follows the host"
 
 # The retired STAGE0_MAX_AGENTS: the default the kit wrote goes, with its
@@ -90,7 +86,7 @@ env_case own '# Mine.' 6
   && ok "a person's STAGE0_MAX_AGENTS becomes STAGE0_WORKER_SLOTS" || fail "own: $(cat "$tmp/own.env" "$tmp/own.out")"
 sum=$(sha256sum < "$tmp/own.env"); migrate_max_agents "$tmp/own.env"
 [[ $(sha256sum < "$tmp/own.env") == "$sum" ]] && ok "migrating again changes nothing" || fail "a second migration changed $(cat "$tmp/own.env")"
-render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 
 # A worker with homelab's inputs: the homelab pack and what a homelab job needs.
 STAGE0_EGRESS_CA=$tmp/ca.crt
@@ -98,7 +94,7 @@ mounts="{\"host\": \"$tmp/sources\", \"guest\": \"/home/builder/.cache/homelab-s
 mounts+=", $(homelab_state_mounts "$tmp/recorder" "$tmp/open-issues")"
 STAGE0_HOMELAB_PACK=$STAGE0_HOME/packs/homelab-0123.smolmachine
 STAGE0_HOMELAB_IMAGE_JSON=$(homelab_image_json /opt/krunfw "$mounts")
-render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 "$daemon" check -config "$conf" > "$tmp/out" 2>&1 && ok "the daemon accepts the homelab image" || fail "check homelab: $(cat "$tmp/out")"
 grep -q '"homelab.smolmachine": "'"$STAGE0_HOMELAB_PACK"'"' "$conf" && grep -q '"nested": true' "$conf" \
   && ok "a worker with homelab's inputs has the homelab pack and declares nested" || fail "homelab pack: $(cat "$conf")"
@@ -117,9 +113,34 @@ for step in 'sops/age/keys.txt' 'guest-start.sh' 'scripts/vmhost/prepare.sh' '/h
   grep -q "$step" "$conf" && ok "its setup does what the hooks did: $step" || fail "no $step in the setup"
 done
 sum=$(sha256sum < "$conf")
-render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
+render_worker_config "$conf" taichi http://127.0.0.1:7700 "$tmp/ca.crt"
 [[ $(sha256sum < "$conf") == "$sum" ]] && ok "rendering again changes nothing" || fail "a second render differs"
 unset STAGE0_HOMELAB_PACK STAGE0_HOMELAB_IMAGE_JSON
+
+# p1's own worker: on the edge at the tunnels' port, with no tunnel.
+STAGE0_SORTIE_PORT=7680
+# shellcheck source=edge-config.sh
+. "$KIT/edge-config.sh"
+mkdir -p "$STAGE0_WORKERS"
+printf 'WORKER_HOST=brian@taichi\nEDGE_PORT=7701\nWORKER_PORT=7700\n' > "$STAGE0_WORKERS/taichi.env"
+register_local_worker p1
+touch -d '2000-01-01' "$STAGE0_WORKERS/p1.env"
+register_local_worker p1
+[[ $(stat -c %Y "$STAGE0_WORKERS/p1.env") == $(date -d 2000-01-01 +%s) ]] && ok "registering p1's worker again changes nothing" || fail "p1.env was rewritten"
+[[ $(tunnel_workers | tr '\n' ' ') == "taichi " ]] && ok "p1's worker gets no tunnel" || fail "tunnel workers: $(tunnel_workers)"
+render_edge_config "$STAGE0_HOME/edge.json"
+edge=${STAGE0_EDGE_BIN:-}
+if [[ -z $edge ]]; then
+  edge=$tmp/stage0-edge
+  (cd "$KIT/edge" && go build -o "$edge" .)
+fi
+echo control > "$STAGE0_HOME/sortie-token"
+echo pass > "$STAGE0_HOME/nono-pass"
+[[ $("$edge" -check -config "$STAGE0_HOME/edge.json" | tr '\n' ';') == "p1 127.0.0.1:7700;taichi 127.0.0.1:7701;" ]] \
+  && ok "the edge names p1's worker by the port the workflow's flows use" || fail "edge: $(cat "$STAGE0_HOME/edge.json")"
+grep -q "\"jobs_file\": \"$STAGE0_HOME/live-proofs/active\"" "$STAGE0_HOME/edge.json" && grep -q '"egress": "127.0.0.1:7691"' "$STAGE0_HOME/edge.json" \
+  && ok "the edge sends a running live proof's egress to the live-proof nono" || fail "edge live_proof: $(cat "$STAGE0_HOME/edge.json")"
+[[ $(edge_port mac) == 7702 ]] && ok "a new worker host gets the next free port" || fail "next port: $(edge_port mac)"
 
 # Sortie's agent cap is a ceiling above the workers' run slots, not p1's own
 # slots: the matcher holds each worker to its slots (a fixed 3 for p1 and
