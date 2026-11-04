@@ -452,7 +452,7 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | Credential | Source |
 | --- | --- |
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. nono holds it for the jobs: a job's `SORTIE_GITHUB_TOKEN` is only the `github_api` placeholder, for GitHub's API, which a live-proof job comments its result with ([Live proofs](#live-proofs)) |
-| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
+| Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login, or onto a valid one once its token is revoked ([below](#a-revoked-claude-token)) |
 | Huly | a login with the dev account in `stage0.env` |
 | The workbench's notifications | `notify-tokens/<host>.token` in the stage-0 home, mode 0600, minted by `stage0.sh`: Sortie posts its notifications to the workbench with it, and the workbench refuses any other; no operator credential. See [below](#the-operators-channel) |
 | The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; optional, see [below](#the-operators-channel) |
@@ -461,6 +461,47 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
+
+### A revoked Claude token
+
+nono reads the Claude token only at start, so a token revoked while it
+runs (a logout, a new login elsewhere, a revocation by Anthropic) would
+fail every session's egress to `api.anthropic.com` until nono restarts
+(spec store `agent-platform/supervisor-autonomy`, design D10). Every 10
+minutes `ortus-stage0-token.timer` runs `refresh-token.sh`, which probes
+the token each nono holds, the kit's and the live-proof one, with one
+`GET /v1/models` through that nono:
+
+- **Accepted**: nothing to do but the expiry check (a fresher login
+  restarts both nonos while no agent runs, or at once once nono's token
+  has expired).
+- **Refused as revoked or invalid** (`401`, or `403` saying so): it asks
+  `anthropic-token.py` for the host's token and probes it straight. When
+  `api.anthropic.com` accepts it, it restarts both nonos onto it at once,
+  whatever runs; the sessions that failed on the revoked token retry on
+  their own.
+- **Refused, and no token on the host is accepted**: it records a
+  credentials platform fault for a person through Sortie's person-action
+  path (`POST /api/v1/supervisor/questions`, with the control token),
+  holding the stories that wait to run again (retrying or parked; with
+  none yet, the next pass records it). It records it once: its id stays
+  in `$STAGE0_HOME/nono-token-fault` until a nono holds an accepted token
+  again. The workbench shows it under **Needs a person**.
+- **No answer, or any other answer** (the API or nono unreachable, a
+  `5xx`, a `429`): nothing changes, no restart and no fault; the next pass
+  probes again.
+
+What the operator does: log in to Claude again on p1 (`claude`, then
+`/login`; or `claude setup-token` into `$STAGE0_HOME/claude-oauth-token`).
+`anthropic-token.py` prefers `claude-oauth-token` to any login, so when
+that file holds the revoked token, replace it or delete it.
+Nothing else: within 10 minutes the timer finds the new token, restarts
+both nonos onto it, and marks the fault's action done in Sortie, which
+releases the stories it held. `journalctl --user -u ortus-stage0-token`
+shows each pass: the probe's answer, the restart, the fault's id. The
+probes send the tokens and nono's pass to `curl` on its standard input,
+never on its command line. `test-refresh-token.sh` checks each case with
+`curl`, `systemctl` and `anthropic-token.py` stubbed.
 
 ## Worker hosts (p1)
 
@@ -579,7 +620,7 @@ All on p1 but a worker's own key; no credential is stored on a worker host.
 
 | What | Where |
 | --- | --- |
-| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired |
+| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired or `api.anthropic.com` refuses it ([A revoked Claude token](#a-revoked-claude-token)) |
 | Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The egress gate's credential to nono | `nono-pass` in the stage-0 home |
