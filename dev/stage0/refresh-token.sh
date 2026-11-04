@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sortie reads the Claude token at each launch (the workflow's command
 # source), so it never needs a restart for it. nono holds the same token for
-# the edge's egress flow and reads it only at start, and an OAuth login's
+# the egress flow and reads it only at start, and an OAuth login's
 # token lasts hours. So every 10 minutes (ortus-stage0-token.timer): when a
 # fresher token exists and nono's expires within 90 minutes, restart both
 # nonos (the kit's and the live-proof one) alone, but only while no agent

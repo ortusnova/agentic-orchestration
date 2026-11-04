@@ -3,13 +3,14 @@
 Stages 0 and 1 of the Ortus Nova spec store's `agent-platform-workers`
 (design D13, D15, D18). On p1 it runs the one Sortie, under plan control,
 which dispatches every repository under the `remote` kind, with the plan
-workbench, acp-broker and the local Huly; the stage-1 edge: the edge, nono
-and one SSH tunnel per worker host ([below](#the-stage-1-edge-p1)); and p1's
-own worker daemon. On each worker host, taichi first, it runs only a worker
-daemon ([below](#worker-hosts-taichi)). Where a job runs is the matcher's
-choice, from what the job requires (spec store `agent-platform/one-sortie`).
-GitHub is the forge. Everything is rootless: systemd user units and Huly's
-podman containers.
+workbench, acp-broker and the local Huly; the control plane's front, which
+replaced the stage-1 edge and its SSH tunnels: Pomerium, the egress gate and
+nono ([below](#worker-hosts-p1)); and p1's own worker daemon. On each worker
+host, taichi first, it runs only a worker daemon
+([below](#worker-hosts-taichi)). Where a job runs is the matcher's choice,
+from what the job requires (spec store `agent-platform/one-sortie`). GitHub
+is the forge. Everything is rootless: systemd user units and podman
+containers.
 
 ```sh
 dev/stage0/stage0.sh                  # set up or update, then (re)start the units
@@ -19,9 +20,12 @@ STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daem
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
-dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
+dev/stage0/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
 dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
+dev/stage0/test-front.sh              # check Pomerium's and the egress gate's units on p1, with stubs
+dev/stage0/test-worker-host.sh        # check a worker host's certificate, its issue and its revocation
+dev/stage0/test-retire-edge.sh        # check that the stage-1 edge's units and tunnels are retired
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: make dev-host), then run stage0.sh
 dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and the operator's channel against Sortie (the sortie/ submodule, or SORTIE_SRC)
@@ -31,9 +35,10 @@ dev/stage0/test-supervisor.sh         # check the supervisor's token, prompt, pa
 dev/stage0/supervisor.sh status       # the supervisor's status, budget, open questions and recent actions with their evidence
 dev/stage0/supervisor.sh pause [WHY]  # pause the supervisor, until resume, across restarts
 dev/stage0/supervisor.sh resume       # resume it; a session starts at once for what waited
-dev/stage0/worker-host.sh add HOST    # give a worker host its tunnel and identity (the stage-1 edge)
+dev/stage0/worker-host.sh add HOST    # give a worker host its client certificate from the control plane's CA
+dev/stage0/worker-host.sh remove NAME # revoke it: Pomerium refuses the worker on every route
 dev/stage0/worker-host.sh carry HOST  # before a worker host's Sortie stops: its merge records into p1's Sortie
-make -C dev/stage0 test               # the edge's and stage0-live-proofs' tests and every test-*.sh but the live one
+make -C dev/stage0 test               # stage0-live-proofs' and the workflow's tests and every test-*.sh but the live one
 make -C dev/stage0 test-live          # on p1: the egress scenarios against the pinned nono
 ```
 
@@ -46,14 +51,14 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Workbench | unit `ortus-stage0-workbench`, `http://127.0.0.1:8793`, local mode; the password is in `workbench-password` |
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`; `podman-restart.service` brings it back after a reboot |
 | Pack | `stage0.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`); each worker builds its own |
-| p1's worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (rendered by `worker-config.sh`); it dials the edge at `127.0.0.1:7700` on p1 with no tunnel, and the edge names it `p1` |
+| p1's worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (rendered by `worker-config.sh`); it dials Pomerium at `STAGE0_CP_PUBLIC_URL` with its own client certificate (`$STAGE0_HOME/control-plane/workers/p1`), as every worker host does, and Pomerium names it `p1` |
 | Live kit | `$STAGE0_HOME/kit`, the kit's own detached worktree of `origin/main`: `stage0.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-stage0-deploy.timer` moves it to each merge within a minute (`deploy.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit, `worker-daemon/` included, runs `stage0.sh` again at once, and so does a merge to Sortie's `plan-bench` (`stage0.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put). No change drains the host (see [A deploy never drains](#a-deploy-never-drains)); a failed build goes back to the running commit. One `stage0.sh` or deploy runs at a time (`$STAGE0_HOME/stage0.lock`): a second `stage0.sh` waits, and the timer tries again a minute later. `STAGE0_KIT_FROM_CHECKOUT=1 dev/stage0/stage0.sh` runs your checkout instead, to try a branch, and stops the timer |
 | Previews | unit `ortus-stage0-previews.timer` every minute, and one `ortus-stage0-preview@<identifier>` per ui story's pull request; see [Previews of ui stories](#previews-of-ui-stories) |
 | Live proofs | unit `ortus-stage0-live-proofs.timer` every minute (`run-live-proofs.sh`, `$STAGE0_HOME/bin/stage0-live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-stage0-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
-| Stage-1 edge | units `ortus-stage0-edge`, `ortus-stage0-nono` and `ortus-stage0-worker-tunnel@<worker>`; see [The stage-1 edge](#the-stage-1-edge-p1) |
+| Control plane's front | units `ortus-stage0-pomerium`, `ortus-stage0-egress-gate`, `ortus-stage0-nono` and `ortus-stage0-nono-live-proof`; see [Worker hosts](#worker-hosts-p1) |
 | Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-edge`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-worker-tunnel@<worker>`, `-previews`, `-preview@<identifier>`) |
+| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-pomerium`, `-egress-gate`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-previews`, `-preview@<identifier>`) |
 
 ## How a story runs
 
@@ -150,7 +155,7 @@ by the same Sortie, like any other.
   (`pack/claude-settings.json`). Sortie refuses consent on unattended runs,
   so a prompt would hold the run until acp-broker's 10-minute timeout.
 - **Web search.** opencode's `websearch` uses Firecrawl's keyless MCP
-  (`websearch.provider` in `pack/opencode.json`), so `egress-profile.json`
+  (`websearch.provider` in `pack/opencode.json`), so `control-plane/nono/egress-profile.json`
   allows `mcp.firecrawl.dev` and no credential is bound. With no provider set,
   opencode asks the user to pick one on the first search, and Sortie
   refuses that prompt.
@@ -244,7 +249,7 @@ per preview, for the proxy in front of the live workbench, and runs
 `STAGE0_WORKBENCH_URL` the address is the preview's loopback port.
 
 The review on the preview runs in a job's machine, so it reaches the preview
-only through the job's egress: `egress-profile.json` must allow the
+only through the job's egress: `control-plane/nono/egress-profile.json` must allow the
 preview's name, and the preview must let the review sign in. The kit sets up
 neither by itself.
 
@@ -309,7 +314,7 @@ Some acceptance criteria need a live run that the story's own machine
 cannot do: a host its egress refuses, a sandbox, another repository (spec
 store `agent-platform/run-supervision`, "A live criterion a story's machine
 cannot run becomes a live-proof job"). For example, homelab's full vm chain
-needs Let's Encrypt staging, which `egress-profile.json` does not allow. The
+needs Let's Encrypt staging, which `control-plane/nono/egress-profile.json` does not allow. The
 review records such a criterion `live-proof` in `.sortie/criteria.json`
 and names it after `live proof needed:`; Sortie then does not merge the
 pull request and comments the criterion on the story. The supervisor
@@ -348,14 +353,14 @@ machine could not run it as its `evidence`. Every minute
   supervisor then decides on the result: merge (Sortie's merge finds a
   parked story's pull request the same way), answer, or ask a person.
 - **The egress.** While the job runs, its identifier is in
-  `$STAGE0_HOME/live-proofs/active`, and the edge sends its CONNECTs to the
+  `$STAGE0_HOME/live-proofs/active`, and the egress gate sends its CONNECTs to the
   live-proof nono (`ortus-stage0-nono-live-proof`, `run-nono.sh live-proof`,
   on `STAGE0_NONO_LIVE_PROOF_PORT`, default 7691). That nono runs the kit's
   profile, with its credentials, plus the hosts in `egress-live-proof.json`
   (`stage0-live-proofs profile` renders it into
   `$STAGE0_HOME/egress-profile-live-proof.json`). Add a host a live chain
-  needs to that file, not to `egress-profile.json`. The edge's journal
-  records each live-proof tunnel with `profile=live-proof`.
+  needs to that file, not to `control-plane/nono/egress-profile.json`. The
+  egress gate's journal records each live-proof tunnel with `profile=live-proof`.
 - **The result.** The job comments its result on the pull request through
   GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
   `github_api` credential that nono holds. The comment's first line is
@@ -387,7 +392,7 @@ no job. `stage0-live-proofs` keeps its record in
 and the status against a fake Sortie and a fake GitHub. `test-review-gate.sh`
 checks the job's prompt, its placement on taichi by Sortie's matcher, and
 Sortie's merge gate on the status, with Sortie's GitHub adapter against a
-fake forge. `edge/` checks the live-proof egress.
+fake forge. `control-plane/internal/egress` checks the live-proof egress.
 
 ## A deploy never drains
 
@@ -400,13 +405,15 @@ worker stopped meanwhile loses its lease and is retried, as for any lost
 lease. On a busy p1 running 2 stories with 9 waiting, a kit merge applies
 within the minute, the 2 go on, and the 9 are dispatched as slots free.
 
-nono, the edge and the worker daemon carry the runs (their egress, their
+nono, the egress gate, Pomerium and the worker daemon carry the runs (their egress, their
 stream, their machines), so `stage0.sh` restarts each only when what it runs
 changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
-live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
-its source, `edge.json` or unit; the worker daemon for its binary,
+live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the egress
+gate for its source, its script, `stage0.env`, the control token or unit;
+Pomerium for its image, its configuration (a new worker list), its
+certificate, its script or unit; the worker daemon for its binary,
 `worker.json` or unit (`worker-build.sh` builds it with `-trimpath
 -buildvcs=false`, so the same code builds the same bytes and a test or
 a document under `worker-daemon/` restarts nothing; a daemon an earlier
@@ -455,6 +462,142 @@ Git reaches GitHub over HTTPS through a credential helper in the kit's own
 `gitconfig` (`GIT_CONFIG_GLOBAL`). It includes `~/.gitconfig` and holds no
 secret.
 
+## Worker hosts (p1)
+
+Every worker, p1's own and each worker host's, reaches Sortie only
+through the control plane's front on p1: Pomerium, with a client
+certificate from the control plane's CA (spec store
+`agent-platform/control-plane`, design D18). It replaced the stage-1 edge
+and its SSH tunnels; the worker daemon and the runs are unchanged, and only
+its configuration names Pomerium's URL and its certificate. Only the control
+profile runs it. The CA, the worker list and Pomerium's configuration are
+`control-plane/`'s (`cpctl`, the [control plane operator
+guide](../../control-plane/docs/operator-guide.md)), in
+`$STAGE0_HOME/control-plane`; p1 runs Pomerium, the egress gate and nono as
+user units in front of its own Sortie rather than the whole compose project.
+
+| Part | Where |
+| --- | --- |
+| Pomerium | unit `ortus-stage0-pomerium` (`run-pomerium.sh`): the image `control-plane/compose.yaml` pins by digest, under rootless podman on the host's network, on the port of `STAGE0_CP_PUBLIC_URL` (default `https://<p1's FQDN>:8443`, written to `stage0.env` on the first run; its host must resolve to p1 on every worker host, and p1's firewall must admit the port from each of them). Its configuration, `$STAGE0_HOME/control-plane/pomerium/config.yaml`, is rendered by `cpctl` from the worker list; its certificate and key enter its container as podman secrets |
+| Egress gate | unit `ortus-stage0-egress-gate` (`run-egress-gate.sh`), `$STAGE0_HOME/bin/cp-egress` built from `control-plane/cmd/cp-egress`, on `127.0.0.1:7692` (`STAGE0_EGRESS_GATE_PORT`), behind Pomerium's egress route |
+| nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with the control plane's `control-plane/nono/egress-profile.json`, the compose project's too. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
+| Live-proof nono | unit `ortus-stage0-nono-live-proof` on `127.0.0.1:7691` (`STAGE0_NONO_LIVE_PROOF_PORT`); see [Live proofs](#live-proofs) |
+| Workers | `$STAGE0_HOME/control-plane/workers.json`, each worker's certificate fingerprint and routes; `dev/stage0/worker-host.sh list` |
+
+What a worker's request meets:
+
+- **Only the CA's certificates.** Pomerium requires a client certificate
+  from the control plane's CA on every connection and rejects any other
+  in the TLS handshake (`downstream_mtls`, `enforcement:
+  reject_connection`). Each flow (control, stdio, egress, MCP, bundles,
+  usage) is its own route, which allows only the certificates the worker
+  list names.
+- **Identity.** On every route Pomerium sets `X-Sortie-Worker-Identity`
+  (Sortie's `worker.identity_header`) to the certificate's DNS name, the
+  worker's name, and drops any value the request brings, so taichi's
+  daemon that says `p1` reaches Sortie as `taichi`.
+- **Sortie** listens on p1's loopback only (`127.0.0.1:7680`), in plain
+  HTTP: TLS ends at Pomerium (design D14.4). Sortie checks each flow's job
+  token itself. While it restarts, Pomerium answers a worker `502` or
+  `503`, which the worker daemon retries, keeping its machine; a `401`
+  would tell it the job is gone.
+- **Egress.** A `CONNECT` is the egress flow; its job token is the
+  `Proxy-Authorization` (Bearer, or Basic as in
+  `HTTPS_PROXY=https://job:<token>@<Pomerium>`). The egress gate asks
+  Sortie's `POST /api/v1/tokens/introspect` (with the control token) about
+  it and admits it only when it is live and granted for egress; anything
+  else gets `407` and never reaches nono. While Sortie cannot answer, as
+  while it restarts, the gate answers `503`, which the worker retries. An
+  admitted `CONNECT` goes through nono, which allows only the hosts in
+  `control-plane/nono/egress-profile.json`, the one list of the hosts a
+  job of any repository may reach, with the forge's and those of the
+  credentials nono holds (`workflow/profile_test.go` checks it holds each
+  credential `WORKFLOW.md` binds). The remote kind takes no `allow_hosts`,
+  so the workflow has none; add a host a chain needs to that profile. For
+  a credential's host nono intercepts TLS with the kit's egress CA and
+  replaces the placeholder Sortie gives the machine
+  (`sortie-credential-<name>`) with the credential. A refusal is recorded
+  in the gate's journal with the worker, job, attempt and host:
+  `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
+  A live-proof job that runs goes through the live-proof nono instead.
+
+The workflow names the flows by Pomerium's URL:
+`${STAGE0_CP_PUBLIC_URL}/<flow>` for stdio, mcp, bundles and usage, and
+`${STAGE0_CP_PUBLIC_URL}` for egress.
+
+`stage0.sh` stops and removes the stage-1 edge's units on a host that still
+has them (`retire-edge.sh`): `ortus-stage0-edge` and each
+`ortus-stage0-worker-tunnel@<worker>`. Before that, it gives each worker
+host the edge served (`$STAGE0_HOME/workers/<worker>.env` with its SSH
+destination) its certificate with `worker-host.sh add`, unless the worker
+list names it already; a host it cannot reach stops the run with the edge
+still up. On the worker host, the deploy timer's `stage0.sh` from the same
+merge waits for the files `add` copies, up to `STAGE0_WORKER_CERT_WAIT`
+seconds (default 1800; a `stage0.sh` run by hand does not wait), then dials
+Pomerium. The edge's state (`edge.json`, `workers/`) stays, unread, so a
+revert to the edge finds its worker hosts again.
+
+### Add a worker host
+
+On p1, once `stage0.sh` has run:
+
+```sh
+dev/stage0/worker-host.sh add brian@taichi        # the worker is named taichi
+dev/stage0/worker-host.sh add mini.lan mac-mini   # or name it yourself
+dev/stage0/worker-host.sh list
+```
+
+`add` needs `ssh -o BatchMode=yes HOST true` to work from p1. It issues the
+worker a client certificate from the control plane's CA for its name (a DNS
+label), lists it on every route, and copies to `~/.config/ortus-nova/` on
+the host the certificate (`cp-worker.crt`), its key (`cp-worker.key`, mode
+0600, which p1 then deletes: it is the one secret a worker host keeps), the
+CA (`cp-ca.crt`), the egress CA's certificate (`egress-ca.crt`; its
+machines trust nono's interception with it, and its key stays on p1) and
+Pomerium's URL (`control-plane-url`). It restarts Pomerium onto the new
+list; Sortie is not restarted. Then, on the host, `STAGE0_PROFILE=worker
+dev/stage0/stage0.sh` points its daemon at Pomerium with the certificate.
+Adding the same name again gives it a new certificate and drops the old one.
+p1's own worker gets its certificate from `stage0.sh`, in
+`$STAGE0_HOME/control-plane/workers/p1`.
+
+### Revoke a worker host
+
+```sh
+dev/stage0/worker-host.sh remove taichi
+```
+
+`remove` takes `taichi` off the worker list and restarts Pomerium onto it at
+once: from then on Pomerium answers each of `taichi`'s requests `403` on
+every route, so its next check-in is rejected, and a job it holds can no
+longer reach its flows, so its lease expires and Sortie retries the job
+elsewhere. Add it again to give it a new certificate.
+
+### Where the secrets live
+
+All on p1 but a worker's own key; no credential is stored on a worker host.
+
+| What | Where |
+| --- | --- |
+| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired |
+| Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
+| Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
+| The egress gate's credential to nono | `nono-pass` in the stage-0 home |
+| Egress CA | `egress-ca/ca.key` (mode 0600) and `egress-ca/ca.crt` in the stage-0 home |
+| The control plane's CA | `control-plane/ca/ca.key` (mode 0600) and `ca.crt` in the stage-0 home; only `cpctl` reads the key |
+| Pomerium's certificate and key | `control-plane/secrets/cp-pomerium-cert` and `cp-pomerium-key` in the stage-0 home, which `run-pomerium.sh` makes podman secrets. `cpctl init` also writes the compose project's other generated secrets there; p1 uses none of them |
+| A worker's certificate and key | on the worker host, `~/.config/ortus-nova/cp-worker.crt` and `cp-worker.key` (mode 0600); p1's own in `control-plane/workers/p1` in the stage-0 home |
+
+`make -C dev/stage0 test` checks Pomerium's and the egress gate's units
+(`test-front.sh`) and the certificates of the workers
+(`test-worker-host.sh`); `make -C control-plane test` runs the egress
+gate's scenarios against a fake Sortie, with a stand-in for nono, and
+`make -C control-plane live-test` every scenario of
+`agent-platform/control-plane` against the real Pomerium. `make -C
+dev/stage0 test-live` runs the nono scenarios on p1 through the egress
+gate against the pinned nono, the credentials on p1, `api.anthropic.com`
+and `mcp.firecrawl.dev`, on ports of its own.
+
 ## The operator's channel
 
 Alerts go through Sortie's notifications (spec store
@@ -482,18 +625,11 @@ its question stays open (`workbench/docs/operator-guide.md`, "Sortie's
 notifications"). It refuses a post with a wrong or missing token.
 
 Every host has its own token. p1's Sortie posts to the workbench on p1's
-loopback. For each worker host, such as taichi, `worker-host.sh add` mints
-its token on p1 (`notify-tokens/taichi.token`, which the workbench takes)
-and copies it to the same place in the host's stage-0 home, and the tunnel
-p1 opens to the host also forwards p1's workbench to the host's loopback, on
-port 7790 (`STAGE0_WORKBENCH_TUNNEL_PORT`). A Sortie on the host posts there
-with its own token: `run-sortie.sh` on a host of the worker profile (or with
-`STAGE0_WORKBENCH_NOTIFY_PORT=7790`) puts `http://127.0.0.1:7790/api/notifications/taichi/<token>` in its
-environment. A worker host added before this gets the forward at p1's next
-`stage0.sh`, which says when a host still needs `worker-host.sh add` for its
-token. Since `agent-platform/one-sortie` the kit runs no Sortie on a worker
-host: a story that runs on taichi's worker parks on p1's Sortie, and its
-notification takes the first way.
+loopback. Since `agent-platform/one-sortie` the kit runs no Sortie on a
+worker host: a story that runs on taichi's worker parks on p1's Sortie, and
+its notification takes that way. So a worker host gets no token: the stage-1
+edge's tunnel that forwarded p1's workbench to it is gone with the edge, and
+`worker-host.sh remove` deletes a token an earlier `add` minted for it.
 
 Any other destination is the operator's choice and one more entry in the
 same list, after the workbench's: any kind Sortie's notifications have
@@ -547,93 +683,6 @@ when one is set, has it with the link. `journalctl --user -u
 ortus-stage0-workbench` logs `notification from p1: session.stopped
 <identifier>`.
 
-## The stage-1 edge (p1)
-
-How the control plane reaches worker hosts until Pomerium and the CA in
-control-plane-images replace it (spec store `agent-platform-workers`,
-design D18; no worker change then). Only the control profile runs it.
-
-| Part | Where |
-| --- | --- |
-| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); the same tunnel forwards p1's workbench to `http://127.0.0.1:7790` (`STAGE0_WORKBENCH_TUNNEL_PORT`), for the host's notifications, which need its token; nothing listens on the LAN, and the host gets no SSH access to p1 |
-| Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker on p1's loopback: `127.0.0.1:7700` for p1's own worker, which needs no tunnel, and one per worker host from `127.0.0.1:7701` up, and nothing else |
-| nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
-| Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port, or `LOCAL=1` for p1's own worker (`stage0.sh` writes it); `dev/stage0/worker-host.sh list` |
-
-What the edge does with a request on a worker's port:
-
-- **Identity.** The port names the worker. The edge sets
-  `X-Sortie-Worker-Identity` (Sortie's `worker.identity_header`) to that
-  worker and drops any value the request brings, so taichi's daemon that
-  says `p1` reaches Sortie as `taichi`.
-- **Worker API.** `/api/v1/workers/...` goes to Sortie. No other Sortie
-  route is reachable, not token introspection, not `/api/v1/state`.
-- **Path flows.** `/stdio/...`, `/mcp/...`, `/bundles/...` and `/usage/...`
-  go to the service of each flow (`STAGE0_EDGE_<FLOW>_URL` in `stage0.env`,
-  Sortie by default), with the flow's prefix removed. The edge first asks
-  Sortie's `POST /api/v1/tokens/introspect` (with the control token) about
-  the request's `Authorization: Bearer` job token, and admits it only when
-  the token is live and granted for that flow; anything else gets `401`
-  and never reaches the service. While Sortie cannot answer, as while it
-  restarts, the request gets `503` instead and still reaches nothing: the
-  worker daemon dials again and keeps its machine, where a `401` would
-  tell it the job is gone. The egress flow answers the same way.
-- **Egress.** A `CONNECT` is the egress flow; its job token is the
-  `Proxy-Authorization` (Bearer, or Basic as in
-  `HTTPS_PROXY=http://job:<token>@127.0.0.1:7700`). Once admitted, the
-  edge tunnels it through nono, which allows only the hosts in
-  `egress-profile.json`, the one list of the hosts a job of any repository
-  may reach, with the forge's and those of the credentials nono holds
-  (`edge/profile_test.go` checks it holds each credential `WORKFLOW.md`
-  binds). The remote kind takes no `allow_hosts`, so the workflow has none;
-  add a host a chain needs to `egress-profile.json`. For a credential's host nono intercepts TLS with the
-  kit's egress CA and replaces the placeholder Sortie gives the machine
-  (`sortie-credential-<name>`) with the credential. A refusal is recorded in
-  the edge's journal with the worker, job, attempt and host:
-  `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
-
-A remote-kind workflow names the flows as the worker host sees them:
-`http://127.0.0.1:7700/<flow>` for stdio, mcp, bundles and usage, and
-`http://127.0.0.1:7700` for egress.
-
-### Add a worker host
-
-On p1, once `stage0.sh` has run:
-
-```sh
-dev/stage0/worker-host.sh add brian@taichi        # the worker is named taichi
-dev/stage0/worker-host.sh add mini.lan mac-mini   # or name it yourself
-dev/stage0/worker-host.sh list
-dev/stage0/worker-host.sh remove taichi
-```
-
-`add` needs `ssh -o BatchMode=yes HOST true` to work from p1. It gives the
-host the next free edge port, writes `$STAGE0_HOME/workers/<worker>.env`,
-copies the egress CA's certificate to `~/.config/ortus-nova/egress-ca.crt`
-on the host (its machines trust nono's interception with it; the key stays
-on p1), enables and starts the host's tunnel unit, restarts the edge with the
-new port, and checks that the host reaches the edge at
-`http://127.0.0.1:7700`. The worker's name is the identity Sortie sees;
-adding the same name again keeps its port. Sortie itself is not restarted.
-
-### Where the credentials live
-
-All on p1; none is stored on a worker host, which holds only the CA's
-certificate.
-
-| What | Where |
-| --- | --- |
-| Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts nono alone onto a fresher one while no agent runs, or at once when its token has expired |
-| Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
-| Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
-| The edge's credential to nono | `nono-pass` in the stage-0 home |
-| Egress CA | `egress-ca/ca.key` (mode 0600) and `egress-ca/ca.crt` in the stage-0 home |
-
-`make -C dev/stage0 test` runs every scenario against a fake Sortie, with
-a stand-in for nono; `make -C dev/stage0 test-live` runs the two nono
-scenarios on p1 against the pinned nono, the credential on p1 and
-`api.anthropic.com`, on ports of its own.
-
 ## Worker hosts (taichi)
 
 A worker host runs only a worker daemon (`worker-daemon/`, its
@@ -643,7 +692,7 @@ requests get theirs from nono on p1. taichi's homelab Sortie, the second
 Sortie of stage 0, is retired: p1's Sortie dispatches homelab too.
 
 ```sh
-# On p1, once: the host's tunnel and identity, and the egress CA's certificate.
+# On p1, once: the host's client certificate, and the egress CA's certificate.
 dev/stage0/worker-host.sh add brian@taichi
 # On the host: the first run writes stage0.env with the profile.
 STAGE0_PROFILE=worker dev/stage0/stage0.sh
@@ -652,7 +701,7 @@ dev/stage0/stage0.sh            # later runs read it from stage0.env
 
 | Part | Where |
 | --- | --- |
-| Worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (`worker-config.sh`), state in `$STAGE0_HOME/worker`. It dials p1's edge at `http://127.0.0.1:7700`, the end of p1's tunnel, and the edge names it by that tunnel |
+| Worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (`worker-config.sh`), state in `$STAGE0_HOME/worker`. It dials p1's Pomerium at `control-plane-url` with its client certificate (`cp-worker.crt`, `cp-worker.key`, `cp-ca.crt` in `~/.config/ortus-nova`, from `worker-host.sh add`), and Pomerium names it by that certificate |
 | Live kit | as on p1, `$STAGE0_HOME/kit` follows `origin/main` (`ortus-stage0-deploy.timer`); a change to the kit runs `stage0.sh` (the worker profile) at once, which restarts the worker daemon only when what it runs changed. A worker host builds no Sortie, follows no `plan-bench` merge and asks no Sortie to pause or resume, whatever Sortie or Huly settings its `stage0.env` kept from the retired homelab profile; nothing on it reads them |
 | Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
 | Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
@@ -730,8 +779,8 @@ and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
 ## Remove it
 
 ```sh
-for w in $(dev/stage0/worker-host.sh list | grep -v '	local	' | cut -f1); do dev/stage0/worker-host.sh remove "$w"; done
-systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-edge ortus-stage0-nono ortus-stage0-worker
+systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-pomerium ortus-stage0-egress-gate \
+  ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-worker
 smolvm machine ls   # delete each wd-* machine: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.service && systemctl --user daemon-reload
 rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces and the pack

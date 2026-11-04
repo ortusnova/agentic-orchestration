@@ -1,0 +1,404 @@
+# The Ortus Nova control plane: one compose project under rootless podman
+# (docs/operator-guide.md). Start, stop and check it with cp.sh, which
+# turns the files in $CP_HOME/secrets into podman secrets first: no secret
+# is a value in this file or a layer of an image.
+#
+# Images built from this repository and the Sortie fork are tagged with the
+# commit they were built from ($CP_TAG, `make images`); every other image is
+# pinned by digest (pin-images.sh).
+#
+# Networks: `internal` has no route out; every service is on it. `outside`
+# carries the ports published on the host (Pomerium for worker hosts, the
+# workbench and Huly for people) and the egress of Sortie (the forge) and
+# nono (the model and forge APIs).
+name: ortus-cp
+
+# Each service is a container of its own, not a member of a pod: the
+# workbench joins Sortie's network namespace, and the rest their networks.
+x-podman:
+  in_pod: false
+
+networks:
+  internal:
+    name: ortus-cp-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.89.71.0/24
+  outside:
+    name: ortus-cp-outside
+
+secrets:
+  cp-sortie-control-token: {external: true}
+  cp-nono-pass: {external: true}
+  cp-workbench-secret: {external: true}
+  cp-viewer-token: {external: true}
+  cp-huly-secret: {external: true}
+  cp-pomerium-cert: {external: true}
+  cp-pomerium-key: {external: true}
+  cp-egress-ca-cert: {external: true}
+  cp-egress-ca-key: {external: true}
+  cp-github-token: {external: true}
+  cp-github-basic: {external: true}
+  cp-anthropic-token: {external: true}
+  cp-huly-token: {external: true}
+  cp-workbench-password-hash: {external: true}
+
+volumes:
+  sortie-data:
+  workbench-data:
+  huly-cockroach:
+  huly-redpanda:
+  huly-minio:
+  huly-elastic:
+
+services:
+  # Sortie binds only its address on the internal network, so only
+  # Pomerium, the egress gate and the workbench reach it. TLS ends at
+  # Pomerium: Sortie serves plain HTTP there, and the flows its workflow
+  # names are Pomerium's https URLs (design D14.4).
+  sortie:
+    image: localhost/ortus-nova/sortie:${CP_TAG:?}
+    container_name: cp-sortie
+    restart: unless-stopped
+    command: ["--host", "10.89.71.10", "--port", "7680", "/etc/sortie/WORKFLOW.md"]
+    volumes:
+      - sortie-data:/var/lib/sortie
+      - ${CP_SORTIE_CONFIG_DIR:?set CP_SORTIE_CONFIG_DIR to the directory of Sortie's WORKFLOW.md}:/etc/sortie:z
+    secrets:
+      - {source: cp-sortie-control-token, type: env, target: SORTIE_CONTROL_TOKEN}
+      - {source: cp-github-token, type: env, target: SORTIE_GITHUB_TOKEN}
+      - {source: cp-huly-token, type: env, target: SORTIE_HULY_TOKEN}
+      - cp-viewer-token
+    networks:
+      internal:
+        ipv4_address: 10.89.71.10
+      outside: {}
+    # The workbench shares this network namespace (it reaches the
+    # acp-broker of each session on loopback), so its port is published
+    # here.
+    ports:
+      - "127.0.0.1:${CP_WORKBENCH_PORT:-8793}:8793"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/cp-probe", "http://10.89.71.10:7680/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  workbench:
+    image: localhost/ortus-nova/workbench:${CP_TAG:?}
+    container_name: cp-workbench
+    restart: unless-stopped
+    network_mode: "service:sortie"
+    depends_on: [sortie]
+    command: ["workbench", "serve", "--host", "0.0.0.0", "--port", "8793"]
+    environment:
+      WORKBENCH_HOME: /var/lib/workbench/home
+      WORKBENCH_RUNTIME_DIR: /var/lib/workbench/sessions
+      WORKBENCH_SORTIE_URL: http://10.89.71.10:7680
+      # Its one shared password is enough: the workbench listens on all
+      # addresses of Sortie's namespace, but the host publishes it on
+      # loopback only.
+      WORKBENCH_ALLOW_LOCAL_MODE: "1"
+    volumes:
+      - workbench-data:/var/lib/workbench
+    secrets:
+      - {source: cp-sortie-control-token, type: env, target: WORKBENCH_SORTIE_TOKEN}
+      - {source: cp-workbench-password-hash, type: env, target: WORKBENCH_PASSWORD_HASH}
+      - {source: cp-workbench-secret, type: env, target: WORKBENCH_SECRET_KEY}
+      - {source: cp-github-token, type: env, target: WORKBENCH_GITHUB_TOKEN}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/cp-probe", "http://127.0.0.1:8793/api/auth/mode"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # The only door for worker hosts: mTLS against the control plane's CA,
+  # one route per flow, rendered by cpctl from the worker list.
+  pomerium:
+    image: docker.io/pomerium/pomerium:v0.33.6@sha256:58354b2f45c01dbd8e34b54c1a8db2af07f834cb215f5e8b1cef60f871bce968
+    container_name: cp-pomerium
+    restart: unless-stopped
+    command: ["--config", "/pomerium/config.yaml"]
+    volumes:
+      - ${CP_HOME:?set CP_HOME to the control-plane directory}/pomerium:/pomerium:ro,z
+    secrets:
+      - cp-pomerium-cert
+      - cp-pomerium-key
+    networks: [internal, outside]
+    ports:
+      - "${CP_PUBLIC_BIND:-0.0.0.0}:${CP_PUBLIC_PORT:-8443}:8443"
+    healthcheck:
+      test: ["CMD", "/bin/pomerium", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Behind Pomerium's egress route: admits each CONNECT by its job token
+  # and tunnels it through nono.
+  egress-gate:
+    image: localhost/ortus-nova/control-plane:${CP_TAG:?}
+    container_name: cp-egress-gate
+    restart: unless-stopped
+    command:
+      - cp-egress
+      - -listen=:7691
+      - -sortie=http://10.89.71.10:7680
+      - -control-token-file=/run/secrets/cp-sortie-control-token
+      - -nono=nono:7690
+      - -nono-pass-file=/run/secrets/cp-nono-pass
+    secrets:
+      - cp-sortie-control-token
+      - cp-nono-pass
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/cp-probe", "tcp://127.0.0.1:7691"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # nono holds every platform credential. It allows only the hosts of its
+  # profile, replaces a job's placeholder with the credential only on
+  # requests to that credential's host, and logs every request (-v, to
+  # standard error). Its standard output, which repeats its own proxy
+  # credential, goes nowhere.
+  nono:
+    image: ghcr.io/nolabs-ai/nono:0.81.0@sha256:e03c93e54feb9d7b1c91c96e1195595bcdd6892a23529cc10dc7dc690ce13c0f
+    container_name: cp-nono
+    restart: unless-stopped
+    stop_signal: SIGINT
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        exec nono proxy -v --listen 0.0.0.0 --port 7690
+        --profile /etc/nono/egress-profile.json
+        --proxy-ca-cert /run/secrets/cp-egress-ca-cert
+        --proxy-ca-key /run/secrets/cp-egress-ca-key >/dev/null
+    environment:
+      NONO_NO_UPDATE_CHECK: "1"
+      # nono keeps its session registry, which TLS interception (and so
+      # credential injection and the method and path rules) needs, under
+      # HOME; the image's user has none.
+      HOME: /tmp/nono
+    volumes:
+      - ${CP_NONO_DIR:-./nono}:/etc/nono:ro,z
+    secrets:
+      - {source: cp-nono-pass, type: env, target: NONO_PROXY_PASS}
+      - {source: cp-anthropic-token, type: env, target: CP_EGRESS_ANTHROPIC}
+      - {source: cp-github-token, type: env, target: CP_EGRESS_GITHUB}
+      - {source: cp-github-basic, type: env, target: CP_EGRESS_GITHUB_BASIC}
+      - cp-egress-ca-cert
+      - cp-egress-ca-key
+    networks: [internal, outside]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7690"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Huly, the tracker: its entry (nginx) and its services. Inside the
+  # project the entry is also reached by the name of its public URL, so
+  # Sortie follows the URLs Huly's configuration gives browsers.
+  huly:
+    image: docker.io/library/nginx:stable-alpine@sha256:0e52bd054126cdc040b1276c0af347aeb02a41b9cfe305d6094767ac30e97949
+    container_name: cp-huly
+    restart: unless-stopped
+    depends_on: [huly-front, huly-account, huly-transactor, huly-collaborator, huly-rekoni, huly-stats]
+    volumes:
+      - ./huly/nginx.conf:/etc/nginx/conf.d/default.conf:ro,z
+    networks:
+      internal:
+        aliases: ["${CP_HULY_HOST:-huly.cp.internal}"]
+      outside: {}
+    ports:
+      - "${CP_HULY_BIND:-127.0.0.1}:${CP_HULY_PORT:-8087}:8087"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8087/config.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+
+  huly-front:
+    image: docker.io/hardcoreeng/front:v0.7.432@sha256:fbdc2d115600a101660fe398fb133e71a4195c78993bfd0f91f31080c23a8f11
+    container_name: cp-huly-front
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: "8080"
+      ACCOUNTS_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_accounts
+      ACCOUNTS_URL_INTERNAL: http://huly-account:3000
+      COLLABORATOR_URL: ws://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_collaborator
+      REKONI_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_rekoni
+      STATS_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_stats
+      # Integrations the control plane does not run; the front needs a URL
+      # for each all the same.
+      LOVE_ENDPOINT: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_love
+      CALENDAR_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_calendar
+      GMAIL_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_gmail
+      TELEGRAM_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_telegram
+      DISABLED_FEATURES: auto-translate,mailboxes
+      UPLOAD_URL: /files
+      ELASTIC_URL: http://huly-elastic:9200
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      TITLE: Huly
+      DEFAULT_LANGUAGE: en
+      LAST_NAME_FIRST: "true"
+      DESKTOP_UPDATES_CHANNEL: selfhost
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  huly-account:
+    image: docker.io/hardcoreeng/account:v0.7.432@sha256:fed0819aa02dc9fb55a783890b583f7daa4d500e5f9973a73b7edc4fe4cd202f
+    container_name: cp-huly-account
+    restart: unless-stopped
+    depends_on: [huly-cockroach, huly-redpanda, huly-minio]
+    environment:
+      ACCOUNT_PORT: "3000"
+      DB_URL: postgresql://root@huly-cockroach:26257/defaultdb?sslmode=disable
+      QUEUE_CONFIG: huly-redpanda:9092
+      TRANSACTOR_URL: ws://huly-transactor:3333;ws://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_transactor
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      FRONT_URL: http://huly-front:8080
+      STATS_URL: http://huly-stats:4900
+      ACCOUNTS_URL: http://huly-account:3000
+      MODEL_ENABLED: "*"
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  huly-workspace:
+    image: docker.io/hardcoreeng/workspace:v0.7.432@sha256:5e6556747493fc3eb9307fad83ca057fca1dfbac0df973443a76681483b4baf1
+    container_name: cp-huly-workspace
+    restart: unless-stopped
+    depends_on: [huly-cockroach, huly-redpanda, huly-minio, huly-account]
+    environment:
+      DB_URL: postgresql://root@huly-cockroach:26257/defaultdb?sslmode=disable
+      ACCOUNTS_DB_URL: postgresql://root@huly-cockroach:26257/defaultdb?sslmode=disable
+      QUEUE_CONFIG: huly-redpanda:9092
+      TRANSACTOR_URL: ws://huly-transactor:3333;ws://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}/_transactor
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      ACCOUNTS_URL: http://huly-account:3000
+      STATS_URL: http://huly-stats:4900
+      MODEL_ENABLED: "*"
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  huly-transactor:
+    image: docker.io/hardcoreeng/transactor:v0.7.432@sha256:27453ae70f03bce99289a471fde4cc8a617e0071c8b896b849074989693fcaba
+    container_name: cp-huly-transactor
+    restart: unless-stopped
+    depends_on: [huly-cockroach, huly-redpanda, huly-minio, huly-account]
+    environment:
+      SERVER_PORT: "3333"
+      DB_URL: postgresql://root@huly-cockroach:26257/defaultdb?sslmode=disable
+      QUEUE_CONFIG: huly-redpanda:9092
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      FRONT_URL: http://${CP_HULY_HOST:-huly.cp.internal}:${CP_HULY_PORT:-8087}
+      ACCOUNTS_URL: http://huly-account:3000
+      FULLTEXT_URL: http://huly-fulltext:4700
+      STATS_URL: http://huly-stats:4900
+      LAST_NAME_FIRST: "true"
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  huly-collaborator:
+    image: docker.io/hardcoreeng/collaborator:v0.7.432@sha256:0b226a3a22f0629cfaedc5ba5d045e3c122f1e16844f8cdaa4ed70d7cce73539
+    container_name: cp-huly-collaborator
+    restart: unless-stopped
+    depends_on: [huly-account, huly-minio]
+    environment:
+      COLLABORATOR_PORT: "3078"
+      ACCOUNTS_URL: http://huly-account:3000
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      STATS_URL: http://huly-stats:4900
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SECRET}
+    networks: [internal]
+
+  huly-fulltext:
+    image: docker.io/hardcoreeng/fulltext:v0.7.432@sha256:f5f24df0c8210b1d4cb636838226b16586b92e80fa028b1c4bcb13ac4674837d
+    container_name: cp-huly-fulltext
+    restart: unless-stopped
+    depends_on: [huly-cockroach, huly-redpanda, huly-minio, huly-elastic, huly-rekoni]
+    environment:
+      DB_URL: postgresql://root@huly-cockroach:26257/defaultdb?sslmode=disable
+      FULLTEXT_DB_URL: http://huly-elastic:9200
+      ELASTIC_INDEX_NAME: huly_storage_index
+      STORAGE_CONFIG: minio|huly-minio?accessKey=minioadmin&secretKey=minioadmin
+      REKONI_URL: http://huly-rekoni:4004
+      ACCOUNTS_URL: http://huly-account:3000
+      STATS_URL: http://huly-stats:4900
+      QUEUE_CONFIG: huly-redpanda:9092
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  huly-rekoni:
+    image: docker.io/hardcoreeng/rekoni-service:v0.7.432@sha256:1d780fc16ca4d7985245f1709f3bd21a777c27422fef35b349a53ba6dd5af78d
+    container_name: cp-huly-rekoni
+    restart: unless-stopped
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SECRET}
+    networks: [internal]
+
+  huly-stats:
+    image: docker.io/hardcoreeng/stats:v0.7.432@sha256:b2139a2b84fe76ea5003f16eabd0a7c8fedcc1c278745c6f1cf326d92f2d2376
+    container_name: cp-huly-stats
+    restart: unless-stopped
+    environment:
+      PORT: "4900"
+    secrets:
+      - {source: cp-huly-secret, type: env, target: SERVER_SECRET}
+    networks: [internal]
+
+  # Huly's stores, reachable only on the internal network.
+  huly-cockroach:
+    image: docker.io/cockroachdb/cockroach:latest-v24.3@sha256:c26f6eca2ce7ab783862cca4a88f6b8b0da006864e16109b1bb3e30d7670bab9
+    container_name: cp-huly-cockroach
+    restart: unless-stopped
+    command: ["start-single-node", "--insecure"]
+    volumes:
+      - huly-cockroach:/cockroach/cockroach-data
+    networks: [internal]
+
+  huly-redpanda:
+    image: docker.io/redpandadata/redpanda:v24.3.6@sha256:04baa40ed34edf86028396f762be802f3b6b0acaab65e9de696a3f15d54c550f
+    container_name: cp-huly-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://huly-redpanda:9092
+      - --rpc-addr=huly-redpanda:33145
+      - --advertise-rpc-addr=huly-redpanda:33145
+      - --mode=dev-container
+      - --smp=1
+      - --default-log-level=info
+      - --memory=512M
+    volumes:
+      - huly-redpanda:/var/lib/redpanda/data
+    networks: [internal]
+
+  huly-elastic:
+    image: docker.io/library/elasticsearch:7.14.2@sha256:f05ab7f4d2aa5040813a0ea4eb76fa99bb31459937a4539efe2f2c2dbb2109fb
+    container_name: cp-huly-elastic
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - huly-elastic:/usr/share/elasticsearch/data
+    networks: [internal]
+
+  # Silo, the MinIO fork huly-selfhost runs: MinIO's images left Docker Hub.
+  huly-minio:
+    image: docker.io/pgsty/silo:RELEASE.2026-10-26T00-00-00Z@sha256:7bb2aff6b89efe1cb1303c10fc21d579447434ed06649ac9ec05a5e2dbf30ad7
+    container_name: cp-huly-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
+    volumes:
+      - huly-minio:/data
+    networks: [internal]

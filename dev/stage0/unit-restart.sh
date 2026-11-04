@@ -2,7 +2,7 @@
 # Sourced by stage0.sh and test-unit-restart.sh. A deploy never waits for
 # the runs going (spec store agent-platform/run-supervision): Sortie and the
 # workbench restart at once, as Sortie re-adopts the runs its workers hold.
-# nono, the edge and the worker daemon carry those runs (their egress, their
+# nono, the egress gate, Pomerium and the worker daemon carry those runs (their egress, their
 # stream, their machines), so stage0.sh restarts each only when what it runs
 # changed, or when it is not running. Needs STAGE0_HOME.
 #
