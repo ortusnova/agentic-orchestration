@@ -2,7 +2,7 @@
 # acp-broker, which Sortie starts in front of each session
 # (environment.host_prefix), and cp-probe for the health check.
 # Build from the repository root: make -C control-plane images.
-FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
+FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS build
 ENV CGO_ENABLED=0 GOWORK=off GOFLAGS=-trimpath
 ARG REVISION=unknown
 WORKDIR /src
@@ -13,7 +13,7 @@ RUN cd sortie && go build -tags osusergo,netgo -ldflags "-s -w -X main.Commit=${
 RUN cd acp-broker && go build -ldflags "-s -w" -o /out/acp-broker ./cmd/acp-broker
 RUN cd control-plane && go build -ldflags "-s -w" -o /out/cp-probe ./cmd/cp-probe
 
-FROM docker.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+FROM docker.io/library/debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="sortie" \
       org.opencontainers.image.source="https://github.com/ortusnova/agentic-orchestration" \
