@@ -160,18 +160,23 @@ func (d *Daemon) adoptJob(ctx context.Context, dir string, rec record) bool {
 	d.mu.Lock()
 	d.jobs[j.key] = j
 	d.mu.Unlock()
-	log.Info("job adopted from the last start: resuming it", slog.String("machine", m.Name()))
+	log.Info("job adopted from the last start: resuming it once the daemon checked in", slog.String("machine", m.Name()))
 	s := *rec.Seed
-	d.wg.Go(j.heartbeats)
-	d.wg.Go(func() {
-		j.finish(func(dir string) (string, string) {
-			if err := j.resume(); err != nil {
-				return failed("resume: %v", err)
-			}
-			if err := j.serveForwarders(dir); err != nil {
-				return failed("forwarder: %v", err)
-			}
-			return j.agentAndResult(m, filepath.Join(dir, "share"), s, true)
+	// The job starts after the first check-in, which declares it and
+	// gives the daemon the control plane's lease: every bound of the
+	// job's tries is that lease, not the daemon's default.
+	d.adopted = append(d.adopted, func() {
+		d.wg.Go(j.heartbeats)
+		d.wg.Go(func() {
+			j.finish(func(dir string) (string, string) {
+				if err := j.resume(); err != nil {
+					return failed("resume: %v", err)
+				}
+				if err := j.serveForwarders(dir); err != nil {
+					return failed("forwarder: %v", err)
+				}
+				return j.agentAndResult(m, filepath.Join(dir, "share"), s, true)
+			})
 		})
 	})
 	return true
