@@ -194,11 +194,15 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
    `/run/worker`, the two sockets mounted with `--mount-socket`, and the
-   image's host inputs, if this host configures any. It
-   gives no network flag, allowlist or credential binding, so smolvm gives
-   the machine no network: `socat` in the guest serves the sockets on guest
-   loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp), and
-   that is the guest's only way out.
+   image's host inputs, if this host configures any. It gives no
+   credential binding. `socat` in the guest serves the sockets on guest
+   loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp). When
+   the offer has no `run.egress`, the machine gets no network flag or
+   allowlist, so smolvm gives it no network and the forwards are its only
+   way out. When it has one, the machine also gets the network of
+   [The machine's network](#the-machines-network). A `run.egress` that
+   does not parse gets no machine: the attempt is reported `failed`, once,
+   with the error, which names the entry.
 4. It seeds `/workspace` from the bundle and checks out the issue branch:
    the branch at the bundle's `HEAD`, or, when several are there, the one
    named after the job (`sortie/ONS-7` for `ONS-7`). It adds `/.sortie` to
@@ -206,7 +210,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    is never committed. Then it runs the image's `setup` scripts.
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
-   forwarder, `NO_PROXY=127.0.0.1,localhost`, and `WORKER_MCP_URL` at the
+   forwarder, `NO_PROXY=127.0.0.1,localhost` (and `no_proxy`), followed by
+   the hosts the machine's network allows directly, and `WORKER_MCP_URL` at the
    mcp forwarder. The agent's standard input, output and error travel on
    the `stdio` flow; its standard error also goes to the daemon's log when
    it fails. When the control plane closes the agent's input (Sortie does
@@ -215,7 +220,8 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    frame. Then it runs the usage command and reports on `usage`, returns
    the result on `bundles` (the issue branch's bundle and the agent's
    `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
-   when the agent wrote it), deletes the machine, and reports the outcome:
+   when the agent wrote it), keeps the machine's egress refusals when it
+   has a network, deletes the machine, and reports the outcome:
    `succeeded` when the agent exited 0 and the result was returned. The
    result always goes before the report. Usage goes before the result,
    because once Sortie has the result it finishes the attempt and closes
@@ -283,6 +289,76 @@ left, and logs `jobs left by the last start` with how many it
 The machines must outlive the daemon's process: under systemd, run it
 with `KillMode=process` (see [Run as a service](#run-as-a-service)), or
 stopping the unit kills the machines with it.
+
+### The machine's network
+
+An offer's `run.egress` (`agent-platform/job-egress-policy`) holds the
+harness's policy and the repository's, each in the format of
+`.sortie/egress.yaml` (`version`, `hosts`, `udp`, `private`), and the
+`credential_hosts` that stay on the `egress` flow:
+
+```json
+{"source": {"repository": "ortusnova/homelab", "commit": "0123abc"},
+ "harness": {"version": 1, "hosts": [{"host": "models.opencode.ai", "reason": "…"}]},
+ "repository": {"version": 1,
+   "hosts": [{"host": "*.githubusercontent.com", "reason": "…"}],
+   "udp": [{"cidr": "0.0.0.0/0", "port": 123, "reason": "NTP"}],
+   "private": [{"cidr": "192.168.122.0/24", "reason": "…"}]},
+ "credential_hosts": ["api.anthropic.com"]}
+```
+
+The daemon checks it strictly: an unknown member, a version that is not
+`1`, a host that is not a lower-case DNS name or `*.` and a domain (never
+`*`, `*.com` or an address), a CIDR with host bits set, a port outside
+1-65535, or a `private` entry outside the private ranges (`10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16`,
+`fc00::/7`, `fe80::/10`) refuses the job, as above. A valid one maps to
+smolvm's flags (design D8):
+
+| `run.egress` | smolvm flag |
+|---|---|
+| present | `--net-backend virtio-net --block-private` |
+| each host of `harness.hosts` and `repository.hosts`, once | `--allow-host-pattern <host>` (an exact name or `*.domain`) |
+| each `udp` entry | `--allow-udp <cidr>:<port>` (`<port>` is `N` or `N-M`) |
+| each `private` entry | `--allow-private <cidr>` |
+| a host that is, or is covered by or covers, a host of `credential_hosts` or of `run.credentials` | nothing: it stays on the `egress` flow |
+| absent | no network flag: no network |
+
+The daemon never uses `--allow-host`, which fixes a host's addresses when
+the machine starts, a bare `--net`, or any flag that widens egress. The
+socket forwards stay as they are. A policy whose every host is a
+credential host, with no `udp` or `private` entry, gives no network.
+
+`NO_PROXY` and `no_proxy` hold `127.0.0.1,localhost` and then each host
+allowed directly, a pattern `*.d` written `.d`, so that HTTP clients go
+direct to those and send every other host, credential hosts first among
+them, to the `egress` forward, where nono puts the credential in place of
+its placeholder. A VM nested in the machine, as homelab's libvirt seed,
+leaves through the machine's own interface, under the same flags, with no
+list of its own.
+
+The job's log names each allowed host with its source (`egress: host
+allowed host=… source=harness`, `repository`, or both), each UDP and
+private entry, and each host withheld as a credential host.
+
+Before it deletes a machine with a network, after a job or when a
+restarted daemon cannot adopt it, the daemon reads its refusals with
+`smolvm machine egress-events --name <machine> --json` and keeps them in
+`state_dir/refusals/<job>/<attempt>.json`: `{"job", "attempt",
+"machine", "read_at", "events"}`, `events` as smolvm prints them. The
+file stays after the machine and its job directory are gone; remove it
+when you no longer need it. A failure to read them is logged and does not
+keep the machine.
+
+#### smolvm's filters, as measured
+
+Measured on smolvm 1.32.4, the version the kit pins, on taichi:
+
+| Question | Result |
+|---|---|
+| Does `--allow-host` fix a host's addresses at machine start? | Not yet measured. |
+| Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Not yet measured. |
+| What does `--block-private` do beside the patterns? | Not yet measured. |
 
 ### Flows on the wire
 
@@ -397,6 +473,23 @@ elsewhere it is skipped and says which of the three is missing:
 
 ```sh
 WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
+```
+
+`TestSmolvmEgressEndToEnd` runs one job whose `run.egress` declares
+`WORKER_DAEMON_E2E_ALLOWED` (default `ghcr.io`): the machine must reach
+it on port 443 and be refused `WORKER_DAEMON_E2E_DENIED` (default
+`pastebin.com`), and the refusal must be in `state_dir/refusals` after
+the machine is deleted. It also needs nested KVM and the network, and is
+skipped, saying why, without them. With `WORKER_DAEMON_E2E_NESTED_SCRIPT`,
+a shell script run in the machine that boots a VM nested in it (libvirt,
+as homelab's seed) and prints `nested allowed: reached` or `refused`, then
+`nested denied: …`, for `$ALLOWED` and `$DENIED`, the job requires
+`nested` and the nested VM must do the same; give homelab's pack as
+`WORKER_DAEMON_E2E_PACK`:
+
+```sh
+WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_NESTED_SCRIPT=/path/nested-egress.sh \
+  make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
 ```
 
 Two end-to-end tests run the daemon against the real Sortie data plane:
