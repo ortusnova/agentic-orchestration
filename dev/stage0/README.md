@@ -20,6 +20,7 @@ dev/stage0/test-smolvm-version.sh     # check the smolvm version check against f
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
 dev/stage0/test-unit-restart.sh       # check that nono, the edge and the worker daemon restart only when what they run changed
+dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
 dev/stage0/dev-host-apply.sh [CMD...] # apply a setup change at once (homelab: make dev-host), then run stage0.sh
@@ -350,10 +351,15 @@ machine could not run it as its `evidence`. Every minute
   GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
   `github_api` credential that nono holds. The comment's first line is
   `<!-- live-proof-result -->`, followed by `Result: proven` or
-  `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
+  `Result: unproven`, `Commit: <sha>`, the criterion, with a proven result
+  the line `sortie:live-proof proven <sha>`, and the step table. Sortie's
+  supervisor merge reads that line: it refuses to merge a story whose
+  review left a criterion to a live proof until the line names the head
+  (`409 live_proof_unproven`).
   The pass reads only the kit's own account's comments written since the
   request, and the newest sets the status:
-  - proven at the head: `success`, and the supervisor merges once CI passes;
+  - proven at the head: `success`, and the supervisor merges once CI passes
+    (Sortie checks the `sortie:live-proof proven` line itself);
   - unproven: `failure`;
   - proven at an older commit: `pending` again, until the supervisor
     requests a new proof.
@@ -391,9 +397,17 @@ changed, or when it is not running (`unit-restart.sh`; the digest each
 started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
 profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
 live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the edge for
-its source, `edge.json` or unit; the worker daemon for its source,
-`worker.json` or unit. A change to one of those ends the jobs that unit
-carries, and Sortie retries them. A credential `gh auth token` gives nono
+its source, `edge.json` or unit; the worker daemon for its binary,
+`worker.json` or unit (`worker-build.sh` builds it with `-trimpath
+-buildvcs=false`, so the same code builds the same bytes and a test or
+a document under `worker-daemon/` restarts nothing; a daemon an earlier
+kit started from the source being built keeps running, and its record
+moves to the binary). A change to nono's or the edge's ends the jobs
+that unit carries, and Sortie retries them. A restart of the worker
+daemon ends none: the unit stops the daemon only (`KillMode=process`),
+which leaves its jobs' machines running, and its next start adopts them
+and Sortie keeps their runs (worker-daemon's operator guide, "A restart
+of the daemon ends no job either"). A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
 
@@ -616,7 +630,7 @@ machines (spec store `run-homelab-through-sortie`, design D5-D12):
 | homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master` |
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The daemon runs its commands as `builder` (`smolvm.images`); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. While no job runs, the packs it replaced are deleted |
 | Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 60 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
-| Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone. Five, beside the daemon's share: smolvm's ceiling on taichi |
+| Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone; read-only, `~/.local/state/homelab/open-issues` at the same path in the guest (`/home/builder/.local/state/homelab/open-issues`), the open-issue evidence `python3 -m homelab.open_issues capture` keeps on the host, so a job reads the evidence a row of homelab's `docs/open-issues.md` names. A job's own captures go to its recorder folder (`HOMELAB_STATE_HOME=/var/log/homelab-recorder`); the setup gives `~/.local/state` back to `builder`, since the read-only mount leaves its parents to root. Six, beside the daemon's share: on taichi a machine with 8 started (smolvm 1.32.4, nested, 2026-11-04), so one stays spare |
 | vm key | copied alone into `$STAGE0_HOME/inputs/vm-age`; reaches every command in the machine as `HOMELAB_VM_AGE_KEY` (`env_files`), never logged |
 | Setup | what the homelab workflow's hooks did, before the agent starts: the vm key where sops looks, `guest-start.sh` (the flight recorder, and swap at `/storage/swapfile`), and `scripts/vmhost/prepare.sh` |
 

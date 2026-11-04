@@ -49,15 +49,17 @@ homelab_inputs() {
   # homelab.cache, as in the sandbox, so host and guest paths cannot drift.
   local sources=$HOME/.cache/homelab-sources vmhost=$HOME/.cache/homelab-vmhost
   local recorders=$HOME/.local/state/homelab/sortie-recorder
-  mkdir -p "$sources" "$vmhost" "$recorders"
+  local open_issues=$HOME/.local/state/homelab/open-issues
+  mkdir -p "$sources" "$vmhost" "$recorders" "$open_issues"
   local mounts ns hosts guests i
   mounts="{\"host\": $(json_str "$sources"), \"guest\": \"/home/builder/.cache/homelab-sources\", \"read_only\": true}"
   mounts+=", {\"host\": $(json_str "$vmhost"), \"guest\": \"/home/builder/.cache/homelab-vmhost\"}"
   # One mount per cache namespace (Go's mod and build share a parent), and
-  # the vm key as an environment value, not a mount: a machine on taichi
-  # starts with at most 6 shared folders beside one socket (smolvm 1.32.4,
-  # nested; one more fails with "no more IRQs are available"), and the
-  # daemon adds one folder, the job's share, beside its two sockets.
+  # the vm key as an environment value, not a mount. The daemon adds one
+  # folder, the job's share, beside its two sockets. On taichi (smolvm
+  # 1.32.4, nested, with a storage disk and two sockets) a machine started
+  # with 8 shared folders on 2026-11-04; the co-located kind once failed
+  # with 7 ("no more IRQs are available"), so the kit keeps to 7 in all.
   local count=2
   for ns in uv go; do
     mapfile -t hosts < <(cd "$hl" && python3 -m homelab.cache path --all "$ns")
@@ -77,14 +79,25 @@ PY
     mounts+=", {\"host\": $(json_str "${pair%%$'\n'*}"), \"guest\": $(json_str "${pair#*$'\n'}")}"
     count=$((count + 1))
   done
-  # The flight recorder's folder, one per job, which outlives the machine.
-  mounts+=", {\"host\": $(json_str "$recorders"), \"guest\": \"/var/log/homelab-recorder\", \"per_job\": true}"
-  count=$((count + 1))
-  (( count <= 5 )) || die "a homelab machine would get $count shared folders; it starts with at most 5 besides the daemon's own"
+  mounts+=", $(homelab_state_mounts "$recorders" "$open_issues")"
+  count=$((count + 2))
+  (( count <= 6 )) || die "a homelab machine would get $count shared folders; the kit gives it at most 6 besides the daemon's own"
 
   homelab_pack "$hl"
   export STAGE0_HOMELAB_IMAGE_JSON
   STAGE0_HOMELAB_IMAGE_JSON=$(homelab_image_json "$krunfw" "$mounts")
+}
+
+# homelab_state_mounts RECORDERS OPEN_ISSUES: homelab's state folders, as
+# items of a JSON list. The flight recorder's folder is one per job, written
+# by the job, and outlives the machine; a job's own open-issue captures go
+# there (HOMELAB_STATE_HOME=/var/log/homelab-recorder, homelab's AGENTS.md).
+# The host's open-issue evidence (homelab.open_issues capture, under
+# ~/.local/state/homelab/open-issues) is read-only, where homelab's own
+# paths name it, so a job reads the evidence a row in docs/open-issues.md
+# points to and cannot change it.
+homelab_state_mounts() {
+  printf '%s' "{\"host\": $(json_str "$1"), \"guest\": \"/var/log/homelab-recorder\", \"per_job\": true}, {\"host\": $(json_str "$2"), \"guest\": \"/home/builder/.local/state/homelab/open-issues\", \"read_only\": true}"
 }
 
 # homelab_image_json KRUNFW MOUNTS: the daemon's smolvm.images entry for the
@@ -112,6 +125,8 @@ homelab_image_json() {
 homelab_setup() {
   cat <<'EOF'
 set -eu
+# The read-only open-issues mount leaves its parents to root: give them back.
+sudo chown "$(id -u):$(id -g)" /home/builder/.local/state /home/builder/.local/state/homelab
 mkdir -p /home/builder/.config/sops/age
 (umask 077; printf '%s\n' "$HOMELAB_VM_AGE_KEY" > /home/builder/.config/sops/age/keys.txt)
 sudo env HOMELAB_SWAP_FILE=/storage/swapfile /opt/homelab-sandbox/guest-start.sh "$(id -u)" --swap-gib 8

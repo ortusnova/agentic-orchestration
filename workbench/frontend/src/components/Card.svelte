@@ -26,6 +26,7 @@
     if (cls === "done") return "complete";
     if (cls === "cancelled") return "cancelled";
     if (node.question) return "waits on an answer";
+    if (node.failure?.source === "platform_fault") return "held by a platform fault";
     if (node.plan_status === "delivery_unconfirmed") {
       const p = node.delivery?.pulls.find((x) => x.state !== "merged");
       return p ? `${p.ref} ${PULL_STATE[p.state] ?? p.state}` : "delivery not confirmed";

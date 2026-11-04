@@ -291,6 +291,8 @@ var fixPromptRules = []string{
 	"Do not push",
 	"Sortie merges the pull request once it passes",
 	"check every acceptance criterion above against the branch again",
+	"When you have finished, write `.sortie/pr.json`",
+	"Sortie ends the run after the turn that writes it, so write it last.",
 	"stop with `blocked`",
 }
 

@@ -18,6 +18,7 @@ import networkx as nx
 from planlib import milestones as ms
 
 from .delivery import pull_url
+from .faults import fault_text
 from .leases import expired_text, holder
 from .questions import statement_of
 
@@ -235,7 +236,8 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
                      runway: int, remaining: int, key_of: dict[str, str],
                      statements: dict[str, str] | None = None,
                      waits: list[dict[str, Any]] | None = None,
-                     leases: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+                     leases: dict[str, dict[str, Any]] | None = None,
+                     faults: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The verdict on whether the agents will stay busy, with its reasons.
 
     The first that applies wins: stuck, done, idle now, will idle, healthy.
@@ -244,7 +246,8 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
     slots with nothing ready while stories wait are stuck, not idle: someone
     other than an agent has to act. Stories the supervisor holds under a
     live lease wait on the supervisor: they make no reason to be stuck, and
-    with nothing else to do the verdict is waiting."""
+    with nothing else to do the verdict is waiting. Each platform fault in
+    ``faults`` holds stories until a person takes its action: it is stuck."""
     waits = waits or []
     on_people = [w for w in waits if w["kind"] != "supervisor"]
     on_supervisor = [w for w in waits if w["kind"] == "supervisor"]
@@ -262,6 +265,8 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
     if sync and sync.get("state") == "failed":
         message = (sync.get("reason") or {}).get("message") or "unknown error"
         reasons.append({"code": "sync_failed", "text": f"The last sync failed: {message}"})
+    for f in faults or []:
+        reasons.append({"code": "platform_fault", "text": fault_text(f), "key": f["key"]})
     for h in held:
         who = h["key"] or h["identifier"]
         if h.get("expired"):
@@ -277,7 +282,8 @@ def execution_health(*, reachable: bool, sortie_error: str | None, dispatched: b
            "free": max(0, slots - busy) if slots is not None and busy is not None else None,
            "running": running, "held": held, "runway": runway if reachable else None, "waits": waits}
     if reachable and out["free"] and runway == 0 and on_people:
-        first = next((i for i, r in enumerate(reasons) if r["code"] in ("held", "question", "hold_expired")), len(reasons))
+        first = next((i for i, r in enumerate(reasons) if r["code"] in ("platform_fault", "held", "question", "hold_expired")),
+                     len(reasons))
         reasons.insert(first, {"code": "waiting", "text": waiting_text(on_people), "key": None})
     if reasons:
         return {**out, "verdict": "stuck"}
@@ -608,26 +614,34 @@ def timeline(milestones: list[dict[str, Any]], goal: str | None, items: list[dic
 def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fields: dict[str, dict[str, Any]],
                planning: dict[str, Any], plan_states: dict[str, str] | None, tracker_known: bool, valid: bool,
                errors: int, health_inputs: dict[str, Any], history: History | None = None,
-               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+               estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None,
+               faults: list[dict[str, Any]] | None = None, fault_held: set[str] | None = None) -> dict[str, Any]:
     """The home document. ``graph`` is the last valid plan graph; ``nodes`` the
     merged graph's nodes, with tracker state and plan fields; ``questions``
-    the open questions of its stories, ranked, which come before everything
-    else that needs a person."""
+    the open questions of its stories, and ``faults`` the platform faults
+    that hold its stories and only a person can clear: both are asked of a
+    person, ranked together oldest first, before everything else that needs
+    one. ``fault_held`` holds the plan keys of the stories any platform
+    fault holds out of dispatch."""
     estimates = estimates or {}
     questions = questions or []
+    faults = faults or []
+    fault_held = fault_held or set()
+    _rank_asks(questions, faults)
     done, dropped = tracker_states(nodes, plan_states)
     # A story its pull requests delivered is done, wherever the work was done.
     done |= {k for k, f in fields.items() if f.get("plan_status") == "delivered"}
     key_of = {n["tracker"]["identifier"]: n["plan_key"] for n in nodes if n.get("tracker")}
     stories = [n for n in nodes if n.get("kind") == "story" and n.get("status") != "orphaned"]
     running_keys = {n["plan_key"] for n in stories if n.get("runtime")}
+    # A story a platform fault holds is not ready to run until the fault clears.
     runway = sum(1 for n in stories if fields.get(n["plan_key"], {}).get("plan_status") == "released"
-                 and n["plan_key"] not in running_keys and n["plan_key"] not in done)
+                 and n["plan_key"] not in running_keys and n["plan_key"] not in done and n["plan_key"] not in fault_held)
     remaining = sum(1 for n in stories if n["plan_key"] not in done and n["plan_key"] not in dropped)
 
     waits = waits_of(nodes, plan_states, done | dropped, health_inputs.get("state"), health_inputs.get("statements"),
                      health_inputs.get("leases"))
-    health = execution_health(runway=runway, remaining=remaining, key_of=key_of, waits=waits, **health_inputs)
+    health = execution_health(runway=runway, remaining=remaining, key_of=key_of, waits=waits, faults=faults, **health_inputs)
     if history is not None:
         history.add(health["busy"], health["runway"])
         health["history"] = history.buckets()
@@ -639,11 +653,12 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "story_progress": "live" if health_inputs["reachable"] else ("last_known" if tracker_known else "unknown"),
         "health": health,
         "questions": questions,
+        "faults": faults,
         "expired_holds": (expired_holds := _expired_holds(nodes, health_inputs.get("leases"))),
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],
-                "needs_person": _needs([], questions, expired_holds), "timeline": None}
+                "needs_person": _needs([], questions, expired_holds, faults), "timeline": None}
 
     out = ms.progress(planning.get("milestones") or [], graph, planning.get("tasks") or {}, done, dropped, estimates)
     # A milestone declared done was finished by hand: its stories are not
@@ -653,7 +668,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
                       free=health["free"] or 0, runway=runway, estimates=estimates)
     for i in items:
         if i["rank"] is not None:
-            i["rank"] += len(questions) + len(expired_holds)
+            i["rank"] += len(questions) + len(faults) + len(expired_holds)
     line = timeline(out["milestones"], out["goal"], items, estimates, done)
     by_key = {n["plan_key"]: n for n in nodes}
     reason_of = {i["key"]: i["reason"] for i in items if i["kind"] == "story"}
@@ -679,7 +694,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     return {
         **base,
         "milestones": milestones, "goal": out["goal"], "next": out["next"], "critical_path": path,
-        "not_ready": items, "needs_person": _needs(items, questions, expired_holds), "timeline": line,
+        "not_ready": items, "needs_person": _needs(items, questions, expired_holds, faults), "timeline": line,
     }
 
 
@@ -700,21 +715,35 @@ def _expired_holds(nodes: list[dict[str, Any]], leases: dict[str, dict[str, Any]
     return out
 
 
+def _rank_asks(questions: list[dict[str, Any]], faults: list[dict[str, Any]]) -> None:
+    """Rank the agents' questions and the platform faults together, oldest
+    first: each is asked of a person, and the longer one waits the longer
+    its stories have stood still."""
+    asks = [(q.get("parked_at"), 0, q["key"], q) for q in questions] + \
+           [(f.get("recorded_at"), 1, f["key"], f) for f in faults]
+    asks.sort(key=lambda a: (a[0] is None, a[0] or 0.0, a[1], a[2], a[3].get("id") or ""))
+    for rank, a in enumerate(asks, 1):
+        a[3]["rank"] = rank
+
+
 def _needs(items: list[dict[str, Any]], questions: list[dict[str, Any]],
-           expired_holds: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+           expired_holds: list[dict[str, Any]] | None = None, faults: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     person = [i for i in items if i["column"] is not None]
     approve = [i for i in person if i["column"] == "approve"]
     expired_holds = expired_holds or []
-    for rank, h in enumerate(expired_holds, len(questions) + 1):
+    faults = faults or []
+    for rank, h in enumerate(expired_holds, len(questions) + len(faults) + 1):
         h["rank"] = rank
+    first = min(questions + faults, key=lambda a: a["rank"], default=None)
     return {
-        "total": len(questions) + len(expired_holds) + len(person),
+        "total": len(questions) + len(faults) + len(expired_holds) + len(person),
         "questions": len(questions),
+        "faults": len(faults),
         "expired_holds": len(expired_holds),
         "approve": len(approve),
         "approve_stories": sum(len(i.get("stories") or [i["key"]]) for i in approve),
         "spec": sum(1 for i in person if i["column"] == "spec"),
         "operator": sum(1 for i in person if i["column"] == "operator"),
-        "nearest": (questions[0]["key"] if questions else expired_holds[0]["key"] if expired_holds
+        "nearest": (first["key"] if first else expired_holds[0]["key"] if expired_holds
                     else person[0]["key"] if person else None),
     }
