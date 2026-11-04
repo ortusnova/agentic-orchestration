@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -46,32 +47,34 @@ func TestSmolvmEndToEnd(t *testing.T) {
 	s := defaults()
 	s.backend = &machine.Smolvm{Binary: bin}
 	s.pack = pack
+	var id string
+	s.workerID, id = e2eNames()
 	s.leaseMS = 30000
 	s.usage = []string{"sh", "-c", `echo '{"input_tokens":7,"output_tokens":2}'`}
 	h := newHarness(t, s)
 	h.fake.Offer(fakecp.Job{
-		ID: "ONS-7", Attempt: 1,
+		ID: id, Attempt: 1,
 		Requires: protocol.Requires{CPU: 1, MemGiB: 1, DiskGiB: 2},
-		Run:      protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eAgent}, Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": "ONS-7"}},
-		Seed:     seedBundle(t, "sortie/ONS-7"), StdioInput: []string{"hello agent\n"},
+		Run:      protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eAgent}, Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": id}},
+		Seed:     seedBundle(t, "sortie/"+id), StdioInput: []string{"hello agent\n"},
 	})
 	var tokens map[string]string
 	h.waitFor("the report", 5*time.Minute, func() bool {
 		if tokens == nil {
-			if tk := h.fake.Tokens("ONS-7", 1); len(tk) > 0 {
+			if tk := h.fake.Tokens(id, 1); len(tk) > 0 {
 				tokens = tk
 			}
 		}
-		return h.fake.Count("report", "ONS-7", 1) > 0
+		return h.fake.Count("report", id, 1) > 0
 	})
 	ev := h.fake.Events()
-	report := indexOf(ev, 0, is("report", "ONS-7", 1))
+	report := indexOf(ev, 0, is("report", id, 1))
 	for _, kind := range []string{"seed", "stdio", "stdio-X", "egress", "mcp", "usage", "result"} {
-		if i := indexOf(ev, 0, is(kind, "ONS-7", 1)); i < 0 || i > report {
+		if i := indexOf(ev, 0, is(kind, id, 1)); i < 0 || i > report {
 			t.Errorf("no %s event before the report: %s", kind, h.describe())
 		}
 	}
-	out := h.fake.StdioOutput("ONS-7", 1)
+	out := h.fake.StdioOutput(id, 1)
 	if !strings.Contains(out, "agent got: hello agent") || !strings.Contains(out, "done") {
 		t.Errorf("stdio output = %q", out)
 	}
@@ -80,7 +83,7 @@ func TestSmolvmEndToEnd(t *testing.T) {
 			t.Errorf("the %s token is in the guest's environment or command line", flow)
 		}
 	}
-	if r := h.reports("ONS-7", 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded || r[0].Machine != protocol.MachineDeleted {
+	if r := h.reports(id, 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded || r[0].Machine != protocol.MachineDeleted {
 		t.Errorf("reports = %+v", r)
 	}
 }
@@ -137,6 +140,8 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 	s := defaults()
 	s.backend = &machine.Smolvm{Binary: bin}
 	s.pack = pack
+	var id string
+	s.workerID, id = e2eNames()
 	s.leaseMS = 30000
 	s.usage = []string{"sh", "-c", `echo '{"input_tokens":7,"output_tokens":2}'`}
 	h := newHarness(t, s)
@@ -145,14 +150,14 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 		requires.Capabilities = []string{daemon.CapabilityNested}
 	}
 	h.fake.Offer(fakecp.Job{
-		ID: "ONS-30", Attempt: 1, Requires: requires,
+		ID: id, Attempt: 1, Requires: requires,
 		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eEgressCheck},
-			Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": "ONS-30", "ALLOWED": allowed, "DENIED": denied, "NESTED_SCRIPT": nested}},
+			Env: map[string]string{"SORTIE_ISSUE_IDENTIFIER": id, "ALLOWED": allowed, "DENIED": denied, "NESTED_SCRIPT": nested}},
 		Egress: &protocol.Egress{Repository: &protocol.EgressPolicy{Hosts: []protocol.EgressHost{{Host: allowed, Reason: "the declared host"}}}},
-		Seed:   seedBundle(t, "sortie/ONS-30"), StdioInput: []string{"go\n"},
+		Seed:   seedBundle(t, "sortie/"+id), StdioInput: []string{"go\n"},
 	})
-	h.waitFor("the report", 15*time.Minute, func() bool { return h.fake.Count("report", "ONS-30", 1) > 0 })
-	out := h.fake.StdioOutput("ONS-30", 1)
+	h.waitFor("the report", 15*time.Minute, func() bool { return h.fake.Count("report", id, 1) > 0 })
+	out := h.fake.StdioOutput(id, 1)
 	want := []string{"machine allowed: reached", "machine denied: refused"}
 	if nested != "" {
 		want = append(want, "nested allowed: reached", "nested denied: refused")
@@ -164,14 +169,23 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 			t.Errorf("stdio output lacks %q: %s", w, out)
 		}
 	}
-	if r := h.reports("ONS-30", 1); len(r) != 1 || r[0].Machine != protocol.MachineDeleted {
+	if r := h.reports(id, 1); len(r) != 1 || r[0].Machine != protocol.MachineDeleted {
 		t.Errorf("reports = %+v, want one with the machine deleted", r)
 	}
-	b, err := os.ReadFile(h.d.RefusalsFile("ONS-30", 1))
+	b, err := os.ReadFile(h.d.RefusalsFile(id, 1))
 	if err != nil || !strings.Contains(string(b), denied) {
 		t.Errorf("refusal record = %s, %v; want a refusal of %s", b, err, denied)
 	}
+	t.Logf("stdio output:\n%s", out)
 	t.Logf("refusal record:\n%s", b)
+}
+
+// e2eNames returns a worker id and a job id of this run alone: on a
+// worker host the daemon under test must neither delete the live
+// worker's machines as strays nor name a machine as one of its jobs.
+func e2eNames() (worker, job string) {
+	n := fmt.Sprintf("e2e-%d-%d", os.Getpid(), time.Now().Unix())
+	return n, strings.ToUpper(n)
 }
 
 func envOr(k, def string) string {

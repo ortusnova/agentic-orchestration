@@ -496,9 +496,21 @@ as homelab's seed) and prints `nested allowed: reached` or `refused`, then
 `WORKER_DAEMON_E2E_PACK`:
 
 ```sh
-WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_NESTED_SCRIPT=/path/nested-egress.sh \
+WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_ALLOWED=deb.debian.org \
+  WORKER_DAEMON_E2E_NESTED_SCRIPT=$PWD/worker-daemon/internal/daemon/testdata/nested-egress.sh \
   make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
 ```
+
+`internal/daemon/testdata/nested-egress.sh` is that script for homelab's
+pack: it starts libvirt as the pack's `guest-start.sh` does, takes
+Debian's netboot kernel and initrd from `deb.debian.org` (so
+`WORKER_DAEMON_E2E_ALLOWED` must be that host), and boots them on
+libvirt's default network with a probe of its own as the initrd's first
+program. The nested VM resolves names through libvirt's dnsmasq, which
+asks the machine's resolver (design D9). The end-to-end test runs the
+daemon under a worker id and a job id of its own, so on a worker host it
+neither deletes the live worker's machines as strays nor names a machine
+as one of its jobs.
 
 Three end-to-end tests run the daemon against the real Sortie data plane:
 `TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and

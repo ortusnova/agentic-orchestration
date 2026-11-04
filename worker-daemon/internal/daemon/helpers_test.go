@@ -327,6 +327,10 @@ type setup struct {
 	nested any
 	// autoSlots leaves run_slots out, so the slots follow the host.
 	autoSlots bool
+	// workerID replaces the worker id "taichi". A real backend sets it,
+	// so the daemon under test never deletes a live worker's machines as
+	// strays.
+	workerID string
 }
 
 func defaults() setup {
@@ -359,8 +363,12 @@ func newHarness(t *testing.T, s setup) *harness {
 	if usage == nil {
 		usage = []string{self, "fake-usage"}
 	}
+	workerID := s.workerID
+	if workerID == "" {
+		workerID = "taichi"
+	}
 	doc := map[string]any{
-		"worker_id":     "taichi",
+		"worker_id":     workerID,
 		"control_plane": map[string]any{"url": fake.URL()},
 		"run_slots":     1,
 		"reserve":       map[string]any{"mem_gib": s.reserveMem},
