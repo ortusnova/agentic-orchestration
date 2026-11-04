@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "ortus-stage0-egress-live-proof",
-    "description": "The egress of live-proof jobs (README.md, Live proofs): every host of egress-profile.json, its credentials, and the hosts below, which a story's own job may not reach. run-nono.sh live-proof renders it with stage0-live-proofs profile"
+    "description": "The egress of live-proof jobs (README.md, Live proofs): every host of control-plane/nono/egress-profile.json, its credentials, and the hosts below, which a story's own job may not reach. run-nono.sh live-proof renders it with stage0-live-proofs profile"
   },
   "allow_domain": [
     "acme-staging-v02.api.letsencrypt.org"
