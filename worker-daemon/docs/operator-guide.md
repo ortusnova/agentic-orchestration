@@ -389,6 +389,8 @@ connection from the machine, by name or by address.
 | Does `--allow-host` fix a host's addresses at machine start? | No. smolvm asks the resolver for it when the machine is created and started, but when the answer changed (`9.9.9.9` to `149.112.112.112`) the machine resolved the new address and reached it within 5 s, as with a pattern. The daemon still never passes it (design D8). |
 | Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Yes. When the answer changed (`1.1.1.1` to `8.8.8.8`), the machine resolved the new address and reached it within 5 s, and again 65 s later; `8.8.8.8`, refused by address before, was reached by address after. An address the machine resolved for an allowed name stays allowed for the machine's life: the old one was still reached after the change, and after the answer changed back. |
 | What does `--block-private` do beside the patterns? | Nothing that the patterns do not already do. With one or more patterns, every address the machine has not resolved for an allowed name is refused, private or public, with or without `--block-private` (the LAN, host loopback at `100.96.0.1`, `169.254.169.254`, `10.0.0.1`, `1.1.1.1`). A pattern whose answer is a private address (`192.168.1.202`) is reached even with `--block-private`. `--allow-private 192.168.1.0/24` did not reopen an address of that range that no allowed name resolved to, so a policy's `private` entries reopen nothing beside the patterns. Without any pattern, `--block-private` (with `--allow-udp` only) left the public internet and the LAN open and refused only `169.254.169.254`, so the daemon gives no network to a policy that allows no host directly. |
+| Is `--deny-cidr` checked before an allow (design D15)? | Yes. A machine `--from` the stage-0 pack with `--deny-cidr` for each range of design D15, `--allow-host-pattern example.com`, `--allow-host-pattern p1.test` (answered with p1's LAN address, `192.168.1.165`) and `--allow-cidr 192.168.1.165/32` was refused `p1.test` and `192.168.1.165` on port 22, where p1 listens. With every range denied, the guest's resolver still answered `example.com`, and the machine reached it on port 443. |
+| Does a job machine made by the daemon refuse a declared name that answers a private address (design D15)? | Yes. `TestSmolvmEgressEndToEnd` under `private-name-netns.sh p1.test 192.168.1.165`, with `WORKER_DAEMON_E2E_PRIVATE_PORT=22` and the stage-0 pack, passed: the daemon created the machine `--from` the pack with `--deny-cidr` for each range of design D15, the machine reached `ghcr.io` on port 443, was refused `pastebin.com`, and was refused `p1.test` and `192.168.1.165` on port 22, and `state_dir/refusals` held a `connect` record of `192.168.1.165:22` for each. As a control, the same run with the `--deny-cidr` flags removed from the daemon's `machine create` (by a wrapper around smolvm) failed: the machine reached `p1.test` and `192.168.1.165`, with `--block-private` still given. So `machine create --from` keeps `--deny-cidr`, and it is the deny set that refuses the answer. |
 
 `--allow-udp` was not measured: smolvm answers every UDP query to port 53
 itself, so a DNS probe does not show it.
@@ -546,15 +548,19 @@ refused it by name and by address, with both refusals in
 is not a private address or nothing listens there. Give the name that
 answer without changing the host's DNS:
 `internal/daemon/testdata/private-name-netns.sh NAME ADDR` runs the test
-in a network namespace of its own (`pasta --config-net`) whose
-`/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers `NAME`
-with `ADDR` and forwards the rest to `$UPSTREAM` (default `9.9.9.9`). It
-needs pasta, unshare and dnsmasq; the other variables pass through, and
-the machine is deleted by name after the run:
+in a network namespace of its own (`pasta --config-net --no-map-gw`)
+whose `/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers
+`NAME` with `ADDR` and forwards the rest to `$UPSTREAM` (default
+`9.9.9.9`), and whose `/etc/nsswitch.conf` is `hosts: files dns`, so that
+systemd-resolved does not answer instead. The test runs in a nested user
+namespace as the caller's uid, since smolvm will not start a machine as
+pasta's root. It needs pasta, unshare and dnsmasq; the other variables
+pass through, and the machine is deleted by name after the run. On
+taichi, with p1's SSH port as the listener:
 
 ```sh
-WORKER_DAEMON_E2E_PACK=/path/base.smolmachine \
-  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.202
+WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
+  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.165
 ```
 
 Three end-to-end tests run the daemon against the real Sortie data plane:
