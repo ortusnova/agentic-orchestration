@@ -134,6 +134,8 @@ func TestCreateArgsOfANetwork(t *testing.T) {
 		{Hosts: []string{"--net"}},
 		{Hosts: []string{"a.example,b.example"}},
 		{UDP: []string{""}},
+		{UDP: []string{"0.0.0.0/0:123"}},
+		{Private: []string{"192.168.122.0/24"}},
 	} {
 		if _, err := CreateArgs(Spec{Name: "m", Pack: "/p", Network: bad}); err == nil {
 			t.Errorf("network %+v should be refused", bad)

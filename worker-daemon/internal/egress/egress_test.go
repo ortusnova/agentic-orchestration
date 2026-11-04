@@ -151,8 +151,12 @@ func TestPorts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := PlanOf(e, nil); !slices.Equal(p.UDP, []string{"10.0.0.0/8:5000-5010"}) {
+	p := PlanOf(e, nil)
+	if !slices.Equal(p.UDP, []string{"10.0.0.0/8:5000-5010"}) {
 		t.Errorf("udp = %v", p.UDP)
+	}
+	if n := p.Network(); n != nil {
+		t.Errorf("a plan with UDP and no host gives network %+v, want none: smolvm would leave the internet open", n)
 	}
 	b, _ := json.Marshal(protocol.EgressUDP{CIDR: "0.0.0.0/0", Port: "123"})
 	if !strings.Contains(string(b), `"port":"123"`) {

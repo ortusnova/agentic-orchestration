@@ -119,8 +119,8 @@ func networkArgs(n *Network) ([]string, error) {
 	if n == nil {
 		return nil, nil
 	}
-	if len(n.Hosts) == 0 && len(n.UDP) == 0 && len(n.Private) == 0 {
-		return nil, errors.New("smolvm: a network that allows nothing")
+	if len(n.Hosts) == 0 {
+		return nil, errors.New("smolvm: a network with no host pattern: --block-private alone leaves the internet open")
 	}
 	args := []string{"--net-backend", "virtio-net", "--block-private"}
 	for _, l := range []struct {

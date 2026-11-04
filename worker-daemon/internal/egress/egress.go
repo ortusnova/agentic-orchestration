@@ -273,9 +273,13 @@ func covers(a, b string) bool {
 func (p Plan) Empty() bool { return len(p.Hosts) == 0 && len(p.UDP) == 0 && len(p.Private) == 0 }
 
 // Network is the machine's network, or nil, no network, for a plan
-// that allows nothing.
+// that allows no host directly. smolvm 1.32.4 filters by name only
+// beside a host pattern: --block-private with only --allow-udp or
+// --allow-private leaves the public internet and the LAN open (operator
+// guide, "smolvm's filters, as measured"), so a plan's UDP and private
+// entries alone give no network.
 func (p Plan) Network() *machine.Network {
-	if p.Empty() {
+	if len(p.Hosts) == 0 {
 		return nil
 	}
 	n := &machine.Network{UDP: slices.Clone(p.UDP), Private: slices.Clone(p.Private)}

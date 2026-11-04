@@ -37,6 +37,9 @@ func offerNetwork(o protocol.Offer) (*machine.Network, egress.Plan, error) {
 // allowed host with its source, harness or repository.
 func logNetwork(log *slog.Logger, n *machine.Network, plan egress.Plan) {
 	if n == nil {
+		if !plan.Empty() {
+			log.Warn("egress: no host is allowed directly, so the udp and private entries give no network")
+		}
 		log.Info("egress: the machine has no network; its only way out is the egress flow")
 		return
 	}

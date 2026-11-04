@@ -334,8 +334,10 @@ above. A valid one maps to smolvm's flags (design D8):
 
 The daemon never uses `--allow-host`, which fixes a host's addresses when
 the machine starts, a bare `--net`, or any flag that widens egress. The
-socket forwards stay as they are. A policy whose every host is a
-credential host, with no `udp` or `private` entry, gives no network.
+socket forwards stay as they are. A policy with no host allowed
+directly, every host a credential host, gives no network, even with
+`udp` or `private` entries: smolvm filters by name only beside a host
+pattern, and `--block-private` without one leaves the internet open.
 
 `NO_PROXY` and `no_proxy` hold `127.0.0.1,localhost` and then each host
 allowed directly, a pattern `*.d` written `.d`, so that HTTP clients go
@@ -360,13 +362,23 @@ keep the machine.
 
 #### smolvm's filters, as measured
 
-Measured on smolvm 1.32.4, the version the kit pins, on taichi:
+Measured on smolvm 1.32.4, the version the kit pins, on taichi, on
+2026-11-04, with `--net-backend virtio-net` and machines from homelab's
+pack. A host's answer was changed with a test resolver: smolvm uses the
+host's resolver, so the machines ran in a network namespace of their own
+(`pasta --config-net`, with `/etc/resolv.conf` bound to a resolver on
+`127.0.0.1` that answers the test names from a file, TTL 1 s, and forwards
+the rest), and taichi's own DNS was not changed. Each probe is a TCP
+connection from the machine, by name or by address.
 
 | Question | Result |
 |---|---|
-| Does `--allow-host` fix a host's addresses at machine start? | Not yet measured. |
-| Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Not yet measured. |
-| What does `--block-private` do beside the patterns? | Not yet measured. |
+| Does `--allow-host` fix a host's addresses at machine start? | No. smolvm asks the resolver for it when the machine is created and started, but when the answer changed (`9.9.9.9` to `149.112.112.112`) the machine resolved the new address and reached it within 5 s, as with a pattern. The daemon still never passes it (design D8). |
+| Does `--allow-host-pattern` with an exact name follow an address change in a running machine? | Yes. When the answer changed (`1.1.1.1` to `8.8.8.8`), the machine resolved the new address and reached it within 5 s, and again 65 s later; `8.8.8.8`, refused by address before, was reached by address after. An address the machine resolved for an allowed name stays allowed for the machine's life: the old one was still reached after the change, and after the answer changed back. |
+| What does `--block-private` do beside the patterns? | Nothing that the patterns do not already do. With one or more patterns, every address the machine has not resolved for an allowed name is refused, private or public, with or without `--block-private` (the LAN, host loopback at `100.96.0.1`, `169.254.169.254`, `10.0.0.1`, `1.1.1.1`). A pattern whose answer is a private address (`192.168.1.202`) is reached even with `--block-private`. `--allow-private 192.168.1.0/24` did not reopen an address of that range that no allowed name resolved to, so a policy's `private` entries reopen nothing beside the patterns. Without any pattern, `--block-private` (with `--allow-udp` only) left the public internet and the LAN open and refused only `169.254.169.254`, so the daemon gives no network to a policy that allows no host directly. |
+
+`--allow-udp` was not measured: smolvm answers every UDP query to port 53
+itself, so a DNS probe does not show it.
 
 ### Flows on the wire
 
