@@ -213,6 +213,8 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
 migrate_max_agents "$ENV_FILE"
 # shellcheck source=unit-restart.sh
 . "$KIT/unit-restart.sh"
@@ -265,6 +267,11 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
   "$STAGE0_HOME/bin/worker-daemon" check -config "$STAGE0_HOME/worker.json" > /dev/null \
     || die "the worker daemon refused $STAGE0_HOME/worker.json"
+  # This host's token for the workbench's notifications: p1 mints it and
+  # copies it here (worker-host.sh add), since p1's workbench takes it. A
+  # Sortie here posts with it to http://127.0.0.1:$STAGE0_WORKBENCH_TUNNEL_PORT.
+  ls "$STAGE0_HOME"/notify-tokens/*.token > /dev/null 2>&1 \
+    || say "No notifications token from p1 yet: on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
 
   retire_sortie "$UNITS" || die "this host's Sortie keeps running until p1's Sortie holds its merge records (see above)"
   say "Installing the user units"
@@ -294,15 +301,13 @@ fi
 
 # The operator's channel (notify-channel.sh): optional; with no
 # STAGE0_NOTIFY_KIND the questions show on the workbench only.
-# shellcheck source=notify-channel.sh
-. "$KIT/notify-channel.sh"
 STAGE0_NOTIFY_KIND=${STAGE0_NOTIFY_KIND:-}
 STAGE0_NOTIFY_ENTRY=$(notify_entry "$STAGE0_NOTIFY_KIND" "${STAGE0_NOTIFY_CHAT_ID:-}") || die "fix the channel in $ENV_FILE"
 export STAGE0_NOTIFY_ENTRY
 if [[ -n $STAGE0_NOTIFY_KIND ]]; then
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
 else
-  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+  say "No operator channel of your own: Sortie's notifications go to the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE to add one (README.md)"
 fi
 mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
@@ -360,6 +365,10 @@ from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
 secret "$STAGE0_HOME/sortie-token"
+# This host's token for the workbench's notifications (notify-channel.sh):
+# Sortie posts with it, the workbench takes it, no person writes it.
+notify_host=$(notify_host) || die "fix the host name in $ENV_FILE"
+notify_token "$STAGE0_HOME" "$notify_host" || die "could not mint $notify_host's notifications token"
 secret "$STAGE0_HOME/viewer-token"
 # The supervisor's token and prompt (supervisor.sh), which the workflow's
 # supervisor section reads.
@@ -384,6 +393,18 @@ fi
 . "$KIT/edge-config.sh"
 # p1's own worker: its edge port is on p1's loopback, with no tunnel.
 register_local_worker "$STAGE0_WORKER_NAME"
+# Each worker host's tunnel also forwards the workbench (worker-host.sh), so a
+# Sortie there reaches it; a host added before that gets the forward now,
+# and its tunnel restarts below.
+retunnel=()
+for name in $(tunnel_workers); do
+  if [[ -z $(worker_setting "$name" WORKBENCH_TUNNEL_PORT) ]]; then
+    printf 'WORKBENCH_PORT=%s\nWORKBENCH_TUNNEL_PORT=%s\n' "$STAGE0_WORKBENCH_PORT" "$STAGE0_WORKBENCH_TUNNEL_PORT" >> "$STAGE0_WORKERS/$name.env"
+    retunnel+=("$name")
+  fi
+  [[ -s $STAGE0_HOME/notify-tokens/$name.token ]] \
+    || say "Worker host $name has no notifications token: run dev/stage0/worker-host.sh add $(worker_setting "$name" WORKER_HOST) $name"
+done
 render_edge_config "$STAGE0_HOME/edge.json"
 "$STAGE0_HOME/bin/stage0-edge" -check -config "$STAGE0_HOME/edge.json" >/dev/null || die "the edge refused $STAGE0_HOME/edge.json"
 
@@ -456,6 +477,7 @@ restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/e
   "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
 restart_changed ortus-stage0-edge.service "$KIT/edge" "$STAGE0_HOME/edge.json" "$UNITS/ortus-stage0-edge.service"
 for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
+for name in "${retunnel[@]}"; do systemctl --user restart "ortus-stage0-worker-tunnel@$name.service"; done
 restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done

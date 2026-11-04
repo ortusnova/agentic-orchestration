@@ -88,6 +88,9 @@ func loadStage0Workflow(t *testing.T, name string) *workflow.Manager {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The workbench's notifications endpoint, as run-sortie.sh puts it in
+	// Sortie's environment (stage0_notify_test.go).
+	t.Setenv("SORTIE_WORKBENCH_NOTIFY_URL", stage0Workbench.url())
 	// The supervisor's prompt, beside the workflow, as stage0.sh installs it.
 	if prompt, err := os.ReadFile(filepath.Join(kit, "supervisor.md")); err == nil {
 		if err := os.WriteFile(filepath.Join(dir, "supervisor.md"), prompt, 0o600); err != nil {

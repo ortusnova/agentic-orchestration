@@ -17,6 +17,9 @@
 #                            value only serves the agent kinds' own checks.
 # No other model provider is used: nothing here reads an OpenRouter or API key.
 #   STAGE0_SORTIE_TOKEN      $STAGE0_HOME/sortie-token
+#   SORTIE_WORKBENCH_NOTIFY_URL  the workbench's notifications endpoint, with
+#                            this host's token from
+#                            $STAGE0_HOME/notify-tokens/<host>.token, mode 0600
 #   STAGE0_SUPERVISOR_TOKEN  $STAGE0_HOME/supervisor-token (supervisor.sh), for
 #                            server.supervisor_token; Sortie hands it to the
 #                            supervisor session only
@@ -51,13 +54,20 @@ else
 fi
 export STAGE0_SORTIE_TOKEN
 STAGE0_SORTIE_TOKEN=$(cat "$STAGE0_HOME/sortie-token")
+# shellcheck source=notify-channel.sh
+. "$(dirname "$0")/notify-channel.sh"
+# The workbench, the default destination of the workflow's notifications.
+export SORTIE_WORKBENCH_NOTIFY_URL
+# p1's workbench is on this host's port, or on a worker host the tunnel's.
+workbench_port=${STAGE0_WORKBENCH_PORT:-8793}
+[[ ${STAGE0_PROFILE:-control} == worker ]] && workbench_port=$STAGE0_WORKBENCH_TUNNEL_PORT
+SORTIE_WORKBENCH_NOTIFY_URL=$(workbench_notify_url "$STAGE0_HOME" "${STAGE0_WORKBENCH_NOTIFY_PORT:-$workbench_port}") \
+  || die "Sortie has no token for the workbench's notifications"
 export STAGE0_SUPERVISOR_TOKEN
 STAGE0_SUPERVISOR_TOKEN=$(cat "$STAGE0_HOME/supervisor-token")
 # The operator's channel (notify-channel.sh): its webhook URL or bot token,
 # from the file only the operator writes, for the workflow's notifications.
 if [[ -n ${STAGE0_NOTIFY_KIND:-} ]]; then
-  # shellcheck source=notify-channel.sh
-  . "$(dirname "$0")/notify-channel.sh"
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
   export SORTIE_NOTIFY_SECRET
   SORTIE_NOTIFY_SECRET=$(cat "$STAGE0_HOME/notify-credential")

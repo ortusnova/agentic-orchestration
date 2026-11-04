@@ -16,6 +16,7 @@ from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
+from .notifications import project_notifications
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
 from .timeline import RunHistory, RunWorkers
@@ -30,8 +31,14 @@ class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
                  peers: list[ProjectSortie] | None = None, previews=None,
                  alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
-                 history: RunHistory | None = None):
+                 history: RunHistory | None = None,
+                 notifications: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+                 clock: Callable[[], float] = time.time):
         self.plan = plan
+        # What the Sorties' notifications sent of these identifiers, as kept
+        # (workbench.notifications), and the time their repeats count in.
+        self.notifications = notifications
+        self.clock = clock
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
         self.peers = list(peers or [])
@@ -388,9 +395,23 @@ class Hub:
         except Exception:  # the home must never take the graph down with it
             log.exception("could not build the project home")
             return {"error": "the home could not be computed; see the workbench log"}
+        home["notifications"] = self._notifications(doc.get("nodes") or [])
+        home["needs_person"]["unread"] = sum(1 for n in home["notifications"] if n["unread"])
         home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
+
+    def _notifications(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """What "Needs a person" shows of the notifications the Sorties sent."""
+        if self.notifications is None:
+            return []
+        idents = [n["tracker"]["identifier"] for n in nodes if n.get("kind") == "story" and n.get("tracker")]
+        try:
+            rows = self.notifications(idents)
+        except Exception:  # the home must never fail for them
+            log.exception("could not read the notifications")
+            return []
+        return project_notifications(rows, nodes, self.open_questions(), self.clock())
 
     def open_questions(self) -> dict[str, dict[str, Any]]:
         """The questions that wait on a person: none of a story the

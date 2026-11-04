@@ -447,7 +447,8 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. nono holds it for the jobs: a job's `SORTIE_GITHUB_TOKEN` is only the `github_api` placeholder, for GitHub's API, which a live-proof job comments its result with ([Live proofs](#live-proofs)) |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
-| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
+| The workbench's notifications | `notify-tokens/<host>.token` in the stage-0 home, mode 0600, minted by `stage0.sh`: Sortie posts its notifications to the workbench with it, and the workbench refuses any other; no operator credential. See [below](#the-operators-channel) |
+| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; optional, see [below](#the-operators-channel) |
 | The supervisor's token | `supervisor-token` in the stage-0 home, mode 0600, minted by `stage0.sh` (`supervisor.sh`); Sortie accepts it only on the supervisor's routes and hands it to the supervisor session only |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
@@ -456,18 +457,55 @@ secret.
 
 ## The operator's channel
 
-Every question for a person reaches the workbench, wherever the story
-runs (p1 or a worker host such as taichi), and can reach the operator's
-channel (spec store `agent-platform/run-supervision`, "A
-person is alerted, wherever the question is held"). The channel and its
-credential are the operator's choice: any kind Sortie's notifications have.
-The channel is optional: with no `STAGE0_NOTIFY_KIND`, the default, no
-channel is configured and `stage0.sh`, `run-sortie.sh` and the workbench
-start without one.
+Alerts go through Sortie's notifications (spec store
+`agent-platform/run-supervision`, "A person is alerted, wherever the
+question is held"), and their default destination is the workbench, by
+Sortie's `webhook` backend. It needs no operator credential: `stage0.sh`
+mints this host's token into `$STAGE0_HOME/notify-tokens/<host>.token`
+(mode 0600; `<host>` is `STAGE0_SORTIE_NAME`, else the host's short name in
+lower case, the name the workbench gives its Sortie), `run-sortie.sh` reads
+it into Sortie's environment only, as `SORTIE_WORKBENCH_NOTIFY_URL`
+(`http://127.0.0.1:<workbench port>/api/notifications/<host>/<token>`), and
+`run-workbench.sh` points the workbench at the directory
+(`WORKBENCH_NOTIFY_TOKENS`). The workflow's `notifications` list it as:
+
+```yaml
+  - kind: webhook
+    url: $SORTIE_WORKBENCH_NOTIFY_URL
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
+```
+
+The workbench keeps each notification, links it to the story and the open
+question it names, and shows it under **Needs a person** (**From Sortie**),
+unread until a person marks it seen, and unread again every 4 hours while
+its question stays open (`workbench/docs/operator-guide.md`, "Sortie's
+notifications"). It refuses a post with a wrong or missing token.
+
+Every host has its own token. p1's Sortie posts to the workbench on p1's
+loopback. For each worker host, such as taichi, `worker-host.sh add` mints
+its token on p1 (`notify-tokens/taichi.token`, which the workbench takes)
+and copies it to the same place in the host's stage-0 home, and the tunnel
+p1 opens to the host also forwards p1's workbench to the host's loopback, on
+port 7790 (`STAGE0_WORKBENCH_TUNNEL_PORT`). A Sortie on the host posts there
+with its own token: `run-sortie.sh` on a host of the worker profile (or with
+`STAGE0_WORKBENCH_NOTIFY_PORT=7790`) puts `http://127.0.0.1:7790/api/notifications/taichi/<token>` in its
+environment. A worker host added before this gets the forward at p1's next
+`stage0.sh`, which says when a host still needs `worker-host.sh add` for its
+token. Since `agent-platform/one-sortie` the kit runs no Sortie on a worker
+host: a story that runs on taichi's worker parks on p1's Sortie, and its
+notification takes the first way.
+
+Any other destination is the operator's choice and one more entry in the
+same list, after the workbench's: any kind Sortie's notifications have
+(discord, slack, telegram, or a webhook such as a mobile push service). It
+is optional: with no `STAGE0_NOTIFY_KIND`, the default, Sortie's
+notifications go to the workbench only and `stage0.sh`, `run-sortie.sh` and
+the workbench start without an operator credential.
 
 | Where | What it sends |
 | --- | --- |
-| The workflow, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
+| The workflow, to the workbench, through Sortie's notifications (always) | a run that stops for a person or fails (`session.stopped`, `session.failed`), a question, permission request or failed criteria check (`session.escalated`), every escalation (`escalation.*`), and a budget hold (`budget.held`) |
+| The workflow, to the operator's channel, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
 | The workbench on p1, which reads the questions of p1's Sortie and of each other Sortie in `WORKBENCH_SORTIES` | each open question within one poll, with the story, the Sortie that holds it, and a link to the project's home on `STAGE0_WORKBENCH_PUBLIC_URL`, where it is answered; then again every 4 hours while it stays open, and never once it is answered or released |
 
 To set the channel, on p1 (a worker host runs no Sortie and needs none):
@@ -502,9 +540,12 @@ To set the channel, on p1 (a worker host runs no Sortie and needs none):
    questions show on the workbench only, and `stage0.sh` says so.
 
 Each question names the Sortie that holds it, and an answer goes to that
-Sortie. To check it, park a story that runs on taichi: within one refresh it
-is first under **Needs a person** on the workbench, and the channel, when
-one is set, has it with the link.
+Sortie. To check it, park a story that runs on taichi: within one minute
+Sortie's notification of it is under **Needs a person** (**From Sortie**,
+unread) on the workbench, and its question under **Answer**; the channel,
+when one is set, has it with the link. `journalctl --user -u
+ortus-stage0-workbench` logs `notification from p1: session.stopped
+<identifier>`.
 
 ## The stage-1 edge (p1)
 
@@ -514,7 +555,7 @@ design D18; no worker change then). Only the control profile runs it.
 
 | Part | Where |
 | --- | --- |
-| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); nothing listens on the LAN, and the host gets no SSH access to p1 |
+| Tunnels | unit `ortus-stage0-worker-tunnel@<worker>` per worker host: p1 opens `ssh -R 127.0.0.1:7700:127.0.0.1:<edge port>` to the host and keeps it up. On the worker host the edge is `http://127.0.0.1:7700` (`STAGE0_EDGE_WORKER_PORT`); the same tunnel forwards p1's workbench to `http://127.0.0.1:7790` (`STAGE0_WORKBENCH_TUNNEL_PORT`), for the host's notifications, which need its token; nothing listens on the LAN, and the host gets no SSH access to p1 |
 | Edge | unit `ortus-stage0-edge`, `$STAGE0_HOME/bin/stage0-edge` built from `edge/`, configured by `$STAGE0_HOME/edge.json` (rendered by `edge-config.sh`). One port per worker on p1's loopback: `127.0.0.1:7700` for p1's own worker, which needs no tunnel, and one per worker host from `127.0.0.1:7701` up, and nothing else |
 | nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with `egress-profile.json`. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
 | Worker hosts | `$STAGE0_HOME/workers/<worker>.env`: the SSH destination and the edge port, or `LOCAL=1` for p1's own worker (`stage0.sh` writes it); `dev/stage0/worker-host.sh list` |

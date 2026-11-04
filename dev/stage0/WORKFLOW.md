@@ -113,12 +113,18 @@ github:
 
 # Comments on the story, so the operator sees in Huly why a run stopped,
 # that Sortie merged its pull request or could not, and that a pull request
-# still fails or conflicts after its fix runs. Then the operator's channel,
-# when stage0.env names one (notify-channel.sh): each question for a person,
-# with its credential read from $STAGE0_HOME/notify-credential.
+# still fails or conflicts after its fix runs. Then the workbench, the
+# default destination, by Sortie's webhook backend: each question for a
+# person and each run that needs one, at a URL with this host's token
+# (notify-channel.sh, run-sortie.sh), which "Needs a person" shows. Then the
+# operator's channel, when stage0.env names one: one more entry, with its
+# credential read from $STAGE0_HOME/notify-credential.
 notifications:
   - kind: tracker_comment
     events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts, escalation.review_comments]
+  - kind: webhook
+    url: $SORTIE_WORKBENCH_NOTIFY_URL
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
 ${STAGE0_NOTIFY_ENTRY}
 
 server:
