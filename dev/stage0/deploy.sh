@@ -6,11 +6,11 @@
 # and waits for no run, so a merge applies within the minute, whatever runs.
 #
 #   - A change to the workbench rebuilds it and restarts its unit.
-#   - A change to the rest of the kit (dev/, acp-broker/, control-plane/,
-#     smol-builder/, worker-daemon/) runs stage0.sh again, which restarts Sortie at once:
+#   - A change to the rest of the kit (dev/, acp-broker/, smol-builder/,
+#     worker-daemon/) runs stage0.sh again, which restarts Sortie at once:
 #     Sortie re-adopts each run whose lease a worker still holds and follows
-#     it to its end. nono, the egress gate, Pomerium and the worker daemon
-#     carry the runs, so stage0.sh restarts each only when what it runs changed
+#     it to its end. nono, the edge and the worker daemon carry the runs, so
+#     stage0.sh restarts each only when what it runs changed
 #     (unit-restart.sh). A worker host (STAGE0_PROFILE=worker) builds no
 #     Sortie, follows no plan-bench merge and asks no Sortie anything,
 #     whatever Sortie settings its stage0.env kept from before it became a
@@ -84,7 +84,7 @@ if [[ $old == "$new" && $sortie_old == "$sortie_new" ]]; then
 fi
 
 changed=$(git -C "$LIVE" diff --name-only "$old" "$new")
-kit=$(grep -E '^(dev|acp-broker|control-plane|smol-builder|worker-daemon)/' <<< "$changed" || true)
+kit=$(grep -E '^(dev|acp-broker|smol-builder|worker-daemon)/' <<< "$changed" || true)
 workbench=$(grep -E '^workbench/' <<< "$changed" || true)
 update_sortie=()
 [[ $sortie_old != "$sortie_new" ]] && update_sortie=(--update-sortie)
