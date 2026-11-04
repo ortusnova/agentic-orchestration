@@ -85,6 +85,11 @@ class FakeSortie:
         self.history: dict[str, dict[str, Any]] = {}
         # Finished runs, as GET /api/v1/runs serves them, newest first.
         self.runs: list[dict[str, Any]] = []
+        # Open platform faults as /api/v1/state serves them; whether the
+        # check an action-done runs passes; and the action-done requests.
+        self.platform_faults: list[dict[str, Any]] = []
+        self.fault_check_passes = True
+        self.faults_done: list[dict[str, Any]] = []
 
     def run(self, identifier: str, session_id: str, stage: str = "implement", broker: str | None = None, token: str = "viewer-secret", **extra):
         """Start a run of the issue; with ``broker``, its broker has reported."""
@@ -128,6 +133,26 @@ class FakeSortie:
                       "evidence": evidence, "held_since": renewed_at, "renewed_at": renewed_at, "until": until,
                       "expired": expired, "expired_at": until if expired else None})
         self.extra_state["holds"] = holds
+
+    def platform_fault(self, fault_id: str, stories: list[str], cause: str, *, detail: str = "",
+                       action: str | None = None, where: str = "", fault_class: str = "token_scope", step: str = "export",
+                       recorded_at: str = "2026-11-03T12:00:00Z") -> dict[str, Any]:
+        """Record a platform fault that holds ``stories``, as Sortie does once
+        a stopped failure's signature is in a platform class; with
+        ``action``, only a person can clear it."""
+        self.end_all(stories)
+        fault = {"id": fault_id, "class": fault_class, "step": step, "signature": f"{step}|{fault_class}|{cause}",
+                 "cause": cause, "detail": detail,
+                 "person_action": {"action": action, "where": where, "done_at": None, "done_by": ""} if action else None,
+                 "stories": [{"issue_id": f"id-{s}", "issue_identifier": s, "held_at": recorded_at} for s in stories],
+                 "recorded_at": recorded_at, "last_check_at": None, "last_check_error": "",
+                 "next_check_at": "2026-11-03T12:05:00Z", "checking": False}
+        self.platform_faults = [f for f in self.platform_faults if f["id"] != fault_id] + [fault]
+        return fault
+
+    def end_all(self, identifiers: list[str]) -> None:
+        for ident in identifiers:
+            self.end(ident)
 
     def issue(self, plan_key, kind="story", state="Todo", parent=None, runtime=None, terminal=False, **extra):
         node = {
@@ -212,7 +237,27 @@ class FakeSortie:
             agent = {"max_concurrent_agents": self.max_agents} if self.max_agents is not None else {}
             return httpx.Response(200, json={"running": list(self.running.values()), "retrying": list(self.retrying.values()),
                                              "budget_exhausted": self.budget_exhausted, "parked": self.parked,
+                                             "platform_faults": self.platform_faults,
                                              "config": {"agent": agent}, **self.extra_state})
+        if path.startswith("/api/v1/platform-faults/") and path.endswith("/action-done") and request.method == "POST":
+            fault_id = path.removeprefix("/api/v1/platform-faults/").removesuffix("/action-done")
+            fault = next((f for f in self.platform_faults if f["id"] == fault_id), None)
+            if fault is None:
+                return httpx.Response(404, json={"error": {"code": "platform_fault_not_found",
+                                                           "message": "no open platform fault has this id"}})
+            by = (body or {}).get("by") or "operator"
+            self.faults_done.append({"id": fault_id, "by": by})
+            if fault["person_action"] is not None:
+                fault["person_action"].update(done_at="2026-11-03T12:10:00Z", done_by=by)
+            fault["last_check_at"] = "2026-11-03T12:10:00Z"
+            # Sortie checks the fault again at once: a pass resolves it and
+            # releases its stories, with their budgets.
+            if self.fault_check_passes:
+                self.platform_faults = [f for f in self.platform_faults if f["id"] != fault_id]
+                fault["last_check_error"] = ""
+            else:
+                fault["last_check_error"] = "push refused again: the token still lacks the workflow scope"
+            return httpx.Response(200, json={"resolved": self.fault_check_passes, "platform_fault": fault})
         if path.startswith("/api/v1/") and path.endswith("/answer") and request.method == "POST":
             ident = path.removeprefix("/api/v1/").removesuffix("/answer")
             if ident not in self.park_details:

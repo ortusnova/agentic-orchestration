@@ -74,11 +74,10 @@ func (j *job) listeners() []net.Addr {
 }
 
 // lost reports that the attempt is no longer the daemon's to report:
-// the control plane ended it, no longer wants it, or accepted no
-// heartbeat for longer than the lease.
+// the control plane ended it or no longer wants it.
 func (j *job) lost() bool {
 	cause := context.Cause(j.ctx)
-	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone) || errors.Is(cause, errSilent)
+	return errors.Is(cause, errLeaseLost) || errors.Is(cause, errJobGone)
 }
 
 // release ends a job the control plane no longer wants: the agent stops
@@ -152,7 +151,7 @@ func (j *job) heartbeats() {
 			j.stopMachine()
 			return
 		case time.Since(accepted) > j.d.leaseDuration():
-			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine, sending no report",
+			j.log.Warn("no heartbeat accepted for longer than the lease: stopping the machine and reporting the attempt failed",
 				slog.Duration("lease", j.d.leaseDuration()), slog.String("error", err.Error()))
 			j.cancel(errSilent)
 			j.stopMachine()
@@ -182,14 +181,41 @@ func (j *job) stopMachine() {
 	j.mu.Unlock()
 }
 
+// left reports that the daemon is stopping and leaves the job, its
+// machine and its state to its next start.
+func (j *job) left() bool { return errors.Is(context.Cause(j.ctx), errLeave) }
+
 func (j *job) run() {
+	j.finish(j.execute)
+}
+
+// finish runs the job with work, then ends it: it deletes the machine
+// and reports the outcome, unless the control plane ended the job, or
+// the daemon is stopping, which leaves the job as it is for its next
+// start.
+func (j *job) finish(work func(dir string) (string, string)) {
 	defer j.d.finished(j)
 	defer close(j.done)
 	dir := j.d.JobDir(j.id(), j.attempt())
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer func() {
+		if !j.left() {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 	defer j.closeServers()
 
-	outcome, reason := j.execute(dir)
+	outcome, reason := work(dir)
+	if j.left() {
+		j.mu.Lock()
+		m := j.m
+		j.mu.Unlock()
+		name := ""
+		if m != nil {
+			name = m.Name()
+		}
+		j.log.Info("job left running for the daemon's next start", slog.String("machine", name))
+		return
+	}
 	machineState := j.dispose()
 	if errors.Is(context.Cause(j.ctx), errJobGone) {
 		j.log.Info("job released: the control plane no longer wants the job; not reporting", slog.String("machine", machineState))
@@ -199,8 +225,8 @@ func (j *job) run() {
 		j.log.Info("attempt ended by the control plane; not reporting", slog.String("machine", machineState))
 		return
 	}
-	if errors.Is(context.Cause(j.ctx), errShutdown) {
-		outcome, reason = protocol.OutcomeFailed, errShutdown.Error()
+	if errors.Is(context.Cause(j.ctx), errSilent) {
+		outcome, reason = protocol.OutcomeFailed, errSilent.Error()
 	}
 	j.d.report(j.log, j.id(), j.attempt(), protocol.Report{Outcome: outcome, Reason: reason, Machine: machineState})
 }
@@ -242,6 +268,63 @@ func failed(format string, args ...any) (string, string) {
 	return protocol.OutcomeFailed, fmt.Sprintf(format, args...)
 }
 
+// forwards are the job's forwarders, each a host socket in dir.
+func forwards(dir string) []machine.Forward {
+	return []machine.Forward{
+		{Name: protocol.FlowEgress, HostSocket: filepath.Join(dir, "egress.sock"), GuestPort: EgressGuestPort},
+		{Name: protocol.FlowMCP, HostSocket: filepath.Join(dir, "mcp.sock"), GuestPort: MCPGuestPort},
+	}
+}
+
+// serveForwarders serves the job's egress and mcp forwarders on their
+// host sockets in dir.
+func (j *job) serveForwarders(dir string) error {
+	eg := j.flows.Flows[protocol.FlowEgress]
+	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls}
+	mcp := &flows.MCP{Job: j.flows}
+	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
+	for _, f := range forwards(dir) {
+		s, err := flows.Serve(f.HostSocket, handlers[f.Name])
+		if err != nil {
+			return err
+		}
+		j.mu.Lock()
+		j.servers = append(j.servers, s)
+		j.mu.Unlock()
+	}
+	return nil
+}
+
+// spec is the spec of the job's machine, its state in dir.
+func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
+	pack, err := j.d.cfg.Smolvm.Pack(j.offer.Run.Image)
+	if err != nil {
+		return machine.Spec{}, config.Image{}, err
+	}
+	r := j.offer.Job.Requires
+	img := j.d.cfg.Smolvm.Images[j.offer.Run.Image]
+	user := j.d.cfg.Smolvm.User
+	if img.User != "" {
+		user = img.User
+	}
+	mounts, err := j.mounts(img)
+	if err != nil {
+		return machine.Spec{}, config.Image{}, fmt.Errorf("host folders: %w", err)
+	}
+	spec := machine.Spec{
+		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
+		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
+		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt()),
+			machine.LabelWorker: j.d.cfg.WorkerID},
+		Share: filepath.Join(dir, "share"), Forwards: forwards(dir),
+		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
+	}
+	if img.LibDir != "" {
+		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
+	}
+	return spec, img, nil
+}
+
 // execute runs the job and returns its outcome and reason.
 func (j *job) execute(dir string) (string, string) {
 	ctx := j.ctx
@@ -257,23 +340,11 @@ func (j *job) execute(dir string) (string, string) {
 	if err := os.Chmod(share, 0o777); err != nil { // #nosec G302 -- holds no secret; its parent is 0700
 		return failed("job directory: %v", err)
 	}
-
-	eg := j.flows.Flows[protocol.FlowEgress]
-	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls}
-	mcp := &flows.MCP{Job: j.flows}
-	forwards := []machine.Forward{
-		{Name: protocol.FlowEgress, HostSocket: filepath.Join(dir, "egress.sock"), GuestPort: EgressGuestPort},
-		{Name: protocol.FlowMCP, HostSocket: filepath.Join(dir, "mcp.sock"), GuestPort: MCPGuestPort},
+	if err := j.save(dir, nil); err != nil {
+		return failed("job state: %v", err)
 	}
-	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
-	for _, f := range forwards {
-		s, err := flows.Serve(f.HostSocket, handlers[f.Name])
-		if err != nil {
-			return failed("forwarder: %v", err)
-		}
-		j.mu.Lock()
-		j.servers = append(j.servers, s)
-		j.mu.Unlock()
+	if err := j.serveForwarders(dir); err != nil {
+		return failed("forwarder: %v", err)
 	}
 
 	seedFile := filepath.Join(share, "seed.bundle")
@@ -281,32 +352,12 @@ func (j *job) execute(dir string) (string, string) {
 		return failed("workspace seed: %v", err)
 	}
 
-	pack, err := j.d.cfg.Smolvm.Pack(j.offer.Run.Image)
+	spec, img, err := j.spec(dir)
 	if err != nil {
 		return failed("%v", err)
-	}
-	r := j.offer.Job.Requires
-	img := j.d.cfg.Smolvm.Images[j.offer.Run.Image]
-	user := j.d.cfg.Smolvm.User
-	if img.User != "" {
-		user = img.User
-	}
-	mounts, err := j.mounts(img)
-	if err != nil {
-		return failed("host folders: %v", err)
 	}
 	if j.inputEnv, err = imageEnv(img); err != nil {
 		return failed("%v", err)
-	}
-	spec := machine.Spec{
-		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
-		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
-		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt())},
-		Share:  share, Forwards: forwards,
-		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
-	}
-	if img.LibDir != "" {
-		spec.HostEnv = []string{"SMOLVM_LIB_DIR=" + img.LibDir}
 	}
 	m, err := j.d.backend.Create(ctx, spec)
 	if err != nil {
@@ -316,7 +367,9 @@ func (j *job) execute(dir string) (string, string) {
 	j.m, j.state = m, protocol.MachineRunning
 	j.mu.Unlock()
 	if ctx.Err() != nil {
-		j.stopMachine()
+		if !j.left() {
+			j.stopMachine()
+		}
 		return failed("%v", context.Cause(ctx))
 	}
 	j.log.Info("machine running", slog.String("machine", m.Name()))
@@ -335,8 +388,20 @@ func (j *job) execute(dir string) (string, string) {
 			return failed("setup %d: %v", i+1, err)
 		}
 	}
+	// From here on the job is the agent's: a daemon that restarts
+	// adopts it and starts the agent again.
+	if err := j.save(dir, &seed); err != nil {
+		return failed("job state: %v", err)
+	}
+	return j.agentAndResult(m, share, seed, false)
+}
 
-	code, runErr := j.runAgent(ctx, m)
+// agentAndResult runs the agent, then reports usage and returns the
+// result. An adopted job dials the stream again before its agent
+// starts, as after a break.
+func (j *job) agentAndResult(m machine.Machine, share string, seed seed, adopted bool) (string, string) {
+	ctx := j.ctx
+	code, runErr := j.runAgent(ctx, m, adopted)
 	if ctx.Err() != nil {
 		return failed("%v", context.Cause(ctx))
 	}
@@ -561,11 +626,17 @@ func (j *job) setup(ctx context.Context, m machine.Machine, script string) error
 // until the control plane serves it, for at most a lease, and starts the
 // agent again in the same workspace, where the restarted control plane
 // resumes the agent's session.
-func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
+func (j *job) runAgent(ctx context.Context, m machine.Machine, adopted bool) (int, error) {
 	if j.offer.Run.Command == "" {
 		return -1, errors.New("the run names no command")
 	}
-	conn, err := j.flows.DialStdio(ctx)
+	var conn *stdio.Conn
+	var err error
+	if adopted {
+		conn, err = j.redialStdio(ctx)
+	} else {
+		conn, err = j.flows.DialStdio(ctx)
+	}
 	if err != nil {
 		return -1, j.releaseIfGone(err)
 	}
@@ -586,13 +657,16 @@ func (j *job) runAgent(ctx context.Context, m machine.Machine) (int, error) {
 // again after it broke.
 var errStdioNotServed = errors.New("the stdio stream was not served again")
 
-// redialStdio dials the stdio stream until the control plane serves it.
-// It gives up when the job ends, as at a lost lease, when the control
-// plane refuses the job's token or answers that it no longer wants the
-// job, or after a lease of tries.
+// redialStdio dials the stdio stream until the control plane serves it,
+// for as long as the job's heartbeats renew its lease: the lease says
+// the control plane still wants the job, however long it takes to serve
+// the stream again, as a Sortie that adopts the run again may. It gives
+// up when the job ends, as when the lease is lost or can no longer be
+// renewed, when the control plane answers that it no longer wants the
+// job (410), or when it refuses the job's token.
 func (j *job) redialStdio(ctx context.Context) (*stdio.Conn, error) {
 	var conn *stdio.Conn
-	err := j.retry(ctx, "stdio stream", func() (bool, error) {
+	err := j.retryWhileLeased(ctx, "stdio stream", func() (bool, error) {
 		c, err := j.flows.DialStdio(ctx)
 		if err != nil {
 			refused, ok := errors.AsType[*stdio.RefusedError](err)
@@ -633,8 +707,19 @@ func retryableFlow(err error) bool {
 // between tries up to a heartbeat interval. A failure that says the
 // control plane no longer wants the job releases it.
 func (j *job) retry(ctx context.Context, what string, try func() (again bool, err error)) error {
+	return j.tries(ctx, what, true, try)
+}
+
+// retryWhileLeased calls try as retry does, with no bound of its own:
+// the job's heartbeats end the job, and so the tries, when its lease is
+// lost or can no longer be renewed.
+func (j *job) retryWhileLeased(ctx context.Context, what string, try func() (again bool, err error)) error {
+	return j.tries(ctx, what, false, try)
+}
+
+func (j *job) tries(ctx context.Context, what string, bounded bool, try func() (again bool, err error)) error {
 	wait := 100 * time.Millisecond
-	deadline := time.Now().Add(j.d.leaseDuration())
+	start := time.Now()
 	for {
 		again, err := try()
 		if err == nil {
@@ -647,7 +732,7 @@ func (j *job) retry(ctx context.Context, what string, try func() (again bool, er
 		if !again {
 			return err
 		}
-		if time.Now().After(deadline) {
+		if bounded && time.Since(start) > j.d.leaseDuration() {
 			return fmt.Errorf("%s: not served within a lease (%s): %w", what, j.d.leaseDuration(), err)
 		}
 		j.log.Debug("retrying", slog.String("what", what), slog.String("error", err.Error()), slog.Duration("in", wait))

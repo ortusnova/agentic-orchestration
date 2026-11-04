@@ -9,8 +9,11 @@ Environment=PATH=@STAGE0_HOME@/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=@STAGE0_HOME@/bin/worker-daemon run -config @STAGE0_HOME@/worker.json
 Restart=on-failure
 RestartSec=10
-# The daemon stops every machine and reports each running attempt failed.
+# The daemon leaves its running jobs to its next start, which adopts them.
 TimeoutStopSec=150
+# The jobs' machines run in this unit's control group: a stop signals the
+# daemon only, so they outlive it.
+KillMode=process
 
 [Install]
 WantedBy=default.target

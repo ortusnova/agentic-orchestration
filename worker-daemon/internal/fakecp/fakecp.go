@@ -74,6 +74,10 @@ type Fake struct {
 	LeaseMS int64
 	// IdentityHeader names the worker; default X-Sortie-Worker-Identity.
 	IdentityHeader string
+	// NoResume answers the resume route 404, as a Sortie that has none.
+	NoResume bool
+	// checkInDelay holds each check-in's answer this long.
+	checkInDelay time.Duration
 
 	mu       sync.Mutex
 	events   []Event
@@ -187,6 +191,13 @@ func (f *Fake) Beats(job string, attempt int) []protocol.Beat {
 	return out
 }
 
+// DelayCheckIns holds each later check-in's answer for d.
+func (f *Fake) DelayCheckIns(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkInDelay = d
+}
+
 // Offer queues a job.
 func (f *Fake) Offer(j Job) {
 	f.mu.Lock()
@@ -250,6 +261,13 @@ func (f *Fake) Unserve(job string, attempt int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.unserved[key(job, attempt)] = true
+}
+
+// Serve serves the attempt's stdio stream again after [Fake.Unserve].
+func (f *Fake) Serve(job string, attempt int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.unserved, key(job, attempt))
 }
 
 // Streams counts the stdio streams the attempt opened.
@@ -440,6 +458,13 @@ func (f *Fake) workerAPI(w http.ResponseWriter, r *http.Request) {
 		f.heartbeat(w, id, job, attempt, body)
 	case "report":
 		f.report(w, id, job, attempt, body)
+	case "resume":
+		if f.NoResume {
+			http.NotFound(w, r)
+			f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusNotFound})
+			return
+		}
+		f.resume(w, id, job, attempt)
 	default:
 		http.NotFound(w, r)
 	}
@@ -503,7 +528,9 @@ func (f *Fake) checkIn(w http.ResponseWriter, id string, body []byte) {
 	}
 	f.mu.Lock()
 	f.workers[id] = d
+	delay := f.checkInDelay
 	f.mu.Unlock()
+	time.Sleep(delay)
 	reply(w, http.StatusOK, protocol.Timings{HeartbeatMS: f.LeaseMS / 3, LeaseMS: f.LeaseMS})
 	f.record(Event{Kind: "checkin", Status: 200, Body: body})
 }
@@ -609,6 +636,46 @@ func (f *Fake) heartbeat(w http.ResponseWriter, id, job string, attempt int, bod
 	f.mu.Unlock()
 	reply(w, http.StatusOK, protocol.Lease{Expires: exp.UTC()})
 	f.record(Event{Kind: "heartbeat", Job: job, Attempt: attempt, Status: 200, Body: body})
+}
+
+// resume hands the worker that holds the attempt's live lease its offer
+// again with new tokens, as Sortie does; the earlier tokens end.
+func (f *Fake) resume(w http.ResponseWriter, id, job string, attempt int) {
+	k := key(job, attempt)
+	f.mu.Lock()
+	if l := f.leases[k]; l != nil && l.gone {
+		f.mu.Unlock()
+		problem(w, http.StatusGone, "job_gone", "worker: job attempt gone")
+		f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusGone})
+		return
+	}
+	l := f.live(id, job, attempt)
+	if l == nil {
+		f.mu.Unlock()
+		problem(w, http.StatusConflict, "lease_lost", "no live lease")
+		f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusConflict})
+		return
+	}
+	l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
+	j := f.jobs[k]
+	toks := map[string]string{}
+	flowsOut := map[string]map[string]string{}
+	for _, name := range protocol.Flows {
+		toks[name] = newToken()
+		u := f.Server.URL + "/flows/" + name
+		if name == protocol.FlowEgress {
+			u = f.Server.URL
+		}
+		flowsOut[name] = map[string]string{"url": u, "token": toks[name]}
+	}
+	f.tokens[k] = toks
+	exp := l.expires
+	f.mu.Unlock()
+	reply(w, http.StatusOK, wireOffer{
+		Job:   protocol.Job{ID: j.ID, Attempt: j.Attempt, Issue: protocol.Issue{ID: "id-" + j.ID, Identifier: j.ID, Title: "fake " + j.ID}, Requires: j.Requires},
+		Lease: protocol.Lease{Expires: exp.UTC()}, Run: j.Run, Flows: flowsOut,
+	})
+	f.record(Event{Kind: "resume", Job: job, Attempt: attempt, Status: http.StatusOK})
 }
 
 func (f *Fake) report(w http.ResponseWriter, id, job string, attempt int, body []byte) {
@@ -897,6 +964,13 @@ func (f *Fake) stdio(w http.ResponseWriter, r *http.Request, job string, attempt
 	defer func() {
 		f.mu.Lock()
 		a.streamEnded = true
+		if a.exit == nil && a.stream == c {
+			// The worker broke the stream, as a daemon that restarts
+			// breaks it: as Sortie does, the attempt is served again, and
+			// the next stream's input closes after StdioInput.
+			a.stream, a.streamOpened = nil, false
+			a.breaks++
+		}
 		f.mu.Unlock()
 		f.record(Event{Kind: "stdio-end", Job: job, Attempt: attempt})
 	}()

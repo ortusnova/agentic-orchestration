@@ -26,6 +26,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/scm/github"
 	"github.com/sortie-ai/sortie/internal/worker"
 )
@@ -65,6 +66,8 @@ var liveProofPromptRules = []string{
 	"first line is `" + liveProofResultMarker + "`",
 	"`Result: proven` or `Result: unproven`",
 	"`Commit: ` with the full sha of `git rev-parse HEAD`",
+	"with `Result: proven`, a line `sortie:live-proof proven ` followed by that same sha",
+	"Sortie's merge reads the `sortie:live-proof proven` line",
 	"the step table, one row per step you ran, `| Step | Command | Result |`",
 	"sets the pull request's `live-proof` status, which the merge requires",
 	"lets the supervisor merge it once CI passes",
@@ -229,6 +232,63 @@ func TestStage0_AnUnprovenLiveCriterionIsNotMerged(t *testing.T) {
 				if merged := s.autoMerge(got); merged != tc.merge {
 					t.Errorf("live proof %s (CI %s): merged = %v, want %v", tc.status, got, merged, tc.merge)
 				}
+			}
+		})
+	}
+}
+
+// liveProofComments is the forge's conversation comments on the pull
+// request.
+type liveProofComments []domain.ReviewComment
+
+func (c liveProofComments) FetchPullRequestComments(context.Context, int, string, string) ([]domain.ReviewComment, error) {
+	return c, nil
+}
+
+// liveProofResult is the result comment the live-proof prompt asks the
+// job to write, proven or not, at commit.
+func liveProofResult(proven bool, commit string) string {
+	body := liveProofResultMarker + "\nResult: unproven\nCommit: " + commit + "\nCriterion: the vm chain issues a staging certificate.\n"
+	if proven {
+		body = liveProofResultMarker + "\nResult: proven\nCommit: " + commit + "\nCriterion: the vm chain issues a staging certificate.\n" +
+			"sortie:live-proof proven " + commit + "\n"
+	}
+	return body + "\n| Step | Command | Result |\n| --- | --- | --- |\n| seed-usb | sandbox chain seed-usb | DONE |\n"
+}
+
+// Scenario: A vm chain the story's machine cannot run, the supervisor's
+// merge. A story whose review left a criterion to a live proof is not
+// merged by the supervisor, though CI passed, until the live-proof job's
+// result comment, as the kit's prompt has it write one, proves the
+// criterion at the pull request's head.
+func TestStage0_TheSupervisorMergesALiveCriterionOnlyOnceProven(t *testing.T) {
+	const head = "9fad581d0e4b2c7a1f3e5d6c8b9a0f1e2d3c4b5a"
+	for _, tc := range []struct {
+		name     string
+		comments liveProofComments
+		merged   bool
+	}{
+		{"no result", nil, false},
+		{"unproven at the head", liveProofComments{{ID: "c1", Reviewer: "ortus-kit", Body: liveProofResult(false, head)}}, false},
+		{"proven at an earlier commit", liveProofComments{{ID: "c1", Reviewer: "ortus-kit", Body: liveProofResult(true, "23cc973a1b2c3d4e5f60718293a4b5c6d7e8f901")}}, false},
+		{"proven at the head", liveProofComments{{ID: "c1", Reviewer: "ortus-kit", Body: liveProofResult(true, head)}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSupervisorHarness(t, stateWithReviewReaction(t, "id-41", 41))
+			h.tracker.labels = []string{config.ReviewCriteriaLabel}
+			h.forge.status.HeadSHA = head
+			h.o.prCommentReader = tc.comments
+			if err := h.store.UpsertCriteriaVerdict(t.Context(), persistence.CriteriaVerdict{
+				IssueID: "id-41", Outcome: CriteriaOutcomeLiveProof, RecordedAt: time.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got := h.o.Supervisor().Merge(t.Context(), "id-41-ident")
+			if merged := got.Status == SupervisorDone && len(h.forge.merges) == 1; merged != tc.merged {
+				t.Errorf("merge = %+v, merged %v; want merged %v", got, merged, tc.merged)
+			}
+			if !tc.merged && got.Code != "live_proof_unproven" {
+				t.Errorf("refusal code %q, want live_proof_unproven", got.Code)
 			}
 		})
 	}

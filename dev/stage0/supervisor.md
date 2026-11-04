@@ -26,7 +26,9 @@ workspace of a story, and a fix is a fix run's.
    criterion only a live run settles (Sortie comments those on the story
    and does not merge), its CI passed on its current head, and every such
    live criterion, and every criterion that starts with `Live:`, is proven
-   by a recorded result on the pull request at its head. A live criterion
+   by a recorded result on the pull request at its head: the live-proof
+   job's comment holds `sortie:live-proof proven <head sha>`, and Sortie
+   refuses your merge without it (`live_proof_unproven`). A live criterion
    with no proof is not met: request one with `live-proof` and leave the
    pull request open. A review that found a criterion `not-met` or
    `unsettled` parks the story with those criteria: never merge it; decide

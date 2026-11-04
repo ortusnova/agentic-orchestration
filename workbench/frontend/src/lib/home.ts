@@ -175,6 +175,39 @@ export function eventText(n: Pick<HomeNotification, "event_type" | "escalation">
   return words[n.event_type] ?? n.event_type.replace(/[._]/g, " ");
 }
 
+/** A platform fault only a person can clear (agent-platform/run-supervision): asked on the home
+ * beside the agents' questions, ranked with them oldest first. Done makes Sortie check it again at once. */
+export interface HomeFault {
+  id: string;
+  /** The Sortie that recorded it, by name. */
+  sortie: string;
+  class: string | null;
+  step: string | null;
+  /** The first line of the error. */
+  cause: string;
+  /** The failing step's whole output. */
+  detail: string | null;
+  /** The exact action that clears it, and where to take it. */
+  action: string;
+  where: string | null;
+  /** When a person marked the action done, and who; the fault stays while Sortie's check still fails. */
+  done_at: number | null;
+  done_by: string | null;
+  /** Every story it holds; key is null for a story of another project. */
+  stories: { identifier: string; display: string | null; held_at: number | null; key: string | null; label: string | null;
+    change: string | null; title: string | null }[];
+  /** The plan keys of this project's stories it holds. */
+  keys: string[];
+  /** The first of them. */
+  key: string;
+  recorded_at: number | null;
+  last_check_at: number | null;
+  last_check_error: string | null;
+  next_check_at: number | null;
+  checking: boolean;
+  rank: number;
+}
+
 export interface Span {
   id: string;
   start: number;
@@ -204,11 +237,13 @@ export interface HomeDoc {
   not_ready: NotReadyItem[];
   /** Absent from an older backend. */
   questions?: HomeQuestion[];
+  /** The platform faults only a person can clear, ranked with the questions; absent from an older backend. */
+  faults?: HomeFault[];
   /** The stories whose supervisor lease ran out with no renewal, ranked after the questions; absent from an older backend. */
   expired_holds?: ExpiredHold[];
   /** What the Sorties' notifications sent: every unread one, and every one of an open question. Absent from an older backend. */
   notifications?: HomeNotification[];
-  needs_person: { total: number; questions?: number; expired_holds?: number; unread?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
+  needs_person: { total: number; questions?: number; faults?: number; expired_holds?: number; unread?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
   /** The workers as slot lanes, and what they say of the whole. Absent from an older backend. */
   lanes?: Lanes | null;

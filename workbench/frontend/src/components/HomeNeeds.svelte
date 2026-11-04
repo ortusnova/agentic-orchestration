@@ -1,15 +1,18 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import { graphHref } from "../lib/router";
-  import { eventText, plainTask, REASON_TEXT, slackText, slackWidth, type Column, type ExpiredHold, type HomeNotification, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import { eventText, plainTask, REASON_TEXT, slackText, slackWidth, type Column, type ExpiredHold, type HomeFault, type HomeNotification, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import FaultBox from "./FaultBox.svelte";
   import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, questions = [], expiredHolds = [], notifications = [], slug, marks, onapprove, onanswer, onreplace, onseen,
+    items, questions = [], faults = [], expiredHolds = [], notifications = [], slug, marks, onapprove, onanswer, onreplace, onfaultdone, onseen,
   }: {
     items: NotReadyItem[];
     /** The open questions of parked stories, ranked first. */
     questions?: HomeQuestion[];
+    /** The platform faults only a person can clear, ranked with the questions. */
+    faults?: HomeFault[];
     /** The stories whose supervisor lease ran out, ranked after the questions. */
     expiredHolds?: ExpiredHold[];
     /** What the Sorties' notifications sent: unread ones first. */
@@ -24,7 +27,15 @@
     onanswer: (key: string, text: string) => Promise<string | null>;
     /** Confirm a replacement's supersede; resolves to an error message, or null. */
     onreplace?: (replacement: string) => Promise<string | null>;
+    /** Mark a platform fault's action done, so Sortie checks it again at once; resolves to an error message, or null. */
+    onfaultdone?: (id: string) => Promise<string | null>;
   } = $props();
+
+  // The questions and the platform faults, in one ranked list.
+  const asks = $derived(
+    [...questions.map((q) => ({ kind: "question" as const, rank: q.rank, id: q.key, q })),
+      ...faults.map((f) => ({ kind: "fault" as const, rank: f.rank, id: f.id, f }))].sort((a, b) => a.rank - b.rank),
+  );
 
   // A column shows this many items until a person asks for all of them.
   const SHOWN = 5;
@@ -87,7 +98,7 @@
 
 <section class="needs" aria-labelledby="needs-h">
   <div class="head">
-    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {questions.length + expiredHolds.length + person.length} by urgency</span></h2>
+    <h2 id="needs-h">Needs a person<span>by what you do · numbers rank all {questions.length + faults.length + expiredHolds.length + person.length} by urgency</span></h2>
     <p class="legend">
       <span>The bar is the time before an item holds agents up, in stories until estimates exist. Shorter is more urgent.</span>
       <span class="key"><i class="u-now"></i>blocking now</span>
@@ -130,21 +141,34 @@
   {/if}
   <div class="cols">
     <div class="col" data-column="answer">
-      <div class="ch"><h3>Answer</h3><span>{questions.length} · {questions.length === 1 ? "an agent waits" : "agents wait"}</span></div>
-      {#if !questions.length && !expiredHolds.length}
+      <div class="ch"><h3>Answer</h3><span>{asks.length} · {asks.length === 1 ? "an agent waits" : "agents wait"}</span></div>
+      {#if !asks.length && !expiredHolds.length}
         <p class="none">No agent waits on an answer.</p>
       {/if}
       <ol>
-        {#each questions as q (q.key)}
-          <li class="item q hot" class:moved={marks.has(q.key)} data-rank={q.rank} data-key={q.key}>
-            <span class="rk" aria-label="Rank {q.rank}">{q.rank}</span>
-            <div class="body">
-              <a class="name" href={graphHref(slug, { epic: q.change, selected: q.key })} title="{q.key}: {q.title}">{q.label}</a>
-              <span class="note">{[q.identifier, q.title].join(" · ")}</span>
-              <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)}
-                replacedBy={q.replaced_by ?? null} onreplace={onreplace && q.replaced_by ? () => onreplace(q.replaced_by!.key) : undefined} />
-            </div>
-          </li>
+        {#each asks as a (a.kind + a.id)}
+          {#if a.kind === "question"}
+            {@const q = a.q}
+            <li class="item q hot" class:moved={marks.has(q.key)} data-rank={q.rank} data-key={q.key}>
+              <span class="rk" aria-label="Rank {q.rank}">{q.rank}</span>
+              <div class="body">
+                <a class="name" href={graphHref(slug, { epic: q.change, selected: q.key })} title="{q.key}: {q.title}">{q.label}</a>
+                <span class="note">{[q.identifier, q.title].join(" · ")}</span>
+                <QuestionBox question={q} story={q.key} canAnswer={can("approver")} onanswer={(text) => onanswer(q.key, text)}
+                  replacedBy={q.replaced_by ?? null} onreplace={onreplace && q.replaced_by ? () => onreplace(q.replaced_by!.key) : undefined} />
+              </div>
+            </li>
+          {:else}
+            {@const f = a.f}
+            <li class="item q hot" class:moved={f.keys.some((k) => marks.has(k))} data-rank={f.rank} data-key={f.key} data-platform-fault={f.id}>
+              <span class="rk" aria-label="Rank {f.rank}">{f.rank}</span>
+              <div class="body">
+                <span class="name">Platform fault</span>
+                <span class="note">{f.stories.length} {f.stories.length === 1 ? "story" : "stories"} held · {f.sortie}</span>
+                <FaultBox fault={f} {slug} canAct={can("approver")} ondone={() => (onfaultdone ? onfaultdone(f.id) : Promise.resolve("This page cannot mark a fault done."))} />
+              </div>
+            </li>
+          {/if}
         {/each}
         {#each expiredHolds as h (h.key)}
           <li class="item q hot" class:moved={marks.has(h.key)} data-rank={h.rank} data-key={h.key} data-expired-hold={h.identifier}>

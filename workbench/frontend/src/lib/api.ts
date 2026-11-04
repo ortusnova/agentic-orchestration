@@ -56,6 +56,8 @@ export function projectApi(slug: string) {
     seeNotifications: (ids: number[]) => request<{ seen: number }>("POST", `${p}/notifications/seen`, { ids }),
     grantSessions: (key: string, sessions: number) =>
       request<{ granted: number; sortie: string }>("POST", `${p}/stories/sessions`, { key, sessions }),
+    faultDone: (id: string) =>
+      request<{ done: string; resolved: boolean; released: string[]; last_check_error: string | null }>("POST", `${p}/faults/done`, { id }),
     workers: () => request<Fleet>("GET", `${p}/workers`),
     session: () => request<SessionStatus>("GET", `${p}/session`),
     startSession: (message: string) => request<SessionStatus>("POST", `${p}/session`, { message }),
