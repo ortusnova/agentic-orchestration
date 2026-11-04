@@ -18,7 +18,14 @@ once that record names its head; no person approves it.
 - a ui story whose pull request is open, whose run is over and whose review
   passed (the story is in the handoff state), and whose head passed CI, is
   deployed at that head by the deploy command; its pull request gets one
-  comment with the address for each head deployed;
+  comment with the address for each head deployed, once the preview
+  answers there through the control plane's front (:class:`FrontChecker`);
+- the address (:func:`preview_address`) is a name under the front's host
+  that a job's machine on any worker opens through its HTTP proxy, which
+  the egress gate behind Pomerium serves from the preview's port on p1's
+  loopback; it is never a loopback address;
+- a preview that does not answer there is deployed again, on every pass
+  until it does: it is never left to a person;
 - the preview follows the branch: a new head is deployed once its run is
   over and CI passes on it, and until then the preview at the last head
   stays up;
@@ -38,6 +45,7 @@ import ipaddress
 import json
 import logging
 import os
+import ssl
 import tempfile
 import time
 from dataclasses import dataclass
@@ -124,15 +132,39 @@ def write_previews(path: Path, previews: dict[str, dict[str, Any]]) -> None:
         raise
 
 
-def preview_address(live_url: str, identifier: str, port: int) -> str:
-    """The preview's address: a name beside the live workbench's, so that the
-    same TLS setup serves it (``https://workbench.example.net`` gives
-    ``https://workbench-ons-93.example.net/``), or its loopback port when
-    the live workbench has no name."""
-    u = urlsplit(live_url.strip()) if live_url.strip() else None
+def preview_domain(front_url: str) -> str:
+    """The previews' domain under the control plane's front, Pomerium's
+    public URL (``https://p1.example.org:8443`` gives
+    ``preview.p1.example.org``): the egress gate behind its egress route
+    serves every name under it from a preview's port on p1's loopback."""
+    u = urlsplit(front_url.strip()) if front_url and front_url.strip() else None
+    host = (u.hostname or "") if u else ""
+    if not host or _is_ip(host) or host == "localhost" or "." not in host:
+        raise PreviewError(f"the control plane's front {front_url!r} has no domain name for the previews")
+    return f"preview.{host.lower()}"
+
+
+def preview_address(front_url: str, identifier: str) -> str:
+    """The preview's address, which the kit comments and the review opens:
+    a name under the previews' domain, on plain http (``ONS-93`` gives
+    ``http://ons-93.preview.p1.example.org/``). A job's machine on any
+    worker opens it through its HTTP proxy: the worker's egress forwarder
+    sends it as a CONNECT on the egress flow, through Pomerium with the
+    worker's certificate and the job's token, to the egress gate, which
+    serves it from the preview's port on p1's loopback. That port is never
+    opened on p1's network, and the address is never a loopback one."""
+    return f"http://{identifier.lower()}.{preview_domain(front_url)}/"
+
+
+def public_address(live_url: str, identifier: str) -> str | None:
+    """The preview's name for people, beside the live workbench's TLS name,
+    so that the same TLS setup serves it (``https://workbench.example.net``
+    gives ``https://workbench-ons-93.example.net/``); None when the live
+    workbench has no name (STAGE0_WORKBENCH_URL is empty)."""
+    u = urlsplit(live_url.strip()) if live_url and live_url.strip() else None
     host = u.hostname if u else None
     if not host or _is_ip(host) or host == "localhost":
-        return f"http://127.0.0.1:{port}/"
+        return None
     first, _, rest = host.partition(".")
     name = f"{first}-{identifier.lower()}" + (f".{rest}" if rest else "")
     return f"{u.scheme or 'https'}://{name}{f':{u.port}' if u.port else ''}/"
@@ -146,11 +178,16 @@ def _is_ip(host: str) -> bool:
     return True
 
 
-def comment_text(identifier: str, address: str, sha: str, pull: str) -> str:
-    """The kit's comment for one deployed head. No line of it starts with
+def comment_text(identifier: str, address: str, sha: str, pull: str, public: str | None = None) -> str:
+    """The kit's comment for one deployed head, once it answers at its
+    address through the control plane's front. No line of it starts with
     the click-proofs record, so it is never read as one."""
+    people = f"People reach it at {public}.\n\n" if public else ""
     return (f"{MARKER}\nPreview of {identifier} at `{sha}`: {address}\n\n"
             f"This is the branch's workbench at that commit, read-only toward the tracker, against live data. "
+            f"A job's machine on any worker opens that address through its HTTP proxy, which reaches it through "
+            f"the control plane's front with the job's token; the kit checked that it answers there before this "
+            f"comment. {people}"
             f"This comment starts the review on the preview: it clicks every action the story's acceptance "
             f"criteria name there and, when they pass, comments on {pull} a line that starts with "
             f"`{CLICK_PROOFS}` and names this commit. Sortie merges the pull request once that record names its "
@@ -165,7 +202,8 @@ class Deployer(Protocol):
 
 class CommandDeployer:
     """Deploys through the kit's command: ``<command> up <identifier>
-    <branch> <sha> <port> <address>`` and ``<command> down <identifier>``."""
+    <branch> <sha> <port> <address> [<public address>]`` and ``<command>
+    down <identifier>``."""
 
     def __init__(self, command: list[str], timeout: float = 1800.0):
         self.command = command
@@ -185,11 +223,98 @@ class CommandDeployer:
             raise PreviewError(f"{args[0]} {args[1]} failed ({proc.returncode}): " + " | ".join(tail))
 
     async def up(self, preview: dict[str, Any]) -> None:
+        public = [preview["public_url"]] if preview.get("public_url") else []
         await self._run("up", preview["identifier"], preview["branch"], preview["sha"], str(preview["port"]),
-                        preview["url"])
+                        preview["url"], *public)
 
     async def down(self, identifier: str) -> None:
         await self._run("down", identifier)
+
+
+class Checker(Protocol):
+    async def answers(self, address: str) -> str | None:
+        """None when the preview answers at ``address`` through the route a
+        job's machine takes; otherwise what went wrong."""
+        ...
+
+
+# What the answer check asks for: the preview's home, and an API route
+# that its home calls and that needs no sign-in.
+CHECK_PATHS = ("/", "/api/auth/mode")
+
+
+class FrontChecker:
+    """Checks a preview through the control plane's front, as a job's
+    machine reaches it: TLS to Pomerium at ``front_url`` with p1's own
+    worker certificate, a CONNECT for the address's name on port 80 on the
+    egress route, and each of :data:`CHECK_PATHS` inside the tunnel, which
+    must answer 200. The CONNECT carries Sortie's control token, which the
+    egress gate admits for a preview's name only, as the kit's check."""
+
+    def __init__(self, front_url: str, cert: str, key: str, ca: str, token: str, timeout: float = 15.0):
+        u = urlsplit(front_url)
+        if u.scheme != "https" or not u.hostname:
+            raise PreviewError(f"the control plane's front {front_url!r} is not an https URL")
+        self.host, self.port = u.hostname, u.port or 443
+        self.cert, self.key, self.ca, self.token, self.timeout = cert, key, ca, token, timeout
+
+    def _tls(self) -> ssl.SSLContext:
+        ctx = ssl.create_default_context(cafile=self.ca)
+        ctx.load_cert_chain(self.cert, self.key)
+        # The control plane's CA is its own (cpctl): what matters is that it
+        # signed the front's certificate, not the web PKI's strict profile.
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+        # The CONNECT is HTTP/1.1: a front that agreed h2 would drop it.
+        ctx.set_alpn_protocols(["http/1.1"])
+        return ctx
+
+    async def _get(self, name: str, path: str) -> str | None:
+        reader, writer = await asyncio.open_connection(self.host, self.port, ssl=self._tls(),
+                                                       server_hostname=self.host)
+        try:
+            writer.write(f"CONNECT {name}:80 HTTP/1.1\r\nHost: {name}:80\r\n"
+                         f"Proxy-Authorization: Bearer {self.token}\r\n\r\n".encode())
+            await writer.drain()
+            status, head = await _read_head(reader)
+            if status != 200:
+                return f"CONNECT {name}:80 through {self.host}:{self.port} answered {status} {head}".strip()
+            writer.write(f"GET {path} HTTP/1.1\r\nHost: {name}\r\nConnection: close\r\n\r\n".encode())
+            await writer.drain()
+            status, head = await _read_head(reader)
+            if status != 200:
+                return f"GET http://{name}{path} answered {status} {head}".strip()
+            return None
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (OSError, ssl.SSLError):
+                pass
+
+    async def answers(self, address: str) -> str | None:
+        name = urlsplit(address).hostname or ""
+        try:
+            for path in CHECK_PATHS:
+                err = await asyncio.wait_for(self._get(name, path), timeout=self.timeout)
+                if err:
+                    return err
+        except TimeoutError:
+            return f"{address} did not answer through {self.host}:{self.port} in {self.timeout:.0f}s"
+        except (OSError, ssl.SSLError, ValueError) as exc:
+            return f"{address} through {self.host}:{self.port}: {exc}"
+        return None
+
+
+async def _read_head(reader: asyncio.StreamReader) -> tuple[int, str]:
+    """The status of an HTTP/1.1 answer and its reason, read up to its
+    blank line."""
+    line = (await reader.readline()).decode(errors="replace").strip()
+    parts = line.split(" ", 2)
+    if len(parts) < 2 or not parts[0].startswith("HTTP/") or not parts[1].isdigit():
+        raise ValueError(f"not an HTTP answer: {line!r}")
+    while (await reader.readline()) not in (b"\r\n", b"\n", b""):
+        pass
+    return int(parts[1]), parts[2] if len(parts) > 2 else ""
 
 
 @dataclass(frozen=True)
@@ -197,6 +322,11 @@ class Settings:
     # The repository whose pull requests are previewed: the workbench's own.
     repo: str
     record: Path
+    # The control plane's front, Pomerium's public URL: each preview's
+    # address is a name under it (preview_address).
+    front_url: str = ""
+    # The live workbench's TLS name, which each preview's name for people
+    # sits beside (public_address); empty: none.
     live_url: str = ""
     first_port: int = 8800
     handoff_state: str = "In Review"
@@ -205,11 +335,12 @@ class Settings:
 
 class PreviewSync:
     def __init__(self, settings: Settings, sortie: ProjectSortie, github: GitHubClient, deployer: Deployer,
-                 clock=time.time):
+                 checker: Checker, clock=time.time):
         self.settings = settings
         self.sortie = sortie
         self.github = github
         self.deployer = deployer
+        self.checker = checker
         self.clock = clock
         self.owner, _, self.repo = settings.repo.partition("/")
 
@@ -271,6 +402,14 @@ class PreviewSync:
                 if proofs:
                     log.info("%s's click-proofs are recorded for %s: Sortie merges it", ident, sha[:12])
         if entry and entry.get("sha") == sha:
+            # The deployed head: it must answer at its address, or the kit
+            # deploys it again; no person is asked to. A preview deployed at
+            # an older address, such as a loopback one, moves to its own.
+            moved = self._readdress(ident, entry)
+            if moved:
+                write_previews(self.settings.record, record)
+            if (moved or not await self._answers(ident, record)) and not await self._redeploy(ident, record):
+                return
             if entry.get("commented") != sha:
                 await self._comment(ident, record, comments)
             return
@@ -279,12 +418,18 @@ class PreviewSync:
         if await self.github.ci_state(self.owner, self.repo, sha) != "success":
             return
         port = entry["port"] if entry and entry.get("port") else self.free_port(record)
+        try:
+            address = preview_address(self.settings.front_url, ident)
+        except PreviewError as exc:
+            log.warning("no address for the preview of %s: %s", ident, exc)
+            return
         preview = {
             "identifier": ident, "plan_key": node.get("plan_key"), "branch": branch, "sha": sha, "port": port,
-            "url": preview_address(self.settings.live_url, ident, port),
+            "url": address, "public_url": public_address(self.settings.live_url, ident),
             "pull": f"{self.settings.repo}#{pull.get('number')}", "number": pull.get("number"),
             "pull_url": pull.get("html_url") or "", "deployed_at": self.clock(),
             "commented": None, "click_proofs": entry.get("click_proofs") if entry else None,
+            "answers": None,
         }
         try:
             await self.deployer.up(preview)
@@ -294,18 +439,66 @@ class PreviewSync:
         log.info("deployed the preview of %s at %s: %s", ident, sha[:12], preview["url"])
         record[ident] = preview
         write_previews(self.settings.record, record)
-        await self._comment(ident, record, comments)
+        if await self._answers(ident, record):
+            await self._comment(ident, record, comments)
+
+    def _readdress(self, ident: str, entry: dict[str, Any]) -> bool:
+        """Give a deployed preview the address it has now, when it was
+        deployed at another; True when it moved."""
+        try:
+            address = preview_address(self.settings.front_url, ident)
+        except PreviewError as exc:
+            log.warning("no address for the preview of %s: %s", ident, exc)
+            return False
+        if entry.get("url") == address:
+            return False
+        log.info("the preview of %s moves from %s to %s", ident, entry.get("url"), address)
+        entry.update(url=address, public_url=public_address(self.settings.live_url, ident), answers=None,
+                     commented=None)
+        return True
+
+    async def _answers(self, ident: str, record: dict[str, dict[str, Any]]) -> bool:
+        """Check that the preview answers at its address through the route;
+        keep the verdict in the record."""
+        entry = record[ident]
+        err = await self.checker.answers(entry["url"])
+        verdict = err is None
+        if entry.get("answers") != verdict or entry.get("answer_error") != err:
+            entry["answers"], entry["answer_error"] = verdict, err
+            write_previews(self.settings.record, record)
+        if err:
+            log.warning("the preview of %s does not answer at %s: %s", ident, entry["url"], err)
+        return verdict
+
+    async def _redeploy(self, ident: str, record: dict[str, dict[str, Any]]) -> bool:
+        """Deploy a preview that does not answer again, at the same head and
+        port; True once it answers."""
+        entry = record[ident]
+        try:
+            await self.deployer.up(entry)
+        except PreviewError as exc:
+            log.warning("could not deploy the preview of %s at %s again: %s", ident, entry["sha"][:12], exc)
+            return False
+        entry["deployed_at"] = self.clock()
+        entry["redeploys"] = int(entry.get("redeploys") or 0) + 1
+        write_previews(self.settings.record, record)
+        log.info("deployed the preview of %s at %s again: it did not answer", ident, entry["sha"][:12])
+        return await self._answers(ident, record)
 
     async def _comment(self, ident: str, record: dict[str, dict[str, Any]],
                        comments: list[dict[str, Any]] | None = None) -> None:
         """Comment the preview's address and commit on the pull request,
-        once per head deployed: each comment starts a review on it."""
+        once per head deployed, after it answers there: each comment starts
+        a review on it."""
         entry = record[ident]
         number, sha = int(entry["number"]), entry["sha"]
         if comments is None:
             comments = await self.github.comments(self.owner, self.repo, number)
-        if not any(MARKER in (c.get("body") or "") and sha in (c.get("body") or "") for c in comments):
-            await self.github.comment(self.owner, self.repo, number, comment_text(ident, entry["url"], sha, entry["pull"]))
+        url = entry["url"]
+        if not any(MARKER in (c.get("body") or "") and sha in (c.get("body") or "") and url in (c.get("body") or "")
+                   for c in comments):
+            await self.github.comment(self.owner, self.repo, number,
+                                      comment_text(ident, entry["url"], sha, entry["pull"], entry.get("public_url")))
             log.info("commented the preview of %s at %s on %s", ident, sha[:12], entry["pull"])
         entry["commented"] = sha
         write_previews(self.settings.record, record)
@@ -321,10 +514,11 @@ class PreviewSync:
         write_previews(self.settings.record, record)
 
 
-async def sync_once(settings: Settings, sortie: ProjectSortie, github: GitHubClient, deployer: Deployer) -> int:
+async def sync_once(settings: Settings, sortie: ProjectSortie, github: GitHubClient, deployer: Deployer,
+                    checker: Checker) -> int:
     """One pass for the command line: 0, or 1 when Sortie cannot be read."""
     try:
-        await PreviewSync(settings, sortie, github, deployer).run_once()
+        await PreviewSync(settings, sortie, github, deployer, checker).run_once()
     except SortieError as exc:
         log.warning("Sortie's plan graph is unavailable: %s", exc.message)
         return 1
