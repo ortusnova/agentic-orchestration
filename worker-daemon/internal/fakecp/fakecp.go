@@ -76,6 +76,8 @@ type Fake struct {
 	IdentityHeader string
 	// NoResume answers the resume route 404, as a Sortie that has none.
 	NoResume bool
+	// checkInDelay holds each check-in's answer this long.
+	checkInDelay time.Duration
 
 	mu       sync.Mutex
 	events   []Event
@@ -187,6 +189,13 @@ func (f *Fake) Beats(job string, attempt int) []protocol.Beat {
 		out = append(out, b)
 	}
 	return out
+}
+
+// DelayCheckIns holds each later check-in's answer for d.
+func (f *Fake) DelayCheckIns(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkInDelay = d
 }
 
 // Offer queues a job.
@@ -512,7 +521,9 @@ func (f *Fake) checkIn(w http.ResponseWriter, id string, body []byte) {
 	}
 	f.mu.Lock()
 	f.workers[id] = d
+	delay := f.checkInDelay
 	f.mu.Unlock()
+	time.Sleep(delay)
 	reply(w, http.StatusOK, protocol.Timings{HeartbeatMS: f.LeaseMS / 3, LeaseMS: f.LeaseMS})
 	f.record(Event{Kind: "checkin", Status: 200, Body: body})
 }
