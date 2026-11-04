@@ -89,6 +89,18 @@
     }
   }
 
+  async function faultDone(id: string): Promise<string | null> {
+    try {
+      await projectApi(slug).faultDone(id);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return "Marking a fault done needs the approver role.";
+      if (err instanceof ApiError && err.status === 409 && err.code === "sync_disabled") return "This workbench is read-only: mark it done from the one that owns the project.";
+      if (err instanceof ApiError && err.status === 404) return "Sortie no longer holds this fault.";
+      return err instanceof Error ? err.message : "Sortie was not asked to check again.";
+    }
+  }
+
   // A link that names a worker (Open on a job) opens its session in the chat pane.
   $effect(() => {
     if (page === "graph" && view.watch) watching = view.watch;
@@ -130,7 +142,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions} onfaultdone={faultDone}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />

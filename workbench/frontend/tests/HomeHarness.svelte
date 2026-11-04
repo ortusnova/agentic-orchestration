@@ -3,13 +3,14 @@
   import type { MergedGraph } from "../src/lib/types";
 
   let {
-    initial, onapprove = async () => null, onanswer = async () => null, onreplace, onsessions,
+    initial, onapprove = async () => null, onanswer = async () => null, onreplace, onsessions, onfaultdone,
   }: {
     initial: MergedGraph;
     onapprove?: (keys: string[]) => Promise<string | null>;
     onanswer?: (key: string, text: string) => Promise<string | null>;
     onreplace?: (replacement: string) => Promise<string | null>;
     onsessions?: (key: string, sessions: number) => Promise<string | null>;
+    onfaultdone?: (id: string) => Promise<string | null>;
   } = $props();
   // svelte-ignore state_referenced_locally
   let doc = $state(initial);
@@ -20,6 +21,6 @@
 </script>
 
 <div style="display:flex;flex-direction:column;height:900px">
-  <HomePage {doc} slug="homelab" projectName="Homelab" {marks} {onapprove} {onanswer} {onreplace} {onsessions}
+  <HomePage {doc} slug="homelab" projectName="Homelab" {marks} {onapprove} {onanswer} {onreplace} {onsessions} {onfaultdone}
     tabs={[{ label: "Home", href: "#/p/homelab", current: true }, { label: "Graph", href: "#/p/homelab/graph", current: false }]} />
 </div>
