@@ -338,6 +338,15 @@ machine could not run it as its `evidence`. Every minute
   cheapest proof that runs the changed code, and an open issue for every
   failure whose cause is unknown. It pushes its fixes as new commits, never
   rewriting one.
+- **A parked story.** Sortie refuses a fix run of a parked story, so it
+  starts the job itself when the supervisor requests the live proof of a
+  parked story: it finds the open pull request of the story's branch in
+  the repository the story routes to, runs the job on its head with the
+  same marker, and keeps the park. The pass then asks for no fix run; it
+  takes the job as started at the request. A parked story with no open
+  pull request on its branch gets `409 no_pull_request` and no job. The
+  supervisor then decides on the result: merge (Sortie's merge finds a
+  parked story's pull request the same way), answer, or ask a person.
 - **The egress.** While the job runs, its identifier is in
   `$STAGE0_HOME/live-proofs/active`, and the edge sends its CONNECTs to the
   live-proof nono (`ortus-stage0-nono-live-proof`, `run-nono.sh live-proof`,
