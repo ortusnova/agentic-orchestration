@@ -6,6 +6,12 @@
 // (standard output), E (standard error) and last X (the agent exited,
 // its exit status as a four-byte big-endian signed integer). A stream
 // that ends before X is broken.
+//
+// On sortie-stdio/2 the control plane also sends S (no payload) between
+// the agent's turns, and the worker answers F: a JSON object of the
+// agent's .sortie files as they are, by file name, base64-encoded. The
+// worker asks for sortie-stdio/2 and takes sortie-stdio/1 from a control
+// plane that answers 426 to it.
 package stdio
 
 import (
@@ -26,6 +32,10 @@ import (
 // Protocol is the Upgrade token of the stdio flow.
 const Protocol = "sortie-stdio/1"
 
+// ProtocolFiles is the Upgrade token of the stdio flow with the S and F
+// frames.
+const ProtocolFiles = "sortie-stdio/2"
+
 // Frame types.
 const (
 	Stdin       byte = 'I'
@@ -33,6 +43,10 @@ const (
 	Stdout      byte = 'O'
 	Stderr      byte = 'E'
 	Exit        byte = 'X'
+	// SortieFilesRequest and SortieFiles are sortie-stdio/2's request for
+	// the agent's .sortie files and its answer.
+	SortieFilesRequest byte = 'S'
+	SortieFiles        byte = 'F'
 )
 
 // MaxPayload bounds the payload of one frame.
@@ -92,8 +106,9 @@ func ReadFrame(r io.Reader) (byte, []byte, error) {
 // Conn is one open stdio stream. Reads are for one goroutine; writes
 // may come from several.
 type Conn struct {
-	conn net.Conn
-	r    io.Reader
+	conn  net.Conn
+	r     io.Reader
+	files bool
 
 	mu sync.Mutex
 }
@@ -111,6 +126,9 @@ func (c *Conn) WriteFrame(typ byte, payload []byte) error {
 	defer c.mu.Unlock()
 	return WriteFrame(c.conn, typ, payload)
 }
+
+// Files reports whether the stream speaks sortie-stdio/2.
+func (c *Conn) Files() bool { return c.files }
 
 // Close closes the stream.
 func (c *Conn) Close() error { return c.conn.Close() }
@@ -148,6 +166,14 @@ func (e *RefusedError) Error() string {
 // Dial opens the stream at rawURL (http or https) with header added to
 // the request. tlsConfig, when not nil, configures an https connection.
 func Dial(ctx context.Context, rawURL string, header http.Header, tlsConfig *tls.Config) (*Conn, error) {
+	c, err := dial(ctx, rawURL, header, tlsConfig, ProtocolFiles)
+	if refused, ok := errors.AsType[*RefusedError](err); ok && refused.Status == http.StatusUpgradeRequired {
+		return dial(ctx, rawURL, header, tlsConfig, Protocol)
+	}
+	return c, err
+}
+
+func dial(ctx context.Context, rawURL string, header http.Header, tlsConfig *tls.Config, protocol string) (*Conn, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("stdio: %w", err)
@@ -193,7 +219,7 @@ func Dial(ctx context.Context, rawURL string, header http.Header, tlsConfig *tls
 		req.Header[k] = append([]string(nil), vs...)
 	}
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", Protocol)
+	req.Header.Set("Upgrade", protocol)
 	if err := req.Write(nc); err != nil {
 		_ = nc.Close()
 		return nil, fmt.Errorf("stdio: upgrade: %w", err)
@@ -210,21 +236,27 @@ func Dial(ctx context.Context, rawURL string, header http.Header, tlsConfig *tls
 		_ = nc.Close()
 		return nil, &RefusedError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
-	if !strings.EqualFold(resp.Header.Get("Upgrade"), Protocol) {
+	if !strings.EqualFold(resp.Header.Get("Upgrade"), protocol) {
 		_ = nc.Close()
-		return nil, fmt.Errorf("stdio: upgrade: the server switched to %q, not %s", resp.Header.Get("Upgrade"), Protocol)
+		return nil, fmt.Errorf("stdio: upgrade: the server switched to %q, not %s", resp.Header.Get("Upgrade"), protocol)
 	}
 	if ctx.Err() != nil {
 		_ = nc.Close()
 		return nil, ctx.Err()
 	}
-	return NewConn(nc, br), nil
+	c := NewConn(nc, br)
+	c.files = protocol == ProtocolFiles
+	return c, nil
 }
 
 // Accept takes over r's connection as a stdio stream, as the control
-// plane does: it answers 426 to a request without Upgrade: Protocol.
+// plane does: it answers 426 to a request without Upgrade: Protocol or
+// ProtocolFiles.
 func Accept(w http.ResponseWriter, r *http.Request) (*Conn, error) {
-	if !strings.EqualFold(r.Header.Get("Upgrade"), Protocol) {
+	protocol := Protocol
+	if strings.EqualFold(r.Header.Get("Upgrade"), ProtocolFiles) {
+		protocol = ProtocolFiles
+	} else if !strings.EqualFold(r.Header.Get("Upgrade"), Protocol) {
 		w.Header().Set("Upgrade", Protocol)
 		http.Error(w, "the stdio flow needs Upgrade: "+Protocol, http.StatusUpgradeRequired)
 		return nil, errors.New("stdio: no upgrade")
@@ -233,7 +265,7 @@ func Accept(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + Protocol + "\r\n\r\n"); err != nil {
+	if _, err := rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + protocol + "\r\n\r\n"); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -241,5 +273,7 @@ func Accept(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	return NewConn(conn, rw.Reader), nil
+	c := NewConn(conn, rw.Reader)
+	c.files = protocol == ProtocolFiles
+	return c, nil
 }

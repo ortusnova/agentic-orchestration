@@ -86,6 +86,8 @@ case $cmd in
     [[ $name == p1 ]] && die "p1 is p1's own worker, which stage0.sh runs"
     front_ready
     cpctl worker revoke "$name" > /dev/null || die "no worker $name"
+    # A token the stage-1 edge's add minted for its notifications.
+    rm -f "$STAGE0_HOME/notify-tokens/$name.token"
     apply
     echo "revoked worker $name: Pomerium refuses its certificate on every route"
     ;;

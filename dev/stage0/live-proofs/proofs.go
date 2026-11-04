@@ -15,7 +15,9 @@
 //   - The job is a review fix run on the story's branch, which Sortie
 //     starts on POST /api/v1/{identifier}/fix with a message that opens with
 //     the live-proof marker; the workflow's fix prompt runs it as a live
-//     proof. While it runs, its identifier is in the active file, and the
+//     proof. For a parked story Sortie starts the job itself when it takes
+//     the request, with the same marker, and keeps the park: the pass asks
+//     for no fix run, which Sortie refuses for a parked story. While it runs, its identifier is in the active file, and the
 //     egress gate behind Pomerium gives its CONNECTs the live-proof egress.
 //   - The job comments its result on the pull request. The newest such
 //     comment by the kit's GitHub account sets the status: success when it
@@ -122,7 +124,7 @@ func (s *Syncer) Pass(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("the forge: %w", err)
 	}
-	actions, err := s.actions(ctx)
+	actions, parked, err := s.actions(ctx)
 	if err != nil {
 		return fmt.Errorf("the state of sortie: %w", err)
 	}
@@ -138,11 +140,18 @@ func (s *Syncer) Pass(ctx context.Context) error {
 			s.Log.Warn("live proof requested of a story with no pull request", slog.Int64("action", a.ID))
 			continue
 		}
-		rec.Proofs[*a.PullRequest] = &Proof{
+		p := &Proof{
 			Identifier: *a.IssueIdentifier, PullRequest: *a.PullRequest,
 			Criterion: a.Evidence, Action: a.ID, RequestedAt: a.At.UTC(),
 		}
-		s.Log.Info("live proof requested", slog.String("issue", *a.IssueIdentifier), slog.String("pull_request", *a.PullRequest), slog.Int64("action", a.ID))
+		if parked[p.Identifier] {
+			// Sortie started the job of a parked story itself, when it
+			// took the request; it refuses a fix run of a parked story.
+			started := p.RequestedAt
+			p.Started = &started
+		}
+		rec.Proofs[*a.PullRequest] = p
+		s.Log.Info("live proof requested", slog.String("issue", *a.IssueIdentifier), slog.String("pull_request", *a.PullRequest), slog.Int64("action", a.ID), slog.Bool("parked", parked[p.Identifier]))
 	}
 	keys := make([]string, 0, len(rec.Proofs))
 	for k := range rec.Proofs {
@@ -398,20 +407,28 @@ type action struct {
 	At              time.Time `json:"at"`
 }
 
-// actions returns the supervisor actions Sortie serves, oldest first.
-func (s *Syncer) actions(ctx context.Context) ([]action, error) {
+// actions returns the supervisor actions Sortie serves, oldest first, and
+// the identifiers of the stories it holds parked.
+func (s *Syncer) actions(ctx context.Context) ([]action, map[string]bool, error) {
 	var st struct {
 		SupervisorActions []action `json:"supervisor_actions"`
+		Parked            []struct {
+			Identifier string `json:"issue_identifier"`
+		} `json:"parked"`
 	}
 	status, err := s.call(ctx, http.MethodGet, s.Sortie+"/api/v1/state", "", nil, &st)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if status != http.StatusOK {
-		return nil, fmt.Errorf("answered %d", status)
+		return nil, nil, fmt.Errorf("answered %d", status)
 	}
 	slices.SortFunc(st.SupervisorActions, func(a, b action) int { return int(a.ID - b.ID) })
-	return st.SupervisorActions, nil
+	parked := make(map[string]bool, len(st.Parked))
+	for _, p := range st.Parked {
+		parked[p.Identifier] = true
+	}
+	return st.SupervisorActions, parked, nil
 }
 
 func (s *Syncer) github(ctx context.Context, method, path string, body, out any) error {

@@ -113,12 +113,18 @@ github:
 
 # Comments on the story, so the operator sees in Huly why a run stopped,
 # that Sortie merged its pull request or could not, and that a pull request
-# still fails or conflicts after its fix runs. Then the operator's channel,
-# when stage0.env names one (notify-channel.sh): each question for a person,
-# with its credential read from $STAGE0_HOME/notify-credential.
+# still fails or conflicts after its fix runs. Then the workbench, the
+# default destination, by Sortie's webhook backend: each question for a
+# person and each run that needs one, at a URL with this host's token
+# (notify-channel.sh, run-sortie.sh), which "Needs a person" shows. Then the
+# operator's channel, when stage0.env names one: one more entry, with its
+# credential read from $STAGE0_HOME/notify-credential.
 notifications:
   - kind: tracker_comment
     events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts, escalation.review_comments]
+  - kind: webhook
+    url: $SORTIE_WORKBENCH_NOTIFY_URL
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
 ${STAGE0_NOTIFY_ENTRY}
 
 server:
@@ -457,15 +463,17 @@ story's branch as it is in this workspace:
    first line is `<!-- live-proof-result -->`; then a line
    `Result: proven` or `Result: unproven`, a line `Commit: ` with the full
    sha of `git rev-parse HEAD` after your last commit, and a line
-   `Criterion: ` with the criterion; then the step table, one row per step
-   you ran, `| Step | Command | Result |`, and the issues you opened. Write
-   `proven` only when every step that runs the criterion passed at that
-   commit.
+   `Criterion: ` with the criterion; with `Result: proven`, a line
+   `sortie:live-proof proven ` followed by that same sha; then the step
+   table, one row per step you ran, `| Step | Command | Result |`, and the
+   issues you opened. Write `proven`, and that line, only when every step
+   that runs the criterion passed at that commit.
 
 Sortie pushes your commits after the run. The kit reads your comment and
-sets the pull request's `live-proof` status, which the merge requires:
-`proven` at the pull request's head lets the supervisor merge it once CI
-passes, and `unproven` keeps it open. This machine reaches GitHub's API only for that
+sets the pull request's `live-proof` status, which the merge requires, and
+Sortie's merge reads the `sortie:live-proof proven` line: `proven` at the
+pull request's head lets the supervisor merge it once CI passes, and
+`unproven` keeps it open. This machine reaches GitHub's API only for that
 comment and those issues: do not fetch, push, or comment anything else.
 {{- else }}
 
@@ -508,7 +516,10 @@ are recorded for the new head. Only committed work leaves this machine.
 
 Then check every acceptance criterion above against the branch again, as
 the story's review did, and end your last message with what you fixed and
-the command that proves it, and write no `.sortie/status`. When only a
+the command that proves it, and write no `.sortie/status`. When you have
+finished, write `.sortie/pr.json` with a JSON object holding a short
+`title` and a `body` that says what this run changed and how you proved
+it: Sortie ends the run after the turn that writes it, so write it last. When only a
 person can fix the cause, such as a token or a setting outside the
 repository, stop with `blocked` in `.sortie/status` and say on the lines
 after it what a person has to do and where. Never write
@@ -577,7 +588,8 @@ after the run. Only committed work leaves this machine.
 
 Before you end, record your verdict on every acceptance criterion in
 `.sortie/criteria.json`, one entry per criterion, in the order the story
-lists them:
+lists them. Sortie ends the review after the turn that writes it, so
+write it last, after your fixes and checks:
 
     mkdir -p .sortie && cat > .sortie/criteria.json <<'JSON'
     {"criteria": [
@@ -654,5 +666,6 @@ Commit your work with git, in conventional commits, with no AI attribution.
 Do not push and do not open a pull request: Sortie does both after the run.
 Only committed work leaves this machine. Before you finish, write
 `.sortie/pr.json` with a JSON object holding a short `title` and a `body`
-that says what changed and how you proved it.
+that says what changed and how you proved it. Sortie ends the run after
+the turn that writes it, so write it last, once the whole story is done.
 {{- end }}

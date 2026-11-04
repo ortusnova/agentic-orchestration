@@ -78,6 +78,15 @@
     }
   }
 
+  async function seeNotifications(ids: number[]): Promise<string | null> {
+    try {
+      await projectApi(slug).seeNotifications(ids);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "The notification was not marked seen.";
+    }
+  }
+
   async function sessions(key: string, n: number): Promise<string | null> {
     try {
       await projectApi(slug).grantSessions(key, n);
@@ -86,6 +95,18 @@
       if (err instanceof ApiError && err.status === 403) return "Granting sessions needs the approver role.";
       if (err instanceof ApiError && err.status === 409 && err.code === "sync_disabled") return "This workbench is read-only: grant from the one that owns the project.";
       return err instanceof Error ? err.message : "The sessions were not granted.";
+    }
+  }
+
+  async function faultDone(id: string): Promise<string | null> {
+    try {
+      await projectApi(slug).faultDone(id);
+      return null;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) return "Marking a fault done needs the approver role.";
+      if (err instanceof ApiError && err.status === 409 && err.code === "sync_disabled") return "This workbench is read-only: mark it done from the one that owns the project.";
+      if (err instanceof ApiError && err.status === 404) return "Sortie no longer holds this fault.";
+      return err instanceof Error ? err.message : "Sortie was not asked to check again.";
     }
   }
 
@@ -130,7 +151,7 @@
 
 {#if page === "home"}
   <div class="home-page">
-    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions}>
+    <HomePage {doc} {slug} projectName={name} {tabs} {marks} onapprove={approve} onanswer={answer} onreplace={replace} onsessions={sessions} onfaultdone={faultDone} onseen={seeNotifications}>
       {#snippet actions()}
         <QuestionCount count={questions} href={homeHref(slug)} />
         <SyncStatus status={doc.sync} onretry={() => sync.retry()} />

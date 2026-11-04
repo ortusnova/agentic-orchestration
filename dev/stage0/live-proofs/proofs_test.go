@@ -35,6 +35,7 @@ type fakeSortie struct {
 	actions []map[string]any
 	refuse  string // the error code of the next fix, when set
 	fixes   []map[string]string
+	parked  []string // the identifiers of the parked stories
 }
 
 func newFakeSortie(t *testing.T) *fakeSortie {
@@ -43,7 +44,11 @@ func newFakeSortie(t *testing.T) *fakeSortie {
 	mux.HandleFunc("GET /api/v1/state", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"running": []any{}, "supervisor_actions": f.actions})
+		parked := []map[string]string{}
+		for _, id := range f.parked {
+			parked = append(parked, map[string]string{"issue_identifier": id})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"running": []any{}, "parked": parked, "supervisor_actions": f.actions})
 	})
 	mux.HandleFunc("POST /api/v1/{identifier}/fix", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+sortieToken {
@@ -370,5 +375,31 @@ func TestParseResult(t *testing.T) {
 		if (got == nil) != (tc.want == nil) || (got != nil && (got.Proven != tc.want.Proven || got.Commit != tc.want.Commit)) {
 			t.Errorf("%s: %+v, want %+v", name, got, tc.want)
 		}
+	}
+}
+
+// Scenario: A parked story's live criterion. Sortie itself starts the
+// live-proof job of a parked story when the supervisor requests it, on
+// the head of the story's pull request, and keeps the park. The kit asks
+// for no fix run, which Sortie refuses for a parked story; it gives the
+// job the live-proof egress and holds the merge until the job's result
+// proves the criterion at the head.
+func TestAParkedStorysLiveCriterion(t *testing.T) {
+	sc := newScenario(t)
+	sc.sortie.parked = []string{"ONS-41"}
+	sc.sortie.request(7, staging, sc.clock)
+	sc.pass()
+	if len(sc.sortie.fixes) != 0 {
+		t.Fatalf("fixes = %v, want none: Sortie runs the job of a parked story", sc.sortie.fixes)
+	}
+	sc.wantStatus(headA, "pending", "the live-proof job runs")
+	sc.wantActive("ONS-41\n")
+
+	sc.forge.comment(kitLogin, stepTable("proven", headA)+"sortie:live-proof proven "+headA+"\n", sc.clock)
+	sc.pass()
+	sc.wantStatus(headA, "success", "proven at "+short(headA))
+	sc.wantActive("")
+	if len(sc.sortie.fixes) != 0 {
+		t.Fatalf("fixes = %v, want none", sc.sortie.fixes)
 	}
 }

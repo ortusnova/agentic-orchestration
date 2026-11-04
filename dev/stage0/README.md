@@ -343,6 +343,15 @@ machine could not run it as its `evidence`. Every minute
   cheapest proof that runs the changed code, and an open issue for every
   failure whose cause is unknown. It pushes its fixes as new commits, never
   rewriting one.
+- **A parked story.** Sortie refuses a fix run of a parked story, so it
+  starts the job itself when the supervisor requests the live proof of a
+  parked story: it finds the open pull request of the story's branch in
+  the repository the story routes to, runs the job on its head with the
+  same marker, and keeps the park. The pass then asks for no fix run; it
+  takes the job as started at the request. A parked story with no open
+  pull request on its branch gets `409 no_pull_request` and no job. The
+  supervisor then decides on the result: merge (Sortie's merge finds a
+  parked story's pull request the same way), answer, or ask a person.
 - **The egress.** While the job runs, its identifier is in
   `$STAGE0_HOME/live-proofs/active`, and the egress gate sends its CONNECTs to the
   live-proof nono (`ortus-stage0-nono-live-proof`, `run-nono.sh live-proof`,
@@ -356,10 +365,15 @@ machine could not run it as its `evidence`. Every minute
   GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
   `github_api` credential that nono holds. The comment's first line is
   `<!-- live-proof-result -->`, followed by `Result: proven` or
-  `Result: unproven`, `Commit: <sha>`, the criterion, and the step table.
+  `Result: unproven`, `Commit: <sha>`, the criterion, with a proven result
+  the line `sortie:live-proof proven <sha>`, and the step table. Sortie's
+  supervisor merge reads that line: it refuses to merge a story whose
+  review left a criterion to a live proof until the line names the head
+  (`409 live_proof_unproven`).
   The pass reads only the kit's own account's comments written since the
   request, and the newest sets the status:
-  - proven at the head: `success`, and the supervisor merges once CI passes;
+  - proven at the head: `success`, and the supervisor merges once CI passes
+    (Sortie checks the `sortie:live-proof proven` line itself);
   - unproven: `failure`;
   - proven at an older commit: `pending` again, until the supervisor
     requests a new proof.
@@ -404,8 +418,12 @@ certificate, its script or unit; the worker daemon for its binary,
 -buildvcs=false`, so the same code builds the same bytes and a test or
 a document under `worker-daemon/` restarts nothing; a daemon an earlier
 kit started from the source being built keeps running, and its record
-moves to the binary). A change to one of those ends the jobs that unit
-carries, and Sortie retries them. A credential `gh auth token` gives nono
+moves to the binary). A change to nono's or the edge's ends the jobs
+that unit carries, and Sortie retries them. A restart of the worker
+daemon ends none: the unit stops the daemon only (`KillMode=process`),
+which leaves its jobs' machines running, and its next start adopts them
+and Sortie keeps their runs (worker-daemon's operator guide, "A restart
+of the daemon ends no job either"). A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-stage0-nono` picks
 it up.
 
@@ -436,7 +454,8 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 | GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. nono holds it for the jobs: a job's `SORTIE_GITHUB_TOKEN` is only the `github_api` placeholder, for GitHub's API, which a live-proof job comments its result with ([Live proofs](#live-proofs)) |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
-| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; see [below](#the-operators-channel) |
+| The workbench's notifications | `notify-tokens/<host>.token` in the stage-0 home, mode 0600, minted by `stage0.sh`: Sortie posts its notifications to the workbench with it, and the workbench refuses any other; no operator credential. See [below](#the-operators-channel) |
+| The operator's channel | `notify-credential` in the stage-0 home, mode 0600, written by the operator only; optional, see [below](#the-operators-channel) |
 | The supervisor's token | `supervisor-token` in the stage-0 home, mode 0600, minted by `stage0.sh` (`supervisor.sh`); Sortie accepts it only on the supervisor's routes and hands it to the supervisor session only |
 
 Git reaches GitHub over HTTPS through a credential helper in the kit's own
@@ -574,18 +593,48 @@ and `mcp.firecrawl.dev`, on ports of its own.
 
 ## The operator's channel
 
-Every question for a person reaches the workbench, wherever the story
-runs (p1 or a worker host such as taichi), and can reach the operator's
-channel (spec store `agent-platform/run-supervision`, "A
-person is alerted, wherever the question is held"). The channel and its
-credential are the operator's choice: any kind Sortie's notifications have.
-The channel is optional: with no `STAGE0_NOTIFY_KIND`, the default, no
-channel is configured and `stage0.sh`, `run-sortie.sh` and the workbench
-start without one.
+Alerts go through Sortie's notifications (spec store
+`agent-platform/run-supervision`, "A person is alerted, wherever the
+question is held"), and their default destination is the workbench, by
+Sortie's `webhook` backend. It needs no operator credential: `stage0.sh`
+mints this host's token into `$STAGE0_HOME/notify-tokens/<host>.token`
+(mode 0600; `<host>` is `STAGE0_SORTIE_NAME`, else the host's short name in
+lower case, the name the workbench gives its Sortie), `run-sortie.sh` reads
+it into Sortie's environment only, as `SORTIE_WORKBENCH_NOTIFY_URL`
+(`http://127.0.0.1:<workbench port>/api/notifications/<host>/<token>`), and
+`run-workbench.sh` points the workbench at the directory
+(`WORKBENCH_NOTIFY_TOKENS`). The workflow's `notifications` list it as:
+
+```yaml
+  - kind: webhook
+    url: $SORTIE_WORKBENCH_NOTIFY_URL
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
+```
+
+The workbench keeps each notification, links it to the story and the open
+question it names, and shows it under **Needs a person** (**From Sortie**),
+unread until a person marks it seen, and unread again every 4 hours while
+its question stays open (`workbench/docs/operator-guide.md`, "Sortie's
+notifications"). It refuses a post with a wrong or missing token.
+
+Every host has its own token. p1's Sortie posts to the workbench on p1's
+loopback. Since `agent-platform/one-sortie` the kit runs no Sortie on a
+worker host: a story that runs on taichi's worker parks on p1's Sortie, and
+its notification takes that way. So a worker host gets no token: the stage-1
+edge's tunnel that forwarded p1's workbench to it is gone with the edge, and
+`worker-host.sh remove` deletes a token an earlier `add` minted for it.
+
+Any other destination is the operator's choice and one more entry in the
+same list, after the workbench's: any kind Sortie's notifications have
+(discord, slack, telegram, or a webhook such as a mobile push service). It
+is optional: with no `STAGE0_NOTIFY_KIND`, the default, Sortie's
+notifications go to the workbench only and `stage0.sh`, `run-sortie.sh` and
+the workbench start without an operator credential.
 
 | Where | What it sends |
 | --- | --- |
-| The workflow, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
+| The workflow, to the workbench, through Sortie's notifications (always) | a run that stops for a person or fails (`session.stopped`, `session.failed`), a question, permission request or failed criteria check (`session.escalated`), every escalation (`escalation.*`), and a budget hold (`budget.held`) |
+| The workflow, to the operator's channel, through Sortie's notifications (`notify-channel.sh` renders the entry) | the moment a run stops for a person (`session.stopped`: an agent's park, or a review that cannot settle a criterion, with its question), a question or permission request the broker escalates and a failed criteria check (`session.escalated`), a budget hold (`budget.held`), a merge that needs a person (`escalation.auto_merge`), and a pull request that still fails CI or conflicts with its base after its fix runs (`escalation.ci_failure`, `escalation.merge_conflicts`) |
 | The workbench on p1, which reads the questions of p1's Sortie and of each other Sortie in `WORKBENCH_SORTIES` | each open question within one poll, with the story, the Sortie that holds it, and a link to the project's home on `STAGE0_WORKBENCH_PUBLIC_URL`, where it is answered; then again every 4 hours while it stays open, and never once it is answered or released |
 
 To set the channel, on p1 (a worker host runs no Sortie and needs none):
@@ -620,9 +669,12 @@ To set the channel, on p1 (a worker host runs no Sortie and needs none):
    questions show on the workbench only, and `stage0.sh` says so.
 
 Each question names the Sortie that holds it, and an answer goes to that
-Sortie. To check it, park a story that runs on taichi: within one refresh it
-is first under **Needs a person** on the workbench, and the channel, when
-one is set, has it with the link.
+Sortie. To check it, park a story that runs on taichi: within one minute
+Sortie's notification of it is under **Needs a person** (**From Sortie**,
+unread) on the workbench, and its question under **Answer**; the channel,
+when one is set, has it with the link. `journalctl --user -u
+ortus-stage0-workbench` logs `notification from p1: session.stopped
+<identifier>`.
 
 ## Worker hosts (taichi)
 
@@ -670,7 +722,7 @@ machines (spec store `run-homelab-through-sortie`, design D5-D12):
 | homelab | the kit's own detached worktree of `origin/master` in `$STAGE0_HOME/homelab`, added from `STAGE0_HOMELAB_SRC`; every `stage0.sh` run moves it to the latest `origin/master` |
 | Pack | `$STAGE0_HOME/packs/homelab-<hash>.smolmachine`, from `homelab-pack/`: homelab's sandbox image scripts plus the harness (`pack/install-harness.sh`), for homelab's guest user `builder`, created with the host user's uid and gid so it can write the shared folders. The daemon runs its commands as `builder` (`smolvm.images`); a pack does not carry its image's `USER`. The hash covers the staged inputs, smol-builder and the smolvm version, so a change to any of them builds a new pack. While no job runs, the packs it replaced are deleted |
 | Machine | what the job requires (WORKFLOW.md): 8 vCPU, 20 GiB, a 60 GiB disk, nested KVM; and homelab's guest kernel (`lib_dir`, `SMOLVM_LIB_DIR`) |
-| Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone. Five, beside the daemon's share: smolvm's ceiling on taichi |
+| Shared folders | read-only, `~/.cache/homelab-sources`; read-write, `~/.cache/homelab-vmhost`, homelab's uv cache and its Go cache (one folder); per job, `~/.local/state/homelab/sortie-recorder/<job>`, the flight recorder's folder, which stays after the machine is gone; read-only, `~/.local/state/homelab/open-issues` at the same path in the guest (`/home/builder/.local/state/homelab/open-issues`), the open-issue evidence `python3 -m homelab.open_issues capture` keeps on the host, so a job reads the evidence a row of homelab's `docs/open-issues.md` names. A job's own captures go to its recorder folder (`HOMELAB_STATE_HOME=/var/log/homelab-recorder`); the setup gives `~/.local/state` back to `builder`, since the read-only mount leaves its parents to root. Six, beside the daemon's share: on taichi a machine with 8 started (smolvm 1.32.4, nested, 2026-11-04), so one stays spare |
 | vm key | copied alone into `$STAGE0_HOME/inputs/vm-age`; reaches every command in the machine as `HOMELAB_VM_AGE_KEY` (`env_files`), never logged |
 | Setup | what the homelab workflow's hooks did, before the agent starts: the vm key where sops looks, `guest-start.sh` (the flight recorder, and swap at `/storage/swapfile`), and `scripts/vmhost/prepare.sh` |
 

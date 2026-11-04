@@ -234,6 +234,8 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+# shellcheck source=notify-channel.sh
+. "$KIT/notify-channel.sh"
 migrate_max_agents "$ENV_FILE"
 # shellcheck source=unit-restart.sh
 . "$KIT/unit-restart.sh"
@@ -323,15 +325,13 @@ fi
 
 # The operator's channel (notify-channel.sh): optional; with no
 # STAGE0_NOTIFY_KIND the questions show on the workbench only.
-# shellcheck source=notify-channel.sh
-. "$KIT/notify-channel.sh"
 STAGE0_NOTIFY_KIND=${STAGE0_NOTIFY_KIND:-}
 STAGE0_NOTIFY_ENTRY=$(notify_entry "$STAGE0_NOTIFY_KIND" "${STAGE0_NOTIFY_CHAT_ID:-}") || die "fix the channel in $ENV_FILE"
 export STAGE0_NOTIFY_ENTRY
 if [[ -n $STAGE0_NOTIFY_KIND ]]; then
   notify_credential "$STAGE0_HOME/notify-credential" || die "the $STAGE0_NOTIFY_KIND channel has no credential"
 else
-  say "No operator channel: questions show on the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE (README.md)"
+  say "No operator channel of your own: Sortie's notifications go to the workbench only. Set STAGE0_NOTIFY_KIND in $ENV_FILE to add one (README.md)"
 fi
 mkdir -p "$STAGE0_HOME"/{sortie,workspaces,home,sessions}
 gh auth token >/dev/null || die "gh has no token: run gh auth login"
@@ -389,6 +389,10 @@ from workbench.auth import hash_password
 print(hash_password(open(sys.argv[1]).read().strip()))' "$STAGE0_HOME/workbench-password" > "$STAGE0_HOME/workbench-password-hash")
 fi
 secret "$STAGE0_HOME/sortie-token"
+# This host's token for the workbench's notifications (notify-channel.sh):
+# Sortie posts with it, the workbench takes it, no person writes it.
+notify_host=$(notify_host) || die "fix the host name in $ENV_FILE"
+notify_token "$STAGE0_HOME" "$notify_host" || die "could not mint $notify_host's notifications token"
 secret "$STAGE0_HOME/viewer-token"
 # The supervisor's token and prompt (supervisor.sh), which the workflow's
 # supervisor section reads.

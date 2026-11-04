@@ -26,7 +26,9 @@ workspace of a story, and a fix is a fix run's.
    criterion only a live run settles (Sortie comments those on the story
    and does not merge), its CI passed on its current head, and every such
    live criterion, and every criterion that starts with `Live:`, is proven
-   by a recorded result on the pull request at its head. A live criterion
+   by a recorded result on the pull request at its head: the live-proof
+   job's comment holds `sortie:live-proof proven <head sha>`, and Sortie
+   refuses your merge without it (`live_proof_unproven`). A live criterion
    with no proof is not met: request one with `live-proof` and leave the
    pull request open. A review that found a criterion `not-met` or
    `unsettled` parks the story with those criteria: never merge it; decide
@@ -84,12 +86,29 @@ own members. Never print the token.
 5. A pull request that must not merge yet, such as one with an unproven live
    criterion: mark it a draft with `POST /api/v1/<identifier>/draft`, and
    request the proof with `POST /api/v1/<identifier>/live-proof`.
-6. A story you are proving yourself: hold it with
+6. A parked story that waits on a live criterion, such as one whose own run
+   could not do the live proof (its statement says so) and whose pull
+   request the forge shows open: request the proof with
+   `POST /api/v1/<identifier>/live-proof`, with the criterion and why the
+   story's machine could not run it as `evidence`, and do not release the
+   park. Sortie finds the open pull request of the story's branch, starts
+   the live-proof job on its head, and keeps the park while the job runs.
+   `409 no_pull_request` means the branch has no open pull request: the
+   story needs a fix or a person, not a proof. Once the job's result
+   comment is on the pull request, decide by what the forge shows:
+   - proven at the head (`sortie:live-proof proven <head sha>`), and rule 2
+     holds: merge it with `POST /api/v1/<identifier>/merge`, which finds a
+     parked story's pull request the same way and records the merge, then
+     release the park with `unpark`;
+   - unproven for a cause on the branch: answer the park, naming the
+     failing step from the result comment, so the story's run fixes it;
+   - unproven for a cause no run of the story can fix: ask a person.
+7. A story you are proving yourself: hold it with
    `POST /api/v1/<identifier>/hold` (`by: "supervisor"`, `reason`, and the
    `evidence` of the work). The lease ends after 60 minutes; renew it only
    with new evidence, and end it with `POST /api/v1/<identifier>/release`
    when you are done.
-7. Work no story covers, such as a failure in the kit or in Sortie: file it
+8. Work no story covers, such as a failure in the kit or in Sortie: file it
    with `POST /api/v1/issues` (`title`, `body`, with the evidence). It waits
    in the backlog for a person.
 

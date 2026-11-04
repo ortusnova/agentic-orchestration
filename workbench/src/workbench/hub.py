@@ -9,12 +9,14 @@ import time
 from typing import Any, Awaitable, Callable
 
 from .autosync import approved_digest
+from .faults import failures, faults_of, home_faults, project_faults
 from .fleet import build_fleet, lanes_summary, merge_waits, run_phases, story_states
 from .leases import leases_of
 from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
+from .notifications import project_notifications
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
 from .timeline import RunHistory, RunWorkers
@@ -29,8 +31,14 @@ class Hub:
     def __init__(self, plan: PlanState, sortie: ProjectSortie, records=None, pulls=None,
                  peers: list[ProjectSortie] | None = None, previews=None,
                  alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
-                 history: RunHistory | None = None):
+                 history: RunHistory | None = None,
+                 notifications: Callable[[list[str]], list[dict[str, Any]]] | None = None,
+                 clock: Callable[[], float] = time.time):
         self.plan = plan
+        # What the Sorties' notifications sent of these identifiers, as kept
+        # (workbench.notifications), and the time their repeats count in.
+        self.notifications = notifications
+        self.clock = clock
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
         self.peers = list(peers or [])
@@ -75,6 +83,10 @@ class Hub:
         # The supervisor's leases on stories, by identifier (leases.py): a
         # story under one asks no person, whatever its park says.
         self.leases: dict[str, dict[str, Any]] = {}
+        # The open platform faults that hold the project's stories, oldest
+        # first, and the failure of each story, by identifier (faults.py).
+        self.faults: list[dict[str, Any]] = []
+        self.failures: dict[str, dict[str, Any]] = {}
         self._park_details: dict[tuple[str, str, Any], dict[str, Any]] = {}
         self.history = History()
         # Read-only: never pull back an edited story on its own.
@@ -185,6 +197,12 @@ class Hub:
     def _peer_pairs(self) -> list[tuple[ProjectSortie, dict[str, Any]]]:
         return [(p, s) for p in self.peers if (s := self.peer_states.get(p.name, (None, None))[0]) is not None]
 
+    def sortie_named(self, name: str | None) -> ProjectSortie | None:
+        """This project's own Sortie or another one, by name."""
+        if name == self.sortie.name:
+            return self.sortie
+        return next((p for p in self.peers if p.name == name), None)
+
     def sortie_for(self, identifier: str) -> ProjectSortie:
         """The Sortie that runs, parks or holds the issue: the one whose
         state lists it last, or whose question it holds, else this project's own."""
@@ -290,6 +308,12 @@ class Hub:
         statements = {i: q["statement"] for i, q in self.questions.items() if q["statement"]}
         self.leases = leases_of(self.states())
         try:
+            self.faults = project_faults(faults_of(self.states()), doc["nodes"])
+            self.failures = failures(self.faults, self.run_history.recent)
+        except Exception:  # the faults must never take the graph down with them
+            log.exception("could not read the platform faults")
+            self.faults, self.failures = [], {}
+        try:
             self.fleet = build_fleet(self.states(), doc["nodes"], statements, leases=self.leases,
                                      history=self.run_history)
             self.last_where.update(self.fleet["where"])
@@ -305,6 +329,7 @@ class Hub:
             if n.get("kind") == "story":
                 n["question"] = self.questions.get(ident) if ident and ident not in self.leases else None
                 n["lease"] = self.leases.get(ident) if ident else None
+                n["failure"] = self.failures.get(ident) if ident else None
                 n["run_state"] = runs.get(ident) if ident else None
                 peer = self.workers.get(ident or "", {}).get("sortie")
                 if peer and not n.get("runtime") and n.get("tracker"):
@@ -358,6 +383,7 @@ class Hub:
                 plan_states=doc.get("plan_states"), tracker_known=self.tracker is not None, valid=snap["valid"],
                 errors=len(snap["errors"]), history=self.history,
                 questions=home_questions(self.open_questions(), doc.get("nodes") or []),
+                faults=home_faults(self.faults), fault_held={k for f in self.faults for k in f["keys"]},
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
@@ -369,9 +395,23 @@ class Hub:
         except Exception:  # the home must never take the graph down with it
             log.exception("could not build the project home")
             return {"error": "the home could not be computed; see the workbench log"}
+        home["notifications"] = self._notifications(doc.get("nodes") or [])
+        home["needs_person"]["unread"] = sum(1 for n in home["notifications"] if n["unread"])
         home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
+
+    def _notifications(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """What "Needs a person" shows of the notifications the Sorties sent."""
+        if self.notifications is None:
+            return []
+        idents = [n["tracker"]["identifier"] for n in nodes if n.get("kind") == "story" and n.get("tracker")]
+        try:
+            rows = self.notifications(idents)
+        except Exception:  # the home must never fail for them
+            log.exception("could not read the notifications")
+            return []
+        return project_notifications(rows, nodes, self.open_questions(), self.clock())
 
     def open_questions(self) -> dict[str, dict[str, Any]]:
         """The questions that wait on a person: none of a story the

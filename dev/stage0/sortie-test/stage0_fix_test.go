@@ -19,6 +19,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/prompt"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/github"
 )
 
@@ -108,6 +109,7 @@ type fixScenario struct {
 func newFixScenario(t *testing.T, w stage0Fix, value string) *fixScenario {
 	t.Helper()
 	issues := &opsTracker{mockTrackerAdapter: &mockTrackerAdapter{}}
+	stage0Workbench.reset()
 	return &fixScenario{
 		t:        t,
 		w:        w,
@@ -120,8 +122,8 @@ func newFixScenario(t *testing.T, w stage0Fix, value string) *fixScenario {
 		ci:       &mockCIProvider{},
 		issues:   issues,
 		// The workflow's own notifications: its tracker_comment entry
-		// posts on the story.
-		router: mustRouter(t, issues, nil, route.Inputs{Entries: w.cfg.Notifications.Backends}),
+		// posts on the story, its webhook entry to the workbench.
+		router: mustRouter(t, issues, registry.Notifiers.Get, route.Inputs{Entries: w.cfg.Notifications.Backends}),
 	}
 }
 
@@ -291,6 +293,8 @@ var fixPromptRules = []string{
 	"Do not push",
 	"Sortie merges the pull request once it passes",
 	"check every acceptance criterion above against the branch again",
+	"When you have finished, write `.sortie/pr.json`",
+	"Sortie ends the run after the turn that writes it, so write it last.",
 	"stop with `blocked`",
 }
 
@@ -563,6 +567,16 @@ func assertStoppedFailure(t *testing.T, s *fixScenario, kind, what string) {
 	}
 	if len(s.issues.labels) != 0 {
 		t.Errorf("labels = %v, want none: the comment and the escalation route it", s.issues.labels)
+	}
+	// The workbench has it too, under "Needs a person".
+	event := map[string]domain.EventType{ReactionKindCI: domain.EventEscalationCIFailure}[kind]
+	if event == "" {
+		event = domain.EventEscalationMergeConflicts
+	}
+	if got := stage0Workbench.of(event); len(got) != 1 {
+		t.Errorf("the workbench received %d %s, want 1", len(got), event)
+	} else {
+		wantWorkbenchShape(t, event, got[0])
 	}
 	// The escalation stands: the next pass neither runs a fix nor posts
 	// again.

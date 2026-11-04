@@ -82,6 +82,12 @@ echo "an older source" > "$rec"
 deploy
 [[ $(calls) == "restart ortus-stage0-worker.service;" ]] && ok "one started from other source restarts" || fail "old source: $(calls)"
 
+# The worker daemon's restart keeps its jobs (worker-daemon's operator
+# guide): systemd must leave the machines in its control group running.
+grep -qx 'KillMode=process' "$KIT/units/ortus-stage0-worker.service" \
+  && ok "stopping the worker unit signals the daemon only, not its jobs' machines" \
+  || fail "the worker unit kills its jobs' machines when it stops"
+
 # stage0.sh builds the daemon and decides its restart only through
 # worker-build.sh.
 if grep -nE 'go build .*worker-daemon' "$KIT/stage0.sh"; then
