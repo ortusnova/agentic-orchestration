@@ -207,3 +207,34 @@ func TestRenderIsYAMLHeadedJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A revoked worker is refused by Pomerium, before the egress gate, so
+// Pomerium's journal is the record of its refusal: its "authorize check"
+// line names the host and the job the request names, and its
+// "http-request" line, with the same request-id, adds the client
+// certificate, whose subject is the worker's name.
+func TestRefusalsAreLoggedWithTheWorkerTheJobAndTheHost(t *testing.T) {
+	cfg, err := Build(settings(), list())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"request-id", "host", "headers.X-Sortie-Job"} {
+		if !slices.Contains(cfg.AuthorizeLogFields, want) {
+			t.Errorf("authorize_log_fields = %v, want %s", cfg.AuthorizeLogFields, want)
+		}
+	}
+	for _, want := range []string{"request-id", "authority", "response-code", "response-code-details", "client-certificate", "headers.X-Sortie-Job"} {
+		if !slices.Contains(cfg.AccessLogFields, want) {
+			t.Errorf("access_log_fields = %v, want %s", cfg.AccessLogFields, want)
+		}
+	}
+	b, err := Render(settings(), list())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"authorize_log_fields": [`, `"access_log_fields": [`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("rendered configuration lacks %s", want)
+		}
+	}
+}

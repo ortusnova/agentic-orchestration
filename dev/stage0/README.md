@@ -567,9 +567,18 @@ What a worker's request meets:
   `egress-profile.json` lists no preview. A plain `http://` request a
   machine's browser sends to its proxy goes as a `CONNECT` too, since
   Pomerium's egress route takes only `CONNECT`. A worker whose certificate
-  is revoked (`worker-host.sh remove`) reaches no route, and Pomerium
-  refuses it in the TLS handshake or with `403` (its journal,
-  `ortus-stage0-pomerium`); a `CONNECT` with no token or an ended one gets
+  is revoked (`worker-host.sh remove`) reaches no route: Pomerium answers
+  it `403`, and its requests never reach the gate, so a revoked worker's
+  refusals are in Pomerium's journal (`journalctl --user -u
+  ortus-stage0-pomerium`), not the gate's. `cpctl` renders Pomerium's
+  `authorize_log_fields` and `access_log_fields` so that each refusal is
+  two lines with the same `request-id`: the `authorize check` names the
+  host and the job the forwarder names,
+  `"host":"ons-7.preview.p1.example.org:80","headers":{"X-Sortie-Job":"ONS-7"},"allow":false,"allow-why-false":["client-certificate-unauthorized"]`,
+  and the `http-request` line the worker, from its certificate,
+  `"authority":"ons-7.preview.p1.example.org:80","response-code":403,"response-code-details":"ext_authz_denied","client-certificate":{"issuer":"CN=Ortus Nova control plane CA","subject":"CN=taichi,OU=worker"},"headers":{"x-sortie-job":"ONS-7"}`.
+  A certificate from another CA is refused in the TLS handshake. A
+  `CONNECT` with no token or an ended one gets
   `407`, and the gate's journal records it with the worker, the job the
   forwarder names, and the host:
   `msg="preview refused" worker=taichi job=ONS-7 host=ons-7.preview.p1.example.org:80 status=407 reason="no live egress token"`;
@@ -626,7 +635,10 @@ dev/stage0/worker-host.sh remove taichi
 once: from then on Pomerium answers each of `taichi`'s requests `403` on
 every route, so its next check-in is rejected, and a job it holds can no
 longer reach its flows, so its lease expires and Sortie retries the job
-elsewhere. Add it again to give it a new certificate.
+elsewhere. Each of those refusals is in `ortus-stage0-pomerium`'s journal,
+with the worker (the certificate's subject), the job its forwarder names
+and the host ([Worker hosts](#worker-hosts) above); the egress gate never
+sees them. Add it again to give it a new certificate.
 
 ### Where the secrets live
 

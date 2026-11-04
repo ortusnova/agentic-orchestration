@@ -89,6 +89,14 @@ fingerprint() { cpctl worker list | awk -v n="$1" '$1 == n { print $4 }'; }
   jq -e --arg p1 "$p1" '.policy[0].allow.or[0].client_certificate.fingerprint == [$p1]' <<< "$route" > /dev/null \
     && [[ $(tail -n +2 "$STAGE0_HOME/control-plane/pomerium/config.yaml" | jq -r '.downstream_mtls.enforcement') == reject_connection ]] \
     && ok "a revoked worker's certificate reaches no route, the previews' neither" || fail "after revoke: $route"
+  # Pomerium refuses it there, so Pomerium's journal records the refusal:
+  # its authorize check names the host and the job, and its http-request
+  # line, with the same request-id, the worker's certificate.
+  tail -n +2 "$STAGE0_HOME/control-plane/pomerium/config.yaml" | jq -e '
+    (["request-id", "host", "headers.X-Sortie-Job"] - .authorize_log_fields == [])
+    and (["request-id", "authority", "response-code", "client-certificate", "headers.X-Sortie-Job"] - .access_log_fields == [])' > /dev/null \
+    && ok "Pomerium's journal records a refusal with the worker's certificate, the job and the host" \
+    || fail "Pomerium's log fields: $(tail -n +2 "$STAGE0_HOME/control-plane/pomerium/config.yaml" | jq -c '{authorize_log_fields, access_log_fields}')"
 ) || fail "front_init: could not render Pomerium's configuration"
 
 # The egress gate itself (cp-egress as run-egress-gate.sh runs it), with a

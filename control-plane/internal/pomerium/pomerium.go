@@ -51,6 +51,28 @@ var Defaults = Settings{
 	KeyFile:        "/run/secrets/cp-pomerium-key",
 }
 
+// JobHeader is the header in which a worker's egress forwarder names the
+// job on each CONNECT. Pomerium logs it, with the host, on its refusals.
+const JobHeader = "X-Sortie-Job"
+
+// AuthorizeLogFields are the fields of Pomerium's "authorize check" line,
+// which it writes for every request it allows or refuses: Pomerium's
+// defaults, and the job the request names. A revoked worker's request is
+// refused here, before the egress gate, so this line is its record.
+var AuthorizeLogFields = []string{
+	"request-id", "check-request-id", "method", "path", "host", "ip", "route-id",
+	"headers." + JobHeader,
+}
+
+// AccessLogFields are the fields of Pomerium's "http-request" line, written
+// for the same request with the same request-id: Pomerium's defaults, the
+// client certificate, whose DNS name is the worker's, and the job.
+var AccessLogFields = []string{
+	"upstream-cluster", "method", "authority", "path", "user-agent", "referer", "forwarded-for",
+	"request-id", "duration", "size", "response-code", "response-code-details",
+	"client-certificate", "headers." + JobHeader,
+}
+
 // IdentityValue is what Pomerium sets the identity header to: the DNS
 // subject alternative name of the client certificate, the worker's name.
 const IdentityValue = "${pomerium.client_cert_san_dns}"
@@ -81,6 +103,8 @@ type Config struct {
 	CertificateKeyFile string         `json:"certificate_key_file"`
 	DownstreamMTLS     map[string]any `json:"downstream_mtls"`
 	SkipXffAppend      bool           `json:"skip_xff_append"`
+	AuthorizeLogFields []string       `json:"authorize_log_fields"`
+	AccessLogFields    []string       `json:"access_log_fields"`
 	Routes             []Route        `json:"routes"`
 }
 
@@ -173,6 +197,8 @@ func Build(s Settings, l *workers.List) (*Config, error) {
 		CertificateKeyFile: s.KeyFile,
 		DownstreamMTLS:     map[string]any{"ca_file": s.CAFile, "enforcement": "reject_connection"},
 		SkipXffAppend:      true,
+		AuthorizeLogFields: slices.Clone(AuthorizeLogFields),
+		AccessLogFields:    slices.Clone(AccessLogFields),
 		Routes:             []Route{control, stdio, mcp, bundles, usage, egress},
 	}
 	return cfg, nil
