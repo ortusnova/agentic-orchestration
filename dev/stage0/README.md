@@ -221,9 +221,12 @@ GitHub (`STAGE0_AO_REPO_PROJECT`):
   `ortus-stage0-preview@<identifier>`: `run-workbench.sh <identifier>`,
   the branch's workbench with `WORKBENCH_SYNC=0`, against the live store
   and Sortie, on `127.0.0.1:<port>` from `STAGE0_PREVIEW_FIRST_PORT` (8800)
-  up. The pull request gets a comment with the address and the commit, and
-  the live workbench shows the address on the story, from
-  `$STAGE0_HOME/previews.json`.
+  up. Once the preview answers at its address through the control plane's
+  front (below), the pull request gets a comment with the address and the
+  commit, and the live workbench shows the address on the story, from
+  `$STAGE0_HOME/previews.json`. A preview that does not answer there gets
+  no comment and is deployed again on every pass until it does: it is never
+  left to a person.
 - That comment starts the review on the preview (`review_comments`, with
   the workflow's click-proofs prompt): a run on the review rule that clicks
   every action the story's criteria name on the preview and, when they
@@ -239,19 +242,54 @@ GitHub (`STAGE0_AO_REPO_PROJECT`):
   removes it. A merge makes the story Done, and the change deploys as any
   workbench merge does.
 
-The address is a name beside the live workbench's TLS name,
-`STAGE0_WORKBENCH_URL` in `stage0.env`: `https://workbench.example.net`
-gives `https://workbench-ons-93.example.net/`, so a wildcard certificate
-for the live name's domain covers it. The kit does not serve TLS itself:
-each change rewrites `$STAGE0_HOME/previews/routes`, one `HOST PORT` line
-per preview, for the proxy in front of the live workbench, and runs
-`STAGE0_PREVIEW_ROUTES_HOOK` (for example, that proxy's reload). Without
-`STAGE0_WORKBENCH_URL` the address is the preview's loopback port.
+The address the kit comments, and the review opens, is a name under
+Pomerium's public URL, on plain http:
+`http://<identifier>.preview.<host of STAGE0_CP_PUBLIC_URL>/`
+(`https://p1.example.org:8443` gives
+`http://ons-93.preview.p1.example.org/`). It is never
+`http://127.0.0.1:<port>/`, which is p1's loopback and nothing on a job's
+machine, with or without `STAGE0_WORKBENCH_URL`. No DNS name is needed:
+the review runs in a job's machine on any worker (p1's or taichi's), and
+its route is the one its egress already takes
+([Worker hosts (p1)](#worker-hosts-p1), "Previews"):
 
-The review on the preview runs in a job's machine, so it reaches the preview
-only through the job's egress: `control-plane/nono/egress-profile.json` must allow the
-preview's name, and the preview must let the review sign in. The kit sets up
-neither by itself.
+1. The machine's browser, with the machine's proxy settings (`HTTP_PROXY`,
+   the worker's egress forwarder), asks for the address.
+2. The forwarder sends it as a `CONNECT <name>:80` on the egress flow, with
+   the job's token and its identifier (`X-Sortie-Job`), through Pomerium
+   with the worker's certificate.
+3. The egress gate admits it by the job's live token, never sends it to
+   nono, and serves it from the preview's port on p1's loopback, by the
+   `NAME PORT` lines of `$STAGE0_HOME/previews/front-routes`, which
+   `preview.sh` writes. The preview sees its own name as the host, so its
+   pages and API calls work under it.
+
+The preview's port is never opened on p1's network. The gate gives a
+review job's requests the previews' review key
+(`$STAGE0_HOME/preview-review-key`, which `stage0.sh` makes) and its job,
+and the preview (`WORKBENCH_REVIEW_KEY_FILE`, taken only with
+`WORKBENCH_SYNC=0`) signs it in as `Review of <job>` with both roles, so
+it can click every action with no login. `preview-sync` checks a preview
+on the same route before it comments: TLS to Pomerium with p1's own
+worker's certificate (`$STAGE0_HOME/control-plane/workers/p1`), a
+`CONNECT` with Sortie's control token, which the gate admits for a
+preview's name only and gives no review key, and `GET /` and
+`GET /api/auth/mode` inside, which must answer 200. The review-on-preview
+prompt says that an address which does not answer is a platform fault: the
+review stops `blocked` with the address and the error, and never asks a
+person to redeploy the preview.
+
+People get a name too, beside the live workbench's TLS name,
+`STAGE0_WORKBENCH_URL` in `stage0.env`, when it is set:
+`https://workbench.example.net` gives
+`https://workbench-ons-93.example.net/`, so a wildcard certificate for the
+live name's domain covers it; the comment names it after the address. The
+kit does not serve TLS itself: each change rewrites
+`$STAGE0_HOME/previews/routes`, one `HOST PORT` line per preview with such
+a name, for the proxy in front of the live workbench, and runs
+`STAGE0_PREVIEW_ROUTES_HOOK` (for example, that proxy's reload). Without
+`STAGE0_WORKBENCH_URL`, as on p1, a preview has no name for people, and
+its address is still the one under Pomerium's.
 
 A preview runs the branch's code on this host with the kit's Sortie and
 GitHub tokens; `WORKBENCH_SYNC=0` keeps the workbench from writing to the
@@ -520,6 +558,23 @@ What a worker's request meets:
   in the gate's journal with the worker, job, attempt and host:
   `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
   A live-proof job that runs goes through the live-proof nono instead.
+- **Previews.** A `CONNECT` for a name under `preview.<Pomerium's host>`
+  (`front-config.sh` `preview_domain`) on port 80 is a ui story's preview
+  ([Previews of ui stories](#previews-of-ui-stories)): the same egress
+  route, the same certificate check and the same job token, from a machine
+  on any worker. The gate serves it from the preview's loopback port
+  (`$STAGE0_HOME/previews/front-routes`) and never sends it to nono, so
+  `egress-profile.json` lists no preview. A plain `http://` request a
+  machine's browser sends to its proxy goes as a `CONNECT` too, since
+  Pomerium's egress route takes only `CONNECT`. A worker whose certificate
+  is revoked (`worker-host.sh remove`) reaches no route, and Pomerium
+  refuses it in the TLS handshake or with `403` (its journal,
+  `ortus-stage0-pomerium`); a `CONNECT` with no token or an ended one gets
+  `407`, and the gate's journal records it with the worker, the job the
+  forwarder names, and the host:
+  `msg="preview refused" worker=taichi job=ONS-7 host=ons-7.preview.p1.example.org:80 status=407 reason="no live egress token"`;
+  an admitted one,
+  `msg="preview request" worker=taichi job=ONS-7 attempt=1 host=ons-7.preview.p1.example.org:80 port=8800 method=GET path=/ status=200`.
 
 The workflow names the flows by Pomerium's URL:
 `${STAGE0_CP_PUBLIC_URL}/<flow>` for stdio, mcp, bundles and usage, and
@@ -705,6 +760,7 @@ dev/stage0/stage0.sh            # later runs read it from stage0.env
 | Live kit | as on p1, `$STAGE0_HOME/kit` follows `origin/main` (`ortus-stage0-deploy.timer`); a change to the kit runs `stage0.sh` (the worker profile) at once, which restarts the worker daemon only when what it runs changed. A worker host builds no Sortie, follows no `plan-bench` merge and asks no Sortie to pause or resume, whatever Sortie or Huly settings its `stage0.env` kept from the retired homelab profile; nothing on it reads them |
 | Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
 | Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
+| Previews | nothing of its own: a review job on taichi opens a ui story's preview at the commented `http://<identifier>.preview.<Pomerium's host>/` through its machine's proxy, on the egress route to p1's Pomerium with taichi's certificate and the job's token, as a job on p1's worker does ([Previews of ui stories](#previews-of-ui-stories)); no preview port on p1 is open to taichi |
 
 p1's workbench shows taichi's workers beside p1's, as workers of p1's
 Sortie, the only one (`agent-platform/run-supervision`); the brokers of

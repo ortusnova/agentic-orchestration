@@ -11,7 +11,9 @@
 #                                 (ortus-stage0-preview@IDENTIFIER, preview.sh):
 #                                 that branch's workbench, read-only toward the
 #                                 tracker (WORKBENCH_SYNC=0), against the live
-#                                 store and Sortie, with its own home and port
+#                                 store and Sortie, with its own home and port;
+#                                 a review job signs in there by the previews'
+#                                 review key, which the egress gate gives it
 set -euo pipefail
 
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
@@ -68,7 +70,9 @@ if (( $# )); then
   # shellcheck source=/dev/null
   . "$preview/preview.env"
   WB=$preview/src/workbench home=$preview/home sessions=$preview/sessions port=$PREVIEW_PORT
-  mode=(WORKBENCH_SYNC=0)
+  # A review job's requests carry the previews' review key, which the
+  # egress gate sets (run-egress-gate.sh): they are its review's, signed in.
+  mode=(WORKBENCH_SYNC=0 WORKBENCH_REVIEW_KEY_FILE="$STAGE0_HOME/preview-review-key")
 fi
 cd "$WB"
 exec env WORKBENCH_HOME="$home" WORKBENCH_STORE="$STAGE0_STORE" WORKBENCH_HULY_PROJECT="$STAGE0_HULY_PROJECT" \

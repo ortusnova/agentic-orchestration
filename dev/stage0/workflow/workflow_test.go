@@ -194,3 +194,50 @@ func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
 		}
 	}
 }
+
+// reviewOnPreviewPrompt is the prompt of the review on a ui story's preview:
+// the branch of WORKFLOW.md's template that the kit's preview comment opens.
+func reviewOnPreviewPrompt(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../WORKFLOW.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	start := strings.Index(s, "You are reviewing story **{{ .issue.identifier }}** on its preview")
+	if start < 0 {
+		t.Fatal("WORKFLOW.md has no review-on-preview prompt")
+	}
+	end := strings.Index(s[start:], "{{ else -}}")
+	if end < 0 {
+		t.Fatal("the review-on-preview prompt does not end")
+	}
+	return strings.Join(strings.Fields(s[start:start+end]), " ")
+}
+
+// agent-platform/run-supervision#A UI is approved as a prototype, and the
+// built story merges after its review, scenario The review machine reaches
+// the preview: the review opens the commented address from its own
+// machine, through its proxy and the control plane's front, and an address
+// that does not answer is a platform fault it stops on, never a request to
+// a person to redeploy the preview.
+func TestTheReviewOpensThePreviewThroughTheFront(t *testing.T) {
+	p := reviewOnPreviewPrompt(t)
+	for _, want := range []string{
+		"Open the preview's address, exactly as the kit's comment gives it",
+		"with this machine's proxy settings",
+		"proxy: { server: process.env.HTTP_PROXY }",
+		"through the control plane's front with this job's token",
+		"When the address does not answer, or answers an error, that is a platform fault: stop with `blocked` in `.sortie/status`, and give on the lines after it the address and the error you got.",
+		"Never ask a person to redeploy the preview: the kit redeploys one that does not answer on its own.",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the review-on-preview prompt does not say %q", want)
+		}
+	}
+	for _, never := range []string{"127.0.0.1", "localhost"} {
+		if strings.Contains(p, never) {
+			t.Errorf("the review-on-preview prompt names %s, which is not the preview's address on the review's machine", never)
+		}
+	}
+}

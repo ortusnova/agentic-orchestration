@@ -7,21 +7,30 @@
 # the live workbench's registry taken at each deploy. `workbench preview-sync`
 # (run-previews.sh, every minute) decides when, and calls this:
 #
-#   preview.sh up IDENTIFIER BRANCH SHA PORT ADDRESS
+#   preview.sh up IDENTIFIER BRANCH SHA PORT ADDRESS [PUBLIC]
 #       check out SHA of BRANCH in $STAGE0_HOME/previews/IDENTIFIER/src, build
 #       its workbench, and (re)start ortus-stage0-preview@IDENTIFIER on
-#       127.0.0.1:PORT; ADDRESS is the name it is reached at
+#       127.0.0.1:PORT; ADDRESS, http://NAME/ with NAME under the previews'
+#       domain (front-config.sh preview_domain), is where a job's machine
+#       opens it through the control plane's front, and PUBLIC, when given,
+#       the name beside the live workbench's that people open
 #   preview.sh down IDENTIFIER
-#       stop it and remove its checkout, its home and its route
+#       stop it and remove its checkout, its home and its routes
 #
-# Each change rewrites $STAGE0_HOME/previews/routes, one "HOST PORT" line per
-# preview, for the proxy that serves the live workbench's TLS name, and then
-# runs STAGE0_PREVIEW_ROUTES_HOOK (stage0.env) when it is set, for example
-# to reload that proxy.
+# Each change rewrites $STAGE0_HOME/previews/front-routes, one "NAME PORT"
+# line per preview, which the egress gate serves each ADDRESS by from p1's
+# loopback (run-egress-gate.sh), and $STAGE0_HOME/previews/routes, one
+# "HOST PORT" line per preview with a PUBLIC name, for the proxy that serves
+# the live workbench's TLS name; then it runs STAGE0_PREVIEW_ROUTES_HOOK
+# (stage0.env) when it is set, for example to reload that proxy. The
+# preview's port is never opened on p1's network.
 set -euo pipefail
+KIT=$(cd "$(dirname "$0")" && pwd)
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
+# shellcheck source=front-config.sh
+. "$KIT/front-config.sh"
 if [[ -s $STAGE0_HOME/path ]]; then
   PATH=$(cat "$STAGE0_HOME/path")
   export PATH
@@ -34,25 +43,37 @@ PREVIEWS=$STAGE0_HOME/previews
 WAIT=${STAGE0_PREVIEW_WAIT:-60}
 
 cmd=${1:-} ident=${2:-}
-[[ $cmd == up && $# -eq 6 || $cmd == down && $# -eq 2 ]] \
-  || die "usage: $0 up IDENTIFIER BRANCH SHA PORT ADDRESS | down IDENTIFIER"
+[[ $cmd == up && ($# -eq 6 || $# -eq 7) || $cmd == down && $# -eq 2 ]] \
+  || die "usage: $0 up IDENTIFIER BRANCH SHA PORT ADDRESS [PUBLIC] | down IDENTIFIER"
 [[ $ident =~ ^[A-Za-z0-9]+-[0-9]+$ ]] || die "not a tracker identifier: $ident"
 dir=$PREVIEWS/$ident
 unit=ortus-stage0-preview@$ident.service
 
+# url_host URL: the host of URL.
+url_host() {
+  local h=${1#*://}
+  h=${h%%/*}
+  echo "${h%%:*}"
+}
+
 routes() {
-  local out=$PREVIEWS/routes.tmp env
+  local out=$PREVIEWS/routes.tmp front=$PREVIEWS/front-routes.tmp env
   mkdir -p "$PREVIEWS"
   : > "$out"
+  : > "$front"
   for env in "$PREVIEWS"/*/preview.env; do
     [[ -e $env ]] || continue
     (
       # shellcheck source=/dev/null
       . "$env"
-      printf '%s %s\n' "$PREVIEW_HOST" "$PREVIEW_PORT"
-    ) >> "$out"
+      # shellcheck disable=SC2153 # preview.env sets PREVIEW_PORT
+      [[ -z ${PREVIEW_FRONT_HOST:-} ]] || printf '%s %s\n' "$PREVIEW_FRONT_HOST" "$PREVIEW_PORT" >> "$front"
+      [[ -z ${PREVIEW_HOST:-} ]] || printf '%s %s\n' "$PREVIEW_HOST" "$PREVIEW_PORT" >> "$out"
+    )
   done
   sort -o "$out" "$out"
+  sort -o "$front" "$front"
+  mv "$front" "$STAGE0_PREVIEW_FRONT_ROUTES"
   mv "$out" "$PREVIEWS/routes"
   if [[ -n ${STAGE0_PREVIEW_ROUTES_HOOK:-} ]]; then
     bash -c "$STAGE0_PREVIEW_ROUTES_HOOK" || say "STAGE0_PREVIEW_ROUTES_HOOK failed"
@@ -72,15 +93,22 @@ if [[ $cmd == down ]]; then
   exit 0
 fi
 
-branch=$3 sha=$4 port=$5 address=$6
+branch=$3 sha=$4 port=$5 address=$6 public=${7:-}
 [[ $sha =~ ^[0-9a-f]{40}$ ]] || die "not a commit: $sha"
 if ! [[ $port =~ ^[0-9]+$ ]] || (( port <= 1024 || port >= 65536 )); then die "not a port: $port"; fi
 [[ $port != "${STAGE0_WORKBENCH_PORT:-}" && $port != "${STAGE0_SORTIE_PORT:-}" ]] || die "port $port is the live kit's"
 git check-ref-format --branch "$branch" > /dev/null || die "not a branch: $branch"
-host=${address#*://}
-host=${host%%/*}
-host=${host%%:*}
-[[ $host =~ ^[A-Za-z0-9.-]+$ ]] || die "not an address: $address"
+# The address a job's machine opens: http://NAME/ under the previews' domain,
+# never a loopback one, which no other machine can open.
+domain=$(preview_domain)
+front_host=$(url_host "$address")
+[[ $address == "http://$front_host/" && ${front_host,,} =~ ^[a-z0-9-]+\.${domain//./\\.}$ ]] \
+  || die "not an address under $domain: $address"
+host=''
+if [[ -n $public ]]; then
+  host=$(url_host "$public")
+  [[ $host =~ ^[A-Za-z0-9.-]+$ ]] || die "not an address: $public"
+fi
 
 say "$ident: deploying $branch at ${sha:0:12} on 127.0.0.1:$port ($address)"
 git -C "$REPO" fetch -q origin "+refs/heads/$branch:refs/previews/$ident"
@@ -121,7 +149,9 @@ fi
 (umask 077; cat > "$dir/preview.env" <<EOF
 PREVIEW_PORT=$port
 PREVIEW_HOST=$host
+PREVIEW_FRONT_HOST=${front_host,,}
 PREVIEW_ADDRESS=$address
+PREVIEW_PUBLIC=$public
 PREVIEW_BRANCH=$branch
 PREVIEW_SHA=$sha
 EOF

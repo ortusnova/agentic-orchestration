@@ -8,3 +8,14 @@
 
 - [x] 2.1 The workflow's review on the preview, started by the kit's comment, asks the reviewer to click every action the criteria name on the preview and to comment `sortie:click-proofs passed <head sha>`; Sortie merges after it. Checked against Sortie (`test-review-gate.sh`).
 - [ ] 2.2 Live: the next UI story merges by itself after its click-proofs record, with no person involved.
+
+## 3. The review machine reaches the preview (ONS-125, design D12)
+
+- [x] 3.1 The preview's address is a name under Pomerium's public URL, `http://<identifier>.preview.<host>/` (`workbench/src/workbench/preview.py` `preview_address`), never `http://127.0.0.1:<port>/`, with or without `STAGE0_WORKBENCH_URL`; a preview recorded at an older address moves to it. Tested in `workbench/tests/workbench/test_preview.py`.
+- [x] 3.2 The route: the worker's egress forwarder sends a machine's plain `http://` request as a `CONNECT` on the egress flow with the job's token and identifier; Pomerium's egress route takes it to the egress gate, which admits it by the live job token, serves it from the preview's loopback port (`previews/front-routes`, from `preview.sh`) and never from nono, gives a review job the previews' review key, and records each refusal with the worker, job and host. Tested in `worker-daemon/internal/flows/forward_test.go`, `control-plane/internal/egress/preview_test.go`, `dev/stage0/test-front.sh` (the rendered Pomerium configuration, a revoked worker, the real gate with no token and an ended one) and `dev/stage0/test-preview.sh`.
+- [x] 3.3 `preview-sync` comments a preview's address only once it answers on the route (`FrontChecker`: TLS to Pomerium with p1's worker certificate, `GET /` and `GET /api/auth/mode` inside the tunnel), and deploys one that does not answer again. Tested in `workbench/tests/workbench/test_preview.py` and `test_preview_front.py`.
+- [x] 3.4 The review-on-preview prompt opens the address with the machine's proxy settings, and takes an address that does not answer as a platform fault to stop `blocked` on, with the address and the error, never a request to a person to redeploy. Tested in `dev/stage0/workflow/workflow_test.go`.
+- [ ] 3.5 Live: the review run of a UI story on p1's Sortie opens its preview at the commented address from its own machine and runs the click-proofs there, with no person involved. Evidence, recorded once this change is deployed on p1:
+  - the preview comment: _pending_
+  - the click-proofs comment, or the failing verdict it records: _pending_
+  - the gate journal line of the run's requests (`journalctl --user -u ortus-stage0-egress-gate | grep 'msg="preview request"'`): _pending_

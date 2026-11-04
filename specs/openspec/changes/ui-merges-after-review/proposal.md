@@ -27,6 +27,13 @@ sortie#42 and is in the `sortie` submodule.
   `sortie:click-proofs passed <head sha>` on the pull request. The review
   prompt of a ui story says its click-proofs come after it, and the fix
   prompt no longer says the operator merges.
+- The review machine reaches the preview through the control plane's front
+  (design D12, ONS-125): the address the kit comments is a name under
+  Pomerium's public URL, never p1's loopback; a job's machine on any worker
+  opens it through its proxy, on its egress route, with its job token, and
+  the egress gate serves it from the preview's loopback port. The kit
+  comments it only once the preview answers there, and redeploys one that
+  does not.
 - The planning session and the store's instructions write a ui story only
   for an approved prototype, named in its criteria; a UI change with none
   goes to prototyping first, and the operator is asked on the decision board.

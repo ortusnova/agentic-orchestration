@@ -52,7 +52,7 @@ printf 'LOCAL=1\nEDGE_PORT=7700\n' > "$workers/p1.env"
 printf 'WORKER_HOST=brian@taichi\nEDGE_PORT=7701\nWORKER_PORT=7700\n' > "$workers/taichi.env"
 front_list="p1"
 front_workers() { echo "$front_list"; }
-# shellcheck disable=SC2329 # called by carry_edge_workers
+# shellcheck disable=SC2317,SC2329 # called by carry_edge_workers
 add() { echo "add $*" >> "$fake/adds"; }
 : > "$fake/adds"
 expect "taichi is added, by its SSH destination and name" "$(carry_edge_workers "$workers" add)" taichi
@@ -62,7 +62,7 @@ front_list=$'p1\ntaichi'
 expect "a listed worker is not added again" "$(carry_edge_workers "$workers" add)" ""
 expect "and add is not called" "$(cat "$fake/adds")" ""
 front_list="p1"
-# shellcheck disable=SC2329 # called by carry_edge_workers
+# shellcheck disable=SC2317,SC2329 # called by carry_edge_workers
 nope() { return 1; }
 carry_edge_workers "$workers" nope > /dev/null 2>&1 && st=0 || st=$?
 expect "a host that cannot be added fails the carry" "$st" 1
