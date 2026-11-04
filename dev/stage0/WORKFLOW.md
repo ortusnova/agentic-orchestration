@@ -507,7 +507,10 @@ are recorded for the new head. Only committed work leaves this machine.
 
 Then check every acceptance criterion above against the branch again, as
 the story's review did, and end your last message with what you fixed and
-the command that proves it, and write no `.sortie/status`. When only a
+the command that proves it, and write no `.sortie/status`. When you have
+finished, write `.sortie/pr.json` with a JSON object holding a short
+`title` and a `body` that says what this run changed and how you proved
+it: Sortie ends the run after the turn that writes it, so write it last. When only a
 person can fix the cause, such as a token or a setting outside the
 repository, stop with `blocked` in `.sortie/status` and say on the lines
 after it what a person has to do and where. Never write
@@ -576,7 +579,8 @@ after the run. Only committed work leaves this machine.
 
 Before you end, record your verdict on every acceptance criterion in
 `.sortie/criteria.json`, one entry per criterion, in the order the story
-lists them:
+lists them. Sortie ends the review after the turn that writes it, so
+write it last, after your fixes and checks:
 
     mkdir -p .sortie && cat > .sortie/criteria.json <<'JSON'
     {"criteria": [
@@ -653,5 +657,6 @@ Commit your work with git, in conventional commits, with no AI attribution.
 Do not push and do not open a pull request: Sortie does both after the run.
 Only committed work leaves this machine. Before you finish, write
 `.sortie/pr.json` with a JSON object holding a short `title` and a `body`
-that says what changed and how you proved it.
+that says what changed and how you proved it. Sortie ends the run after
+the turn that writes it, so write it last, once the whole story is done.
 {{- end }}
