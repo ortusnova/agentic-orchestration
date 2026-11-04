@@ -100,7 +100,7 @@ func TestSecretsAreExternalPodmanSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{}
+	want := map[string]bool{"cp-github-basic": true}
 	for _, s := range home.Secrets {
 		want[s.Name] = true
 	}
