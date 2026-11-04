@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Supervisor · ortus-nova-specs (ONS-97 prototype)</title>
+<!-- ONS-97 prototype: the supervisor's status, its Pause and Resume, and its actions on the home and beside each story.
+     Content is p1's Sortie's supervisor_actions on 2026-11-03 (times in the operator's zone). No JavaScript: the
+     state switch in the bar is a radio group. -->
+<style>
+@font-face{font-family:"Instrument Sans";src:url("../../../frontend/public/fonts/instrument-sans.woff2") format("woff2");font-weight:400 700}
+@font-face{font-family:"Bodoni Moda";src:url("../../../frontend/public/fonts/bodoni-moda-italic.woff2") format("woff2");font-weight:400;font-style:italic}
+@font-face{font-family:"JetBrains Mono";src:url("../../../frontend/public/fonts/jetbrains-mono-medium.woff2") format("woff2");font-weight:500}
+:root{--ink:#1d1d1f;--rule:#14161a;--raised:#2a2a2d;--edge:#3a3a3d;--imute:#a1a1a6;--paper:#fbfbf8;--strip:#f4f4f2;--panel:#fff;--line:#dcdcd7;--hair:#e6e6e0;--mute:#5d626b;
+--done:#2f6f4e;--done-tint:#eef4f0;--amber:#c98a1a;--amber-ink:#8a5a06;--amber-tint:#fbf4e5;--slate:#8a8f98;--alert:#c4382f;--alert-ink:#8f241d;--alert-tint:#fbeceb;
+--sans:"Instrument Sans",Helvetica,Arial,sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace;--serif:"Bodoni Moda",Georgia,serif}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--paper);color:var(--ink);font:400 13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+body{width:1440px}
+::selection{background:var(--amber-tint)}:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+button{font:inherit;cursor:pointer}
+a{color:inherit;text-underline-offset:3px}
+.mono{font:500 11.5px var(--mono);color:var(--mute)}
+
+/* the bar, as the home prototype draws it */
+.bar{height:56px;background:var(--ink);color:#fff;display:flex;align-items:center;gap:18px;padding:0 20px}
+.bar b{font-size:16px}.crumb{color:#b8b8bd;font-weight:600}.crumb i{color:#fff;font-style:normal}
+.tabs{display:flex;gap:2px;margin-left:16px}.tabs span{padding:6px 12px;border-radius:5px;color:#b8b8bd;font-weight:600}.tabs .on{background:var(--raised);color:#fff}
+.pill{height:30px;padding:0 12px;border-radius:99px;border:1px solid var(--edge);background:var(--raised);display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:#5fb48a}
+.seg{margin-left:auto;display:flex;background:var(--raised);border-radius:8px;padding:3px}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg label{color:#d6d6da;padding:5px 12px;border-radius:6px;cursor:pointer;font-weight:600;font-size:12.5px}
+.seg input:checked+label{background:#fff;color:var(--ink)}
+.seg input:focus-visible+label{outline:2px solid var(--amber);outline-offset:2px}
+.seg small{color:var(--imute);font-size:11px;margin-right:4px;align-self:center;padding-left:8px}
+
+/* the home around the section: the end of Needs a person above, Milestones below */
+.ctx{padding:18px 40px 0;opacity:.45}
+.ctx h2,.sup h2{font-size:15px;font-weight:700}
+.ctx h2 span,.sup h2 span{margin-left:8px;font-size:12px;font-weight:600;color:var(--mute)}
+.ctx .stub{margin-top:8px;height:44px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+
+.sup{padding:22px 40px 0}
+.head{display:flex;align-items:center;justify-content:space-between;gap:6px 24px;margin-bottom:8px;min-height:30px}
+.ctl{display:flex;align-items:center;gap:10px}
+.st{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border:1px solid var(--line);border-radius:99px;font-size:12px;font-weight:700}
+.st i{width:8px;height:8px;border-radius:50%}
+.st.run{border-color:#bcd6c6;background:var(--done-tint);color:var(--done)}.st.run i{background:var(--done)}
+.st.idle{border-color:var(--line);background:var(--panel);color:var(--ink)}.st.idle i{background:var(--done)}
+.st.paused{border-color:#ecd9a8;background:var(--amber-tint);color:var(--amber-ink)}.st.paused i{background:var(--amber)}
+.st.down{border-color:#e9b8b3;background:var(--alert-tint);color:var(--alert-ink)}.st.down i{background:var(--alert)}
+.by{font-size:12px;color:var(--mute);font-variant-numeric:tabular-nums}
+.btn{height:28px;padding:0 14px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font-size:12px;font-weight:700;display:inline-flex;align-items:center;white-space:nowrap}
+.btn:hover{border-color:var(--ink)}
+.btn.go{border-color:var(--done);background:var(--done);color:#fff}.btn.go:hover{background:#255a3f}
+.name{font:500 12px var(--mono);color:var(--ink)}
+.note{margin:-2px 0 8px;font-size:12.5px;color:var(--mute);max-width:90ch}
+.note.paused{color:var(--amber-ink)}.note.down{color:var(--alert-ink)}
+
+/* the actions: one ruled list in a well, the newest first, bounded */
+.well{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:0 16px}
+.act{display:grid;grid-template-columns:72px 1fr auto;column-gap:14px;padding:10px 0;border-bottom:1px solid var(--hair)}
+.act time{font:600 12px var(--sans);color:var(--mute);font-variant-numeric:tabular-nums;padding-top:1px}
+.act time small{display:block;font-weight:500;font-size:11px}
+.what{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;min-width:0}
+.what b{font-weight:700}
+.what .story{font-weight:600;text-decoration:underline;text-decoration-color:var(--line)}
+.what .story:hover{text-decoration-color:var(--ink)}
+.what .ext{font:500 11.5px var(--mono);display:inline-flex;align-items:center;gap:3px}
+.what .ext svg{width:11px;height:11px}
+.res{align-self:start;padding:0 6px;border:1px solid var(--line);border-radius:3px;font-size:10.5px;font-weight:700;line-height:17px;letter-spacing:.04em;text-transform:uppercase}
+.res.ok{border-color:#bcd6c6;background:var(--done-tint);color:var(--done)}
+.res.refused{border-color:#ecd9a8;background:var(--amber-tint);color:var(--amber-ink)}
+.res.failed{border-color:#e9b8b3;background:var(--alert-tint);color:var(--alert-ink)}
+.why{grid-column:2/4;margin-top:3px;color:var(--amber-ink);font-weight:600}
+.why code{font:500 11.5px var(--mono)}
+details.ev{grid-column:2/4;margin-top:3px;color:var(--mute)}
+details.ev summary{list-style:none;cursor:pointer;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:150ch}
+details.ev summary::-webkit-details-marker{display:none}
+details.ev summary b{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;margin-right:8px}
+details.ev[open] summary{display:block;-webkit-line-clamp:none;color:var(--ink)}
+details.ev summary:hover{color:var(--ink)}
+details.ev a{color:var(--ink)}
+.foot{display:flex;align-items:center;gap:12px;padding:9px 0 11px;border-top:1px solid var(--line);color:var(--mute);font-size:12px}
+.foot .btn{height:26px}
+
+/* the states the switch shows */
+.s-paused,.s-down,.s-two{display:none}
+body:has(#st-paused:checked) .s-run,body:has(#st-down:checked) .s-run,body:has(#st-two:checked) .s-run{display:none}
+body:has(#st-paused:checked) .s-paused{display:flex}
+body:has(#st-paused:checked) p.s-paused{display:block}
+body:has(#st-down:checked) .s-down{display:flex}
+body:has(#st-down:checked) p.s-down{display:block}
+body:has(#st-two:checked) .s-two{display:flex}
+
+/* the story card, as the graph's right pane draws it */
+.frame{margin:34px 40px 40px;display:grid;grid-template-columns:1fr 540px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--strip)}
+.frame .graph{position:relative;padding:20px 24px;color:var(--mute)}
+.frame .graph p{font:italic 400 17px var(--serif)}
+.gnode{position:absolute;left:140px;top:120px;width:232px;border:1.5px solid var(--amber);border-radius:6px;background:var(--amber-tint);padding:9px 12px;box-shadow:0 0 0 4px rgba(201,138,26,.18),0 10px 24px -12px rgba(20,22,26,.4)}
+.gnode .mono{font-size:10.5px}.gnode b{display:block;color:var(--ink);font-size:14px;margin-top:2px}
+.card{background:var(--panel);border-left:1px solid var(--line);padding:20px 22px 22px}
+.card .mono{font-size:11px}
+.card h3{font-size:22px;font-weight:700;letter-spacing:-.015em;line-height:1.15;margin:6px 0 10px}
+.chips{display:flex;gap:6px}.chip{font-size:11.5px;font-weight:700;padding:2px 9px;border:1px solid var(--line);border-radius:99px}
+.chip.a{background:var(--amber-tint);border-color:#ecd9a8;color:var(--amber-ink)}
+.box{margin-top:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:10px 14px 0}
+.box>h4{display:flex;align-items:baseline;gap:8px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.box>h4 span{text-transform:none;letter-spacing:0;font-weight:600;margin-left:auto}
+.box .act{grid-template-columns:52px 1fr auto;column-gap:10px}
+.act:has(+.foot){border-bottom:0}
+.legend{margin:10px 40px 0;color:var(--mute);font-size:12px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head>
+<body>
+<div class="bar"><b>Plan workbench</b><span class="crumb">Projects &rsaquo; <i>ortus-nova-specs</i></span>
+<div class="tabs"><span class="on">Home</span><span>Graph</span><span>Workers</span></div>
+<span class="pill"><span class="dot"></span>Sortie · 1 running</span>
+<div class="seg" role="radiogroup" aria-label="Example state"><small>example</small>
+<input type="radio" name="st" id="st-run" checked><label for="st-run">Running</label>
+<input type="radio" name="st" id="st-paused"><label for="st-paused">Paused</label>
+<input type="radio" name="st" id="st-down"><label for="st-down">Unavailable</label>
+<input type="radio" name="st" id="st-two"><label for="st-two">Two Sorties</label>
+</div></div>
+
+<div class="ctx"><h2>Needs a person<span>by what you do</span></h2><div class="stub"></div></div>
+
+<section class="sup" aria-labelledby="sup-h">
+  <div class="head">
+    <h2 id="sup-h">Supervisor<span>Sortie's own agent: what it did to the runs, and what it was refused</span></h2>
+    <div class="ctl s-run"><span class="st run"><i></i>Running</span><button class="btn" type="button">Pause</button></div>
+    <div class="ctl s-paused"><span class="st paused"><i></i>Paused</span><span class="by">by Local operator · since 18:07</span><button class="btn go" type="button">Resume</button></div>
+    <div class="ctl s-down"><span class="st down"><i></i>Unavailable</span><button class="btn" type="button">Pause</button></div>
+    <div class="ctl s-two" style="flex-direction:column;align-items:flex-end;gap:6px">
+      <div class="ctl"><span class="name">p1</span><span class="st run"><i></i>Running</span><button class="btn" type="button">Pause</button></div>
+      <div class="ctl"><span class="name">taichi</span><span class="st paused"><i></i>Paused</span><span class="by">by brian · since 17:40</span><button class="btn go" type="button">Resume</button></div>
+    </div>
+  </div>
+  <p class="note paused s-paused">It takes no action until someone resumes it.</p>
+  <p class="note down s-down">Sortie says: the supervisor's agent command exited before its session started (example reason).</p>
+
+  <div class="well">
+    <div class="act"><time datetime="2026-11-04T01:06:46Z" title="2026-11-03 18:06:46">18:06</time>
+      <div class="what"><b>Asked a person</b><a class="story" href="#">kit-reads-homelab-egress</a><span class="mono">ONS-20</span></div>
+      <span class="res ok">done</span>
+      <details class="ev"><summary><b>Evidence</b>Forge: PR #111 is OPEN, draft, MERGEABLE, head b3f69080; all 6 CI check runs SUCCESS on that head (<a href="#">actions/runs/41749803211</a>); commit status live-proof is FAILURE. The only live-proof-result comment (<a href="#">#111 comment</a>) records Result: unproven at b3f69080: pre-deploy checks passed (edge tests, test-homelab-egress.sh 12/12, a rebuilt edge+nono chain against homelab's real egress-hosts.yaml), but the row 'Live: homelab job on taichi after the kit deploys this branch' was not run, because the live kit on p1 deploys only origin/main.</summary></details>
+    </div>
+    <div class="act"><time datetime="2026-11-04T01:00:18Z" title="2026-11-03 18:00:18">18:00</time>
+      <div class="what"><b>Requested a live proof</b><a class="story" href="#">kit-reads-homelab-egress</a><span class="mono">ONS-20</span><a class="ext" href="#">ortusnova/agentic-orchestration#111<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5"/></svg></a></div>
+      <span class="res ok">done</span>
+      <details class="ev"><summary><b>Evidence</b>Forge: <a href="#">pull/111</a> is OPEN, not draft, head b3f6908, MERGEABLE, all 6 checks SUCCESS on that head, and it has no comments, so no live-proof-result is recorded at its head; its body says "Not proved: an actual homelab job on taichi after the kit deploys." Sortie criteria_verdicts for ONS-20: criterion 1 met; criterion 2 is live-proof.</summary></details>
+    </div>
+    <div class="act"><time datetime="2026-11-04T01:00:17Z" title="2026-11-03 18:00:17">18:00</time>
+      <div class="what"><b>Marked the pull request a draft</b><a class="story" href="#">kit-reads-homelab-egress</a><span class="mono">ONS-20</span><a class="ext" href="#">ortusnova/agentic-orchestration#111<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5"/></svg></a></div>
+      <span class="res ok">done</span>
+      <details class="ev"><summary><b>Evidence</b>Forge: <a href="#">pull/111</a> is OPEN, not draft, head b3f6908, MERGEABLE, all 6 checks SUCCESS on that head, and it has no comments, so no live-proof-result is recorded at its head.</summary></details>
+    </div>
+    <div class="act"><time datetime="2026-11-04T00:58:44Z" title="2026-11-03 17:58:44">17:58</time>
+      <div class="what"><b>Asked a person</b><a class="story" href="#">control-plane-images</a><span class="mono">ONS-77</span></div>
+      <span class="res ok">done</span>
+      <details class="ev"><summary><b>Evidence</b><a href="#">agentic-orchestration/pull/69</a> (gh pr view: draft, head 951bea6f, all checks success; live-proof-result comment 2026-11-04T00:24:26Z Result: unproven); state API /api/v1/ONS-77 parked agent_blocked at 2026-11-04T00:24:47Z.</summary></details>
+    </div>
+    <div class="act"><time datetime="2026-11-04T00:58:33Z" title="2026-11-03 17:58:33">17:58</time>
+      <div class="what"><b>Marked the pull request a draft</b><a class="story" href="#">health-checks</a><span class="mono">ONS-70</span><a class="ext" href="#">ortusnova/sortie#58<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5"/></svg></a></div>
+      <span class="res ok">done</span>
+      <details class="ev"><summary><b>Evidence</b><a href="#">sortie/pull/58</a>: open, not draft, head f077b9e, MERGEABLE, CI Test still in progress. The last review of ONS-70 recorded criterion 2 'The kit's deploy state is read from a file the kit writes' unsettled; the kit writer is filed as ONS-112; this PR must not merge until it lands.</summary></details>
+    </div>
+    <div class="act"><time datetime="2026-11-04T00:31:00Z" title="2026-11-03 17:31:00">17:31</time>
+      <div class="what"><b>Tried to start a fix run</b><a class="story" href="#">run-mirror-cause</a><span class="mono">ONS-39</span></div>
+      <span class="res refused">rejected</span>
+      <p class="why">Sortie: <code>no_pull_request</code> Sortie watches no pull request of issue ONS-39</p>
+      <details class="ev"><summary><b>Evidence</b>Forge: <a href="#">homelab/pull/155</a> OPEN, MERGEABLE, head 8203052; commits 85a2569, 88e35c3, fc7d77d, 8203052. Live-proof comment: Result unproven at fc7d77d, the kept evidence was not mounted on the worker.</summary></details>
+    </div>
+    <div class="foot"><span>The 6 newest of 31 on this project's stories</span><button class="btn" type="button">Show all 31</button></div>
+  </div>
+</section>
+
+<div class="ctx" style="padding-top:26px"><h2>Milestones<span>stories, agent tasks and person tasks are counted apart, never summed</span></h2><div class="stub"></div></div>
+
+<p class="legend">Beside the story: the graph's story card for ONS-39, with the supervisor's actions on it under its question and run state.</p>
+<div class="frame">
+  <div class="graph"><p>in flight</p><div class="gnode"><span class="mono">ONS-39 · IN PROGRESS</span><b>run-mirror-cause</b></div></div>
+  <div class="card">
+    <span class="mono">Story · ONS-39 · open-issues/run-mirror-cause</span>
+    <h3>homelab: the cause of the emptied run mirror, from its kept evidence</h3>
+    <div class="chips"><span class="chip a">In Progress</span><span class="chip">review: a person</span></div>
+    <div class="box">
+      <h4>The supervisor<span>8 actions</span></h4>
+      <div class="act"><time title="2026-11-03 17:48:01">17:48</time>
+        <div class="what"><b>Requested a live proof</b></div><span class="res ok">done</span>
+        <details class="ev"><summary><b>Evidence</b>Re-run of the live proof of ONS-39 criterion 1. The first job (action 14, result unproven at fc7d77d) could not read the kept evidence: no machine mounted it. Since agentic-orchestration#122 every homelab job has taichi's open-issues folder read-only.</summary></details>
+      </div>
+      <div class="act"><time title="2026-11-03 17:43">17:43</time>
+        <div class="what"><b>Asked a person</b><a class="ext" href="#">ortusnova/homelab#155<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 2H2v8h8V7M7 2h3v3M10 2 5.5 6.5"/></svg></a></div><span class="res ok">done</span>
+        <details class="ev"><summary><b>Evidence</b>Forge: <a href="#">homelab/pull/155</a> OPEN, MERGEABLE, head 8203052; checks: static FAILURE (billing annotation, job not started), live-proof status failure 'unproven at fc7d77d'.</summary></details>
+      </div>
+      <div class="act"><time title="2026-11-03 17:31">17:31</time>
+        <div class="what"><b>Tried to ask a person</b></div><span class="res refused">rejected</span>
+        <p class="why">Sortie: <code>running</code> issue ONS-39 has a running worker</p>
+        <details class="ev"><summary><b>Evidence</b>GitHub did not start the homelab CI job 'static' on PR homelab#155 heads fc7d77d and 8203052; both check-run annotations say the job was not started because recent account payments have failed.</summary></details>
+      </div>
+      <div class="foot"><span>The 3 newest</span><button class="btn" type="button">Show all 8</button></div>
+    </div>
+  </div>
+</div>
+</body></html>
