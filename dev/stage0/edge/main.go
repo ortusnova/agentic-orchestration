@@ -18,15 +18,12 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) > 1 && os.Args[1] == "homelab-profile" {
-		return homelabProfile(os.Args[2:])
-	}
 	cfgPath := flag.String("config", "", "the edge's configuration file (JSON)")
 	debug := flag.Bool("debug", false, "also log each admitted flow request")
 	check := flag.Bool("check", false, "check the configuration and the files it names, then exit")
 	flag.Parse()
 	if *cfgPath == "" {
-		return fmt.Errorf("usage: stage0-edge -config FILE, or stage0-edge homelab-profile -base FILE -hosts FILE -out FILE")
+		return fmt.Errorf("usage: stage0-edge -config FILE")
 	}
 	level := slog.LevelInfo
 	if *debug {

@@ -154,8 +154,6 @@ STAGE0_NONO_PORT=7690
 STAGE0_EDGE_WORKER_PORT=7700
 # The live-proof nono, the egress of a live-proof job that runs (README.md).
 STAGE0_NONO_LIVE_PROOF_PORT=7691
-# The homelab nono, the egress of homelab jobs: the hosts homelab declares (README.md).
-STAGE0_NONO_HOMELAB_PORT=7692
 # The operator's channel for every question (README.md): slack, discord, telegram or
 # webhook, with its credential in \$STAGE0_HOME/notify-credential, mode 0600; and
 # where people reach the workbench, for the link in each question.
@@ -332,15 +330,6 @@ say "Building the stage-1 edge and stage0-live-proofs, and installing nono $NONO
 (cd "$KIT/edge" && go build -o "$STAGE0_HOME/bin/stage0-edge" .)
 (cd "$KIT/live-proofs" && go build -o "$STAGE0_HOME/bin/stage0-live-proofs" .)
 nono_install "$STAGE0_HOME/bin" || die "could not install nono $NONO_VERSION"
-# homelab jobs reach only the hosts homelab declares, at the commit of the
-# kit's homelab worktree (homelab-egress.sh); a missing or malformed list
-# stops here, before any unit restarts.
-# shellcheck source=homelab-inputs.sh
-. "$KIT/homelab-inputs.sh"
-# shellcheck source=homelab-egress.sh
-. "$KIT/homelab-egress.sh"
-homelab_worktree "${STAGE0_HOMELAB_SRC:-}"
-homelab_egress_profile "$STAGE0_HOME/egress-profile-homelab.json"
 
 say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench" && uv sync -q)
@@ -402,6 +391,8 @@ build_pack
 STAGE0_EGRESS_CA=$STAGE0_HOME/egress-ca/ca.crt
 # p1 takes homelab jobs only with homelab's dev host here (STAGE0_HOMELAB_SRC).
 if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
+  # shellcheck source=homelab-inputs.sh
+  . "$KIT/homelab-inputs.sh"
   homelab_inputs
 fi
 render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "http://127.0.0.1:$STAGE0_EDGE_WORKER_PORT" "$STAGE0_EGRESS_CA"
@@ -425,7 +416,7 @@ mkdir -p "$UNITS"
 units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-token.service ortus-stage0-token.timer
   ortus-stage0-store.service ortus-stage0-store.timer
   ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
-  ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-nono-homelab.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
+  ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
   ortus-stage0-edge.service ortus-stage0-worker-tunnel@.service ortus-stage0-worker.service)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
@@ -441,7 +432,7 @@ else
   systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
-  ortus-stage0-nono-live-proof.service ortus-stage0-nono-homelab.service ortus-stage0-edge.service ortus-stage0-worker.service
+  ortus-stage0-nono-live-proof.service ortus-stage0-edge.service ortus-stage0-worker.service
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
@@ -463,17 +454,13 @@ restart_changed ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stag
 # binary, which Go stamps with the kit's commit) on egress-live-proof.json.
 restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/egress-live-proof.json" \
   "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
-# The homelab nono restarts when homelab's list changed: a homelab job that
-# starts after it may reach a host homelab added.
-restart_changed ortus-stage0-nono-homelab.service "${nono_inputs[@]}" "$STAGE0_HOME/egress-profile-homelab.json" \
-  "$UNITS/ortus-stage0-nono-homelab.service"
 restart_changed ortus-stage0-edge.service "$KIT/edge" "$STAGE0_HOME/edge.json" "$UNITS/ortus-stage0-edge.service"
 for name in $(tunnel_workers); do systemctl --user enable -q --now "ortus-stage0-worker-tunnel@$name.service"; done
 restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
-for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-nono-homelab ortus-stage0-edge ortus-stage0-worker; do
+for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-edge ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
 say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, edge for $(worker_names | wc -l) worker(s), p1's own and $(tunnel_workers | wc -l) worker host(s) (dev/stage0/worker-host.sh list)"
