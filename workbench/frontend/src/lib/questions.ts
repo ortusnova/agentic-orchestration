@@ -1,9 +1,11 @@
 /** The questions agents ask people, as every view of a project shows them (agent-platform/agent-questions). */
 import type { MergedGraph } from "./types";
 
-/** How many of the project's stories wait on an answer. */
+/** How many questions wait on a person: the stories that wait on an answer,
+ * and the platform faults only a person can clear. */
 export function openQuestions(doc: MergedGraph): number {
-  return doc.nodes.filter((n) => n.kind === "story" && n.question).length;
+  const faults = doc.home && !doc.home.error ? (doc.home.faults?.length ?? 0) : 0;
+  return doc.nodes.filter((n) => n.kind === "story" && n.question).length + faults;
 }
 
 /** "1 question", "2 questions". */

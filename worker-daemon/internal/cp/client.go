@@ -199,6 +199,29 @@ func (c *Client) Heartbeat(ctx context.Context, job string, attempt int, beat pr
 	return protocol.Lease{}, refusal("heartbeat", status, b)
 }
 
+// Resume takes an attempt's offer again, with new flow tokens, as a
+// daemon that restarted needs it: it keeps no token at rest. A 404 is a
+// control plane that cannot resume an attempt.
+func (c *Client) Resume(ctx context.Context, job string, attempt int) (*protocol.Offer, error) {
+	status, b, err := c.do(ctx, "resume", protocol.AttemptPath(job, attempt, "resume"), nil)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case http.StatusOK:
+		var o protocol.Offer
+		if err := json.Unmarshal(b, &o); err != nil {
+			return nil, fmt.Errorf("cp: resume: unreadable offer: %w", err)
+		}
+		return &o, nil
+	case http.StatusConflict:
+		return nil, ErrLeaseLost
+	case http.StatusGone:
+		return nil, fmt.Errorf("%w: %w", ErrJobGone, refusal("resume", status, b))
+	}
+	return nil, refusal("resume", status, b)
+}
+
 // Report ends an attempt with its outcome.
 func (c *Client) Report(ctx context.Context, job string, attempt int, r protocol.Report) error {
 	status, b, err := c.do(ctx, "report", protocol.AttemptPath(job, attempt, "report"), r)
