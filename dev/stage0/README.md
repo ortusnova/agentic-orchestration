@@ -478,7 +478,7 @@ user units in front of its own Sortie rather than the whole compose project.
 
 | Part | Where |
 | --- | --- |
-| Pomerium | unit `ortus-stage0-pomerium` (`run-pomerium.sh`): the image `control-plane/compose.yaml` pins by digest, under rootless podman on the host's network, on the port of `STAGE0_CP_PUBLIC_URL` (default `https://<p1's FQDN>:8443`, written to `stage0.env` on the first run; its host must resolve to p1 on every worker host). Its configuration, `$STAGE0_HOME/control-plane/pomerium/config.yaml`, is rendered by `cpctl` from the worker list; its certificate and key enter its container as podman secrets |
+| Pomerium | unit `ortus-stage0-pomerium` (`run-pomerium.sh`): the image `control-plane/compose.yaml` pins by digest, under rootless podman on the host's network, on the port of `STAGE0_CP_PUBLIC_URL` (default `https://<p1's FQDN>:8443`, written to `stage0.env` on the first run; its host must resolve to p1 on every worker host, and p1's firewall must admit the port from each of them). Its configuration, `$STAGE0_HOME/control-plane/pomerium/config.yaml`, is rendered by `cpctl` from the worker list; its certificate and key enter its container as podman secrets |
 | Egress gate | unit `ortus-stage0-egress-gate` (`run-egress-gate.sh`), `$STAGE0_HOME/bin/cp-egress` built from `control-plane/cmd/cp-egress`, on `127.0.0.1:7692` (`STAGE0_EGRESS_GATE_PORT`), behind Pomerium's egress route |
 | nono | unit `ortus-stage0-nono`, `nono proxy` on `127.0.0.1:7690` (`STAGE0_NONO_PORT`), with the control plane's `control-plane/nono/egress-profile.json`, the compose project's too. nono is pinned by the SHA-256 of its release archive in `nono-version.sh`; `stage0.sh` installs it into `$STAGE0_HOME/bin` and refuses any other archive. `make check-latest` fails once a newer stable release is out |
 | Live-proof nono | unit `ortus-stage0-nono-live-proof` on `127.0.0.1:7691` (`STAGE0_NONO_LIVE_PROOF_PORT`); see [Live proofs](#live-proofs) |
@@ -527,8 +527,15 @@ The workflow names the flows by Pomerium's URL:
 
 `stage0.sh` stops and removes the stage-1 edge's units on a host that still
 has them (`retire-edge.sh`): `ortus-stage0-edge` and each
-`ortus-stage0-worker-tunnel@<worker>`. The edge's state in the stage-0 home
-(`edge.json`, `workers/`) is no longer read; delete it.
+`ortus-stage0-worker-tunnel@<worker>`. Before that, it gives each worker
+host the edge served (`$STAGE0_HOME/workers/<worker>.env` with its SSH
+destination) its certificate with `worker-host.sh add`, unless the worker
+list names it already; a host it cannot reach stops the run with the edge
+still up. On the worker host, the deploy timer's `stage0.sh` from the same
+merge waits for the files `add` copies, up to `STAGE0_WORKER_CERT_WAIT`
+seconds (default 1800; a `stage0.sh` run by hand does not wait), then dials
+Pomerium. The edge's state (`edge.json`, `workers/`) stays, unread, so a
+revert to the edge finds its worker hosts again.
 
 ### Add a worker host
 

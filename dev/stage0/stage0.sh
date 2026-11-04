@@ -188,6 +188,19 @@ STAGE0_PACK=${STAGE0_PACK:-$STAGE0_HOME/stage0.smolmachine}
 # worker-host.sh add (control-plane-url), unless its stage0.env says
 # otherwise.
 WORKER_HOST_CONFIG=$HOME/.config/ortus-nova
+# A worker host that the stage-1 edge served gets its certificate from p1's
+# stage0.sh, which runs from the same merge (carry_edge_workers in
+# retire-edge.sh). The live kit, which the deploy timer runs, waits for it
+# (STAGE0_WORKER_CERT_WAIT seconds); a kit run by hand does not.
+if [[ $STAGE0_PROFILE == worker && -z ${STAGE0_CP_PUBLIC_URL:-} ]]; then
+  cert_wait=${STAGE0_WORKER_CERT_WAIT:-0}
+  [[ $ROOT == "$LIVE" ]] && cert_wait=${STAGE0_WORKER_CERT_WAIT:-1800}
+  [[ $cert_wait =~ ^[0-9]+$ ]] || die "STAGE0_WORKER_CERT_WAIT is $cert_wait; want seconds"
+  # shellcheck source=retire-edge.sh
+  . "$KIT/retire-edge.sh"
+  wait_for_worker_files "$WORKER_HOST_CONFIG" "$cert_wait" \
+    || die "p1 has not given this host its certificate in $cert_wait s ($WORKER_HOST_CONFIG): on p1, run dev/stage0/worker-host.sh add $(hostname -s)"
+fi
 if [[ -z ${STAGE0_CP_PUBLIC_URL:-} ]]; then
   if [[ $STAGE0_PROFILE == worker ]]; then
     STAGE0_CP_PUBLIC_URL=$(cat "$WORKER_HOST_CONFIG/control-plane-url" 2>/dev/null || true)
@@ -420,6 +433,14 @@ fi
 [[ -n $(pomerium_image) ]] || die "control-plane/compose.yaml pins no Pomerium image"
 front_init || die "could not set up the control plane's CA and Pomerium's configuration in $STAGE0_CP_HOME"
 issue_local_worker "$STAGE0_WORKER_NAME" || die "could not issue p1's own worker its certificate"
+# Each worker host the stage-1 edge served gets its certificate now, before
+# the edge and its tunnels are retired below: a host that cannot be reached
+# stops this run with the edge still up.
+# shellcheck source=retire-edge.sh
+. "$KIT/retire-edge.sh"
+carried=$(carry_edge_workers "$STAGE0_HOME/workers" "$KIT/worker-host.sh" add) \
+  || die "could not give each worker host of the stage-1 edge its certificate; the edge stays until it can"
+for name in $carried; do say "Gave worker host $name its certificate: it dials Pomerium from its next stage0.sh"; done
 mkdir -p "$STAGE0_LIVE_PROOFS"
 
 build_pack
@@ -465,8 +486,6 @@ for unit in "${units[@]}"; do
 done
 # The stage-1 edge and its tunnels are gone: every worker reaches Sortie
 # through Pomerium (retire-edge.sh, design D18).
-# shellcheck source=retire-edge.sh
-. "$KIT/retire-edge.sh"
 for unit in $(retire_edge "$UNITS"); do say "Retired $unit: every worker reaches Sortie through Pomerium now"; done
 systemctl --user daemon-reload
 if [[ $deploy ]]; then

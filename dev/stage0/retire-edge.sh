@@ -27,3 +27,44 @@ retire_edge() {
     rm -f "${dir:?}/$unit"
   done
 }
+
+# carry_edge_workers DIR ADD...: give each worker host of the stage-1 edge
+# (DIR/NAME.env with WORKER_HOST, from the edge's worker-host.sh add) its
+# certificate from the control plane's CA, with ADD HOST NAME, unless the
+# worker list already names it. p1's own worker (LOCAL=1) has its own.
+# Prints each worker it added. DIR stays, so a revert to the edge finds it.
+carry_edge_workers() {
+  local dir=$1 env name host listed
+  shift
+  [[ -d $dir ]] || return 0
+  listed=$(front_workers) || return 1
+  for env in "$dir"/*.env; do
+    [[ -e $env ]] || continue
+    name=$(basename "$env" .env)
+    grep -qx 'LOCAL=1' "$env" && continue
+    host=$(sed -n 's/^WORKER_HOST=//p' "$env" | tail -n 1)
+    [[ -n $host ]] || continue
+    grep -qx "$name" <<< "$listed" && continue
+    "$@" "$host" "$name" > /dev/null || { echo "could not add worker $name ($host)" >&2; return 1; }
+    echo "$name"
+  done
+}
+
+# wait_for_worker_files DIR SECONDS: wait until DIR holds what p1's
+# worker-host.sh add copies (the certificate, its key, the CA, the egress
+# CA's certificate and, last, Pomerium's URL), checking every 10 s for at
+# most SECONDS.
+wait_for_worker_files() {
+  local dir=$1 left=$2 f missing
+  while :; do
+    missing=''
+    for f in cp-worker.crt cp-worker.key cp-ca.crt egress-ca.crt control-plane-url; do
+      [[ -s $dir/$f ]] || { missing=$f; break; }
+    done
+    [[ -z $missing ]] && return 0
+    ((left > 0)) || return 1
+    [[ $left == "$2" ]] && echo "stage0: waiting up to $2 s for p1 to give this host its certificate ($dir/$missing)" >&2
+    sleep "${STAGE0_WAIT_STEP:-10}"
+    left=$((left - ${STAGE0_WAIT_STEP:-10}))
+  done
+}

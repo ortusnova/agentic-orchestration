@@ -43,4 +43,43 @@ expect "Sortie's, nono's and the token timer's unit files are left" "$(cd "$unit
 retired=$(PATH=$fake:$PATH retire_edge "$unitdir")
 expect "a second run retires nothing" "$retired" ""
 expect "and disables nothing" "$(grep -c 'disable' "$fake/log" || true)" 0
+
+# Each worker host the edge served gets its certificate before the edge
+# goes (carry_edge_workers), once; p1's own worker is not a host.
+workers=$fake/workers
+mkdir -p "$workers"
+printf 'LOCAL=1\nEDGE_PORT=7700\n' > "$workers/p1.env"
+printf 'WORKER_HOST=brian@taichi\nEDGE_PORT=7701\nWORKER_PORT=7700\n' > "$workers/taichi.env"
+front_list="p1"
+front_workers() { echo "$front_list"; }
+# shellcheck disable=SC2329 # called by carry_edge_workers
+add() { echo "add $*" >> "$fake/adds"; }
+: > "$fake/adds"
+expect "taichi is added, by its SSH destination and name" "$(carry_edge_workers "$workers" add)" taichi
+expect "with worker-host.sh add HOST NAME" "$(cat "$fake/adds")" "add brian@taichi taichi"
+front_list=$'p1\ntaichi'
+: > "$fake/adds"
+expect "a listed worker is not added again" "$(carry_edge_workers "$workers" add)" ""
+expect "and add is not called" "$(cat "$fake/adds")" ""
+front_list="p1"
+# shellcheck disable=SC2329 # called by carry_edge_workers
+nope() { return 1; }
+carry_edge_workers "$workers" nope > /dev/null 2>&1 && st=0 || st=$?
+expect "a host that cannot be added fails the carry" "$st" 1
+expect "the edge's worker files stay, for a revert" "$(cd "$workers" && printf "%s " *)" "p1.env taichi.env "
+expect "no edge state is no work" "$(carry_edge_workers "$fake/none" add)" ""
+
+# A worker host waits for the files p1 copies to it.
+cfg=$fake/cfg
+mkdir -p "$cfg"
+STAGE0_WAIT_STEP=0 wait_for_worker_files "$cfg" 0 2> /dev/null && st=0 || st=$?
+expect "with none of them and no time left, it fails" "$st" 1
+for f in cp-worker.crt cp-worker.key cp-ca.crt egress-ca.crt control-plane-url; do echo x > "$cfg/$f"; done
+wait_for_worker_files "$cfg" 0 && st=0 || st=$?
+expect "with all of them, it goes on" "$st" 0
+rm "$cfg/control-plane-url"
+( sleep 1; echo https://p1:8443 > "$cfg/control-plane-url" ) &
+STAGE0_WAIT_STEP=1 wait_for_worker_files "$cfg" 5 2> /dev/null && st=0 || st=$?
+wait
+expect "it waits for Pomerium's URL, which p1 copies last" "$st" 0
 exit $failed
