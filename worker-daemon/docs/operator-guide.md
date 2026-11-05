@@ -192,16 +192,19 @@ lease every `heartbeat_ms`, and reports each attempt once. Every request
 carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 `smolvm`:
 
-1. It serves the job's two forwarders on Unix sockets in the job's
-   directory: **egress**, an HTTP proxy, and **mcp**, the tool server.
+1. It serves the job's forwarders on Unix sockets in the job's
+   directory: **egress**, an HTTP proxy, **mcp**, the tool server, and,
+   when the offer names a `telemetry` flow, **telemetry**, the OTLP
+   receiver (see [Telemetry](#telemetry)).
 2. It fetches the workspace seed from `{bundles}{run.seed_path}`, which
    is `/jobs/{job}/attempts/{attempt}/seed`.
 3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
-   `/run/worker`, the two sockets mounted with `--mount-socket`, and the
+   `/run/worker`, the sockets mounted with `--mount-socket`, and the
    image's host inputs, if this host configures any. It gives no
    credential binding. `socat` in the guest serves the sockets on guest
-   loopback, `127.0.0.1:47801` (egress) and `127.0.0.1:47802` (mcp). When
+   loopback, `127.0.0.1:47801` (egress), `127.0.0.1:47802` (mcp) and,
+   with a `telemetry` flow, `127.0.0.1:4318` (telemetry). When
    the offer has no `run.egress`, the machine gets no network flag or
    allowlist, so smolvm gives it no network and the forwards are its only
    way out. When it has one, the machine also gets the network of
@@ -216,19 +219,22 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
 5. It runs `run.command` with `run.args` in `/workspace`, with `run.env`
    plus `HTTPS_PROXY`/`HTTP_PROXY` (and lower-case forms) at the egress
    forwarder, `NO_PROXY=127.0.0.1,localhost` (and `no_proxy`), followed by
-   the hosts the machine's network allows directly, and `WORKER_MCP_URL` at the
-   mcp forwarder. The agent's standard input, output and error travel on
-   the `stdio` flow; its standard error also goes to the daemon's log when
-   it fails. When the control plane closes the agent's input (Sortie does
+   the hosts the machine's network allows directly, `WORKER_MCP_URL` at the
+   mcp forwarder, and, with a `telemetry` flow, the OTLP variables of
+   [Telemetry](#telemetry). The agent's standard input, output and error
+   travel on the `stdio` flow; its standard error also goes to the
+   daemon's log when it fails. When the control plane closes the agent's input (Sortie does
    when it stops the session), the agent's standard input closes.
 6. When the agent exits, it sends the exit status, the stream's last
-   frame. Then it runs the usage command and reports on `usage`, returns
-   the result on `bundles` (the issue branch's bundle and the agent's
+   frame. Then it runs the usage command and reports on `usage`, ships
+   the telemetry spool, for at most 30 seconds, returns the result on
+   `bundles` (the issue branch's bundle and the agent's
    `.sortie/pr.json`, `.sortie/status` and `.sortie/criteria.json`, each
    when the agent wrote it), keeps the machine's egress refusals when it
-   has a network, deletes the machine, and reports the outcome:
-   `succeeded` when the agent exited 0 and the result was returned. The
-   result always goes before the report. Usage goes before the result,
+   has a network, deletes the machine, and reports the outcome, with the
+   attempt's telemetry counts when it has a `telemetry` flow: `succeeded`
+   when the agent exited 0 and the result was returned. The result always
+   goes before the report. Usage and telemetry go before the result,
    because once Sortie has the result it finishes the attempt and closes
    its flows.
 
@@ -416,6 +422,7 @@ proxy. Paths are under the flow's URL:
 | `usage` | `POST /jobs/{job}/attempts/{attempt}` with `{"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "model", "measured"}`, the attempt's totals so far; `"measured": false` says that spend occurred and its amount is unknown. |
 | `egress` | An HTTP proxy that takes `CONNECT`; the daemon carries the guest's `CONNECT` tunnels to it, and each absolute-form request, such as a browser's for an `http://` address, inside a `CONNECT` tunnel to its host (port 80 unless it names one). Each `CONNECT` carries the job's egress token and `X-Sortie-Job`, the job's identifier, which the control plane logs beside a refusal. |
 | `mcp` | `/jobs/{job}/attempts/{attempt}/<path>` reaches the tool server of that attempt's own session, streamed both ways: a guest request for `/<path>` goes there. |
+| `telemetry` | Optional: only an offer that names it gets the OTLP receiver. `POST /jobs/{job}/attempts/{attempt}/v1/{signal}`, `{signal}` one of `traces`, `logs` and `metrics`, takes one OTLP/HTTP export request as the machine sent it, `application/x-protobuf` or `application/json` (uncompressed), with its resources stamped and its strings masked (see [Telemetry](#telemetry)). Any `2xx` takes it. `400`, `413`, `415` and `422` refuse it for good: it is dropped and counted. `410` releases the job, as on every flow. Any other answer, or none, is tried again, the oldest request first. |
 
 A `stdio` frame is one type byte, a four-byte big-endian payload length
 of at most 1 MiB, and the payload. The control plane sends `I` (the
@@ -449,6 +456,91 @@ carried), the daemon posts `"measured": false`, with zero counts: spend
 occurred, amount unknown, never a zero spend (design D14.1). Sortie
 records it as an unmeasured turn. A run that made no model request posts
 zero, `"measured": true`.
+
+### Telemetry
+
+When an offer names a `telemetry` flow (`agent-platform/session-telemetry`,
+design D3), the job's machine gets an OTLP/HTTP receiver that takes no
+credential, and the daemon ships what it receives to Sortie on that flow.
+Without the flow nothing listens: the machine gets no telemetry socket
+and the agent no OTLP variable. The offer's `run.telemetry` says how:
+
+```json
+"telemetry": {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+              "spool_bytes": 67108864, "dispatch_id": "d-42"}
+```
+
+| Member | Default | Meaning |
+|---|---|---|
+| `traceparent` | none | The W3C trace context of the attempt's span, given to the agent as `TRACEPARENT`, so a source that takes it nests its spans under the attempt. |
+| `spool_bytes` | `67108864` (64 MiB) | The bound of the attempt's spool on the host. |
+| `dispatch_id` | `run.env`'s `SORTIE_DISPATCH_ID` | The attempt's `sortie.dispatch.id`. |
+
+**The receiver.** It is a forward like egress and mcp: `socat` serves
+`127.0.0.1:4318`, OTLP/HTTP's own port, on the guest's loopback, through
+the socket `otlp.sock` in the job's directory (mode 0600), which only that
+attempt's machine is given. It takes `POST /v1/traces`, `/v1/logs` and
+`/v1/metrics`, in `application/x-protobuf` or `application/json`, plain
+or `Content-Encoding: gzip`, and ignores any `Authorization` the guest
+sends. It answers `200` at once (an empty message, or `{}` in JSON),
+whatever the flow does, so a slow or refusing flow never holds up the
+agent; a body that does not parse is answered `400`, another media type
+`415`, and a request larger than the spool `413`, each dropped and
+counted.
+
+**The agent's environment** gets, beside the variables above:
+
+| Variable | Value |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://127.0.0.1:4318` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` |
+| `OTEL_RESOURCE_ATTRIBUTES` | `run.env`'s value, if any, then `sortie.issue.identifier=<job.issue.identifier>,sortie.dispatch.id=<dispatch>,sortie.attempt=<attempt>`, each value percent-encoded |
+| `TRACEPARENT` | `run.telemetry.traceparent`, when the offer has one |
+
+These replace the same names in `run.env`. Setup scripts and the usage
+command get them too.
+
+**What leaves.** For each request the daemon:
+
+1. sets `sortie.issue.identifier`, `sortie.dispatch.id` and
+   `sortie.attempt` on every resource of the request, as string
+   attributes, over any value the guest gave them, and adds a resource
+   where the request has none, so every span, log record and metric of
+   the attempt carries the attempt it came from;
+2. masks every flow token the daemon holds for the job (the tokens a
+   resumed job is given, after a restart of the daemon) in every string of the request, by the broker's
+   rules (`acp-broker/telemetry-masking`): each occurrence becomes
+   `[redacted]`, a value shorter than 8 bytes is not masked, the token of
+   `Bearer <token>` is masked on its own, and overlapping occurrences
+   become one marker. A length-delimited protobuf field the daemon does
+   not know as a message is masked as text, so no field carries a token
+   out;
+3. spools it, rewritten, in the daemon's memory on the host, within
+   `spool_bytes`; a request that does not fit drops the oldest first.
+
+A shipper sends the spool on the flow, the oldest request first, one at
+a time, each with the job's telemetry token and
+`X-Sortie-Worker-Protocol: 1`, each try bounded by 10 seconds. While the
+flow refuses, as when the control plane is down for a minute, the spool
+stays within its bound and the shipper tries again, waiting up to 2
+seconds between tries; it ships the spool once the flow answers.
+
+**The bound.** After the agent exits and usage is reported, the daemon
+waits for the spool to ship, for at most 30 seconds, then returns the
+result whatever is left: a refusing flow never holds the agent, and
+never holds the result longer than that. When the attempt ends, what is
+still spooled is dropped. The report counts it all:
+
+```json
+{"outcome": "succeeded", "reason": "…", "machine": "deleted",
+ "telemetry": {"received": 120, "shipped": 117, "dropped": 3, "dropped_bytes": 81234}}
+```
+
+`dropped` counts what the full spool dropped, what the flow refused for
+good, what the receiver refused, and what was still spooled at the end;
+a report without a `telemetry` flow has no `telemetry` member. The spool
+is kept in memory only: a daemon that stops, leaving the job for its next
+start, drops it unshipped, and the adopted job starts a new one.
 
 ### What the workbench sees of the worker
 
@@ -504,10 +596,16 @@ On macOS, a launchd agent with `ProgramArguments` `worker-daemon run
 ## Test
 
 `make -C worker-daemon test` runs every scenario of
-`agent-platform/worker-daemon` against the fake control plane in
-`internal/fakecp`, which serves protocol 1 and the five flows on the
-wire as Sortie's data plane does, with machines from
-`internal/machine/fakemachine`. The smolvm end-to-end test,
+`agent-platform/worker-daemon`, and those of
+`agent-platform/session-telemetry` the daemon serves, against the fake
+control plane in `internal/fakecp`, which serves protocol 1, the five
+flows and a job's telemetry flow on the wire as Sortie's data plane does,
+with machines from `internal/machine/fakemachine`. The telemetry tests
+(`make -C worker-daemon test RUN=Telemetry`) send OTLP to the receiver
+as the guest's SDK does, and cover each signal, the stamping, a token in
+a span's attribute, a refusing flow then a recovering one, a full spool,
+the flush before the result and its bound, and a job with no telemetry
+flow. The smolvm end-to-end test,
 `TestSmolvmEndToEnd`, runs where `/dev/kvm` exists, smolvm is on `PATH`
 and `WORKER_DAEMON_E2E_PACK` names a pack with `sh`, `git` and `socat`;
 elsewhere it is skipped and says which of the three is missing:

@@ -1,8 +1,9 @@
 // Package fakecp is a fake control plane for tests. It serves worker
 // API protocol 1 as Sortie does under environment.kind remote (the same
 // routes, bodies, header checks and 400, 401, 409 and 410 answers), and the
-// five data-plane flows of each job it offers, each behind that job's
-// flow token. It records every request in order.
+// five data-plane flows of each job it offers, and its telemetry flow
+// when the job has one, each behind that job's flow token. It records
+// every request in order.
 package fakecp
 
 import (
@@ -29,7 +30,7 @@ import (
 
 // Event is one thing the fake saw.
 type Event struct {
-	Kind    string // checkin, poll, heartbeat, report, seed, bundle, usage, stdio, egress, mcp
+	Kind    string // checkin, poll, heartbeat, report, seed, bundle, usage, stdio, egress, mcp, telemetry
 	Job     string
 	Attempt int
 	Status  int
@@ -59,6 +60,18 @@ type Job struct {
 	// fake ask a sortie-stdio/2 worker for the agent's .sortie files (S),
 	// as Sortie does after a turn; on the answer (F) it closes the input.
 	AskFilesAfter string
+	// TelemetryFlow names a telemetry flow in the offer; Run.Telemetry
+	// is served as run.telemetry.
+	TelemetryFlow bool
+}
+
+// TelemetryRequest is one OTLP request the worker shipped on the
+// telemetry flow.
+type TelemetryRequest struct {
+	Signal      string
+	ContentType string
+	Body        []byte
+	At          time.Time
 }
 
 type lease struct {
@@ -114,6 +127,10 @@ type attemptData struct {
 	usage  []protocol.Usage
 	// sortieFiles is the worker's answer to the files request.
 	sortieFiles map[string][]byte
+	telemetry   []TelemetryRequest
+	// refuseTelemetry, when not 0, is the status the telemetry flow
+	// answers.
+	refuseTelemetry int
 }
 
 // Result is what the worker returned on the bundles flow.
@@ -379,6 +396,61 @@ func (f *Fake) Usage(job string, attempt int) (protocol.Usage, bool) {
 	return us[len(us)-1], true
 }
 
+// Telemetry is every OTLP request the worker shipped for the attempt,
+// in order.
+func (f *Fake) Telemetry(job string, attempt int) []TelemetryRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.data(key(job, attempt)).telemetry)
+}
+
+// RefuseTelemetry makes the attempt's telemetry flow answer status to
+// every request, as a control plane that is down; 0 accepts again.
+func (f *Fake) RefuseTelemetry(job string, attempt, status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.data(key(job, attempt)).refuseTelemetry = status
+}
+
+// CloseInput sends the attempt's open stdio stream C, as Sortie does
+// when it stops the session.
+func (f *Fake) CloseInput(job string, attempt int) error {
+	f.mu.Lock()
+	c := f.data(key(job, attempt)).stream
+	f.mu.Unlock()
+	if c == nil {
+		return errors.New("fakecp: the attempt has no open stdio stream")
+	}
+	return c.WriteFrame(stdio.StdinClosed, nil)
+}
+
+// telemetry takes one OTLP request of POST /v1/{signal}, protobuf or
+// JSON, unless the attempt's flow is set to refuse.
+func (f *Fake) telemetry(w http.ResponseWriter, r *http.Request, job string, attempt int, signal string) {
+	b, _ := io.ReadAll(r.Body)
+	f.mu.Lock()
+	a := f.data(key(job, attempt))
+	refuse := a.refuseTelemetry
+	f.mu.Unlock()
+	if refuse != 0 {
+		problem(w, refuse, "unavailable", "the telemetry flow refuses")
+		f.record(Event{Kind: "telemetry", Job: job, Attempt: attempt, Status: refuse})
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	if ct != "application/x-protobuf" && ct != "application/json" {
+		problem(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "OTLP is application/x-protobuf or application/json")
+		f.record(Event{Kind: "telemetry", Job: job, Attempt: attempt, Status: http.StatusUnsupportedMediaType})
+		return
+	}
+	f.mu.Lock()
+	a.telemetry = append(a.telemetry, TelemetryRequest{Signal: signal, ContentType: ct, Body: b, At: time.Now()})
+	f.mu.Unlock()
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(http.StatusOK)
+	f.record(Event{Kind: "telemetry", Job: job, Attempt: attempt, Status: http.StatusOK, Body: b})
+}
+
 func reply(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -554,6 +626,26 @@ type wireOffer struct {
 	Flows map[string]map[string]string `json:"flows"`
 }
 
+// newFlows returns new tokens for the job's flows, and the flows as an
+// offer names them: the five, and telemetry when the job has it.
+func (f *Fake) newFlows(j Job) (map[string]string, map[string]map[string]string) {
+	toks := map[string]string{}
+	flowsOut := map[string]map[string]string{}
+	names := slices.Clone(protocol.Flows)
+	if j.TelemetryFlow {
+		names = append(names, protocol.FlowTelemetry)
+	}
+	for _, name := range names {
+		toks[name] = newToken()
+		u := f.Server.URL + "/flows/" + name
+		if name == protocol.FlowEgress {
+			u = f.Server.URL
+		}
+		flowsOut[name] = map[string]string{"url": u, "token": toks[name]}
+	}
+	return toks, flowsOut
+}
+
 func (f *Fake) poll(w http.ResponseWriter, id string) {
 	f.mu.Lock()
 	if _, ok := f.workers[id]; !ok {
@@ -572,16 +664,7 @@ func (f *Fake) poll(w http.ResponseWriter, id string) {
 	f.pending = f.pending[1:]
 	k := key(j.ID, j.Attempt)
 	f.jobs[k] = j
-	toks := map[string]string{}
-	flowsOut := map[string]map[string]string{}
-	for _, name := range protocol.Flows {
-		toks[name] = newToken()
-		u := f.Server.URL + "/flows/" + name
-		if name == protocol.FlowEgress {
-			u = f.Server.URL
-		}
-		flowsOut[name] = map[string]string{"url": u, "token": toks[name]}
-	}
+	toks, flowsOut := f.newFlows(j)
 	f.tokens[k] = toks
 	exp := time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
 	f.leases[k] = &lease{worker: id, expires: exp}
@@ -700,16 +783,7 @@ func (f *Fake) resume(w http.ResponseWriter, id, job string, attempt int) {
 	}
 	l.expires = time.Now().Add(time.Duration(f.LeaseMS) * time.Millisecond)
 	j := f.jobs[k]
-	toks := map[string]string{}
-	flowsOut := map[string]map[string]string{}
-	for _, name := range protocol.Flows {
-		toks[name] = newToken()
-		u := f.Server.URL + "/flows/" + name
-		if name == protocol.FlowEgress {
-			u = f.Server.URL
-		}
-		flowsOut[name] = map[string]string{"url": u, "token": toks[name]}
-	}
+	toks, flowsOut := f.newFlows(j)
 	f.tokens[k] = toks
 	exp := l.expires
 	f.mu.Unlock()
@@ -843,6 +917,8 @@ func (f *Fake) flow(w http.ResponseWriter, r *http.Request) {
 		f.usageReport(w, r, job, attempt)
 	case flow == protocol.FlowStdio && r.Method == http.MethodGet && rest == "":
 		f.stdio(w, r, job, attempt)
+	case flow == protocol.FlowTelemetry && r.Method == http.MethodPost && slices.Contains([]string{"v1/traces", "v1/logs", "v1/metrics"}, rest):
+		f.telemetry(w, r, job, attempt, strings.TrimPrefix(rest, "v1/"))
 	case flow == protocol.FlowMCP:
 		b, _ := io.ReadAll(r.Body)
 		reply(w, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "tool ok"}}}})
