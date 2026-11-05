@@ -15,6 +15,8 @@
 package orchestrator
 
 import (
+	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,7 @@ import (
 type kitHost struct {
 	t    *testing.T
 	home string
+	env  []string
 }
 
 // workerHostHome is a worker host's STAGE0_HOME under its own home, as
@@ -59,7 +62,7 @@ func newKitHosts(t *testing.T) (p1, taichi kitHost) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	p1 = kitHost{t: t, home: filepath.Join(dir, "p1")}
-	taichi = kitHost{t: t, home: filepath.Join(hosts, "taichi", workerHostHome)}
+	taichi = kitHost{t: t, home: filepath.Join(hosts, "taichi", workerHostHome), env: []string{"STAGE0_PROFILE=worker"}}
 	for _, h := range []kitHost{p1, taichi} {
 		if err := os.MkdirAll(h.home, 0o700); err != nil {
 			t.Fatal(err)
@@ -74,7 +77,7 @@ func newKitHosts(t *testing.T) (p1, taichi kitHost) {
 func (h kitHost) run(now time.Time, script string, args ...string) string {
 	h.t.Helper()
 	cmd := exec.Command("bash", append([]string{"-euo", "pipefail", "-c", `. "$STAGE0_KIT/deploy-state.sh"; ` + script, "kit"}, args...)...)
-	cmd.Env = append(os.Environ(), "STAGE0_HOME="+h.home)
+	cmd.Env = append(append(os.Environ(), h.env...), "STAGE0_HOME="+h.home)
 	if !now.IsZero() {
 		cmd.Env = append(cmd.Env, "STAGE0_NOW="+now.UTC().Format(time.RFC3339))
 	}
@@ -221,6 +224,74 @@ func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 	p1.run(time.Time{}, "deploy_host_remove taichi")
 	if got := strings.TrimSpace(p1.run(time.Time{}, "deploy_hosts_yaml")); got != "p1: "+p1.file() {
 		t.Errorf("hosts after worker-host.sh remove = %q, want p1 only", got)
+	}
+}
+
+// kitRepository is one member of the deploy state's repositories (design
+// D13), which this Sortie does not read yet.
+type kitRepository struct {
+	Branch string `json:"branch"`
+	Commit string `json:"commit"`
+}
+
+// kitRepositories reads the repositories the deploy state at path lists.
+func kitRepositories(t *testing.T, path string) map[string]kitRepository {
+	t.Helper()
+	raw, err := os.ReadFile(path) //nolint:gosec // the test's own file
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Repositories map[string]kitRepository `json:"repositories"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatalf("the deploy state at %s is not JSON: %v", path, err)
+	}
+	return f.Repositories
+}
+
+// Each host's deploy state lists every repository the host deploys: p1
+// the kit at the main commit it runs and Sortie at the plan-bench commit
+// of the Sortie it runs, taichi, which runs no Sortie, the kit only; p1's
+// copy of taichi's keeps the list. Sortie's internal/deploystate still
+// reads each file, with status, commit and main as before.
+func TestStage0_EachHostsDeployStateListsItsRepositories(t *testing.T) {
+	p1, taichi := newKitHosts(t)
+	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+	const sortieRan = "5071e0000000000000000000000000000000beef"
+	p1.run(time.Time{}, `deploy_sortie_ran "$1"`, sortieRan)
+	// A record its retired Sortie left: taichi lists no Sortie all the same.
+	taichi.run(time.Time{}, `deploy_sortie_ran "$1"`, sortieRan)
+
+	p1.write(now, "succeeded", "beef002", "beef002", "")
+	taichi.write(now, "failed", "beef001", "beef002", "stage0.sh failed at beef002")
+	p1.run(time.Time{}, "deploy_state_pull")
+	copyOnP1 := filepath.Join(p1.home, "hosts", "taichi", "deploy-state.json")
+
+	if st := p1.read(); st.Status != deploystate.StatusSucceeded || st.Commit != "beef002" || st.Main != "beef002" || !st.UpdatedAt.Equal(now) {
+		t.Errorf("p1's = %+v, want succeeded at beef002, written at now", st)
+	}
+	for _, path := range []string{taichi.file(), copyOnP1} {
+		st, err := deploystate.Read(path)
+		if err != nil || st.Status != deploystate.StatusFailed || st.Commit != "beef001" || st.Main != "beef002" ||
+			st.Error != "stage0.sh failed at beef002" {
+			t.Errorf("taichi's at %s = %+v, %v, want failed at beef001 behind beef002", path, st, err)
+		}
+	}
+
+	kit := kitRepository{Branch: "main", Commit: "beef002"}
+	want := map[string]kitRepository{
+		"ortusnova/agentic-orchestration": kit,
+		"ortusnova/sortie":                {Branch: "plan-bench", Commit: sortieRan},
+	}
+	if got := kitRepositories(t, p1.file()); !maps.Equal(got, want) {
+		t.Errorf("p1's repositories = %+v, want %+v", got, want)
+	}
+	want = map[string]kitRepository{"ortusnova/agentic-orchestration": {Branch: "main", Commit: "beef001"}}
+	for _, path := range []string{taichi.file(), copyOnP1} {
+		if got := kitRepositories(t, path); !maps.Equal(got, want) {
+			t.Errorf("taichi's repositories at %s = %+v, want %+v", path, got, want)
+		}
 	}
 }
 
