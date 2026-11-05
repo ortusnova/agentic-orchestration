@@ -1,0 +1,10 @@
+[Unit]
+Description=Ortus Nova stage 0: rotate the stage-0 units' log files daily, and by size every 10 minutes
+
+[Timer]
+OnCalendar=*-*-* 00:00:05 UTC
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target
