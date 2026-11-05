@@ -111,6 +111,8 @@ export PATH=$tmp/bin:$PATH
 # shellcheck source=live-proof-pack.sh
 . "$KIT/live-proof-pack.sh"
 STAGE0_EGRESS_CA=$tmp/ca.crt
+STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
+echo stage0-pack > "$STAGE0_PACK"
 REBUILD_PACK=
 live_proof_pack
 pack=$STAGE0_LIVE_PROOF_PACK
@@ -123,6 +125,22 @@ done
   && ok "smol-builder's report is kept and the staged context removed" || fail "report or stage"
 grep -q '"ORTUS_EGRESS_CA": "'"$tmp/ca.crt"'"' <<< "$STAGE0_LIVE_PROOF_IMAGE_JSON" \
   && ok "its image entry trusts the egress CA" || fail "image: $STAGE0_LIVE_PROOF_IMAGE_JSON"
+
+# The base pack a proof of the worker daemon's smolvm tests starts its
+# machines from (worker-daemon/live-proofs.json): the stage-0 pack, alone in
+# a folder the job sees read-only, named by LIVE_PROOF_BASE_PACK.
+base=$STAGE0_HOME/live-proof-base
+[[ $(ls "$base") == base.smolmachine && $(cat "$base/base.smolmachine") == stage0-pack ]] \
+  && ok "the live-proof base pack is the stage-0 pack, alone in its folder" || fail "base: $(ls -la "$base")"
+grep -q '"mounts": \[{"host": "'"$base"'", "guest": "/opt/live-proof/base", "read_only": true}\]' <<< "$STAGE0_LIVE_PROOF_IMAGE_JSON" \
+  && grep -q '"LIVE_PROOF_BASE_PACK": "/opt/live-proof/base/base.smolmachine"' <<< "$STAGE0_LIVE_PROOF_IMAGE_JSON" \
+  && ok "a live-proof job sees that folder read-only, its pack in LIVE_PROOF_BASE_PACK" || fail "image: $STAGE0_LIVE_PROOF_IMAGE_JSON"
+grep -qF 'WORKER_DAEMON_E2E_PACK=\"$LIVE_PROOF_BASE_PACK\"' "$ROOT/worker-daemon/live-proofs.json" \
+  && ok "the worker daemon's declared proofs start their machines from it" || fail "worker-daemon/live-proofs.json does not use LIVE_PROOF_BASE_PACK"
+echo stage0-pack-2 > "$STAGE0_PACK.tmp" && mv "$STAGE0_PACK.tmp" "$STAGE0_PACK"
+live_proof_base
+[[ $(cat "$base/base.smolmachine") == stage0-pack-2 && ! -e $base/base.smolmachine.tmp ]] \
+  && ok "a rebuilt stage-0 pack replaces the base pack" || fail "base after a rebuild: $(cat "$base/base.smolmachine")"
 live_proof_pack
 [[ $STAGE0_LIVE_PROOF_PACK == "$pack" && $(wc -l < "$tmp/builds") == 1 ]] && ok "unchanged inputs build nothing" || fail "rebuilt: $(cat "$tmp/builds")"
 printf '#!/bin/sh\necho "smolvm 9.9.9"\n' > "$tmp/bin/smolvm"

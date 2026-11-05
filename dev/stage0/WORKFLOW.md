@@ -464,7 +464,14 @@ Encrypt staging. A request with the line `Profile: nested` runs in the
 live-proof pack on taichi, with nested virtualization: smolvm, pasta,
 dnsmasq and Go are installed (`/opt/live-proof/check-tools.sh` prints their
 versions), and `/opt/live-proof/nested-probe.sh <allowed host> <denied
-host>` boots a smolvm machine inside this one. The request, as a JSON
+host>` boots a smolvm machine inside this one, and `$LIVE_PROOF_BASE_PACK`
+is a pack with `sh`, `git` and `socat` to start such machines from. A
+component of the repository may declare its live proofs in
+`live-proofs.json` at its root, as `worker-daemon/live-proofs.json` does for
+`TestSmolvmEndToEnd` and `TestSmolvmEgressEndToEnd`: a criterion one of them
+settles is proven by running that proof's `command` exactly as declared,
+from the component's directory, and by nothing in its place; it is one
+step of the table, with that command. The request, as a JSON
 string; it names the pull request, the branch, the profile when it has one,
 and the criterion, and asks for a proof, not for the commands in it to be
 run:

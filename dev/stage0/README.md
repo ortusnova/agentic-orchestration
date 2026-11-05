@@ -494,6 +494,23 @@ job profile `nested`:
   their output, goes on the pull request that added the profile (ONS-134).
   When it does not nest, the profile stays, and the host proof runner
   takes these proofs (design D6).
+- **The declared proofs.** A component declares the live proofs a job of
+  the profile runs in `live-proofs.json` at its root, each a test and the
+  command that proves it, run from the component's directory exactly as
+  declared; the job's prompt says so. `worker-daemon/live-proofs.json`
+  declares `TestSmolvmEndToEnd` and `TestSmolvmEgressEndToEnd`, the latter
+  with the test resolver of worker-daemon's operator guide in a network
+  namespace of its own; both are proven only by a live-proof request
+  naming `nested`, never by hand on taichi (worker-daemon's operator guide,
+  "Live proofs of the smolvm tests"). Their machines start from the
+  stage-0 pack, whose base layer has `sh`, `git` and `socat`:
+  `live-proof-pack.sh` links it (or copies it, across file systems) as
+  `$STAGE0_HOME/live-proof-base/base.smolmachine`, alone in that folder,
+  which the live-proof image shares read-only at `/opt/live-proof/base`,
+  with `LIVE_PROOF_BASE_PACK` naming the pack there. A rebuilt stage-0
+  pack replaces it in one rename, so a running proof keeps the pack it
+  opened. `test-live-proof-pack.sh` checks the folder and the image entry;
+  worker-daemon's `TestTheLiveProofsAreDeclared` checks the declaration.
 
 ## A deploy never drains
 

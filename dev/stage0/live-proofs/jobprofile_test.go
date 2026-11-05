@@ -185,3 +185,68 @@ func TestAParkedStorysNestedProof(t *testing.T) {
 	}
 	sc.wantActive("ONS-41\n")
 }
+
+// repositoryCapabilities reads the capabilities WORKFLOW.md's repository
+// name requires of every job of it (environment.remote.repositories).
+func repositoryCapabilities(t *testing.T, name string) []string {
+	t.Helper()
+	b, err := os.ReadFile("../WORKFLOW.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := regexp.MustCompile(`^        requires:\s*\{.*capabilities:\s*\[([^\]]*)\]`)
+	in := false
+	for line := range strings.SplitSeq(string(b), "\n") {
+		switch {
+		case strings.HasPrefix(line, "      - name: "):
+			in = strings.TrimPrefix(line, "      - name: ") == name
+		case in:
+			if m := caps.FindStringSubmatch(line); m != nil {
+				var out []string
+				for c := range strings.SplitSeq(m[1], ",") {
+					out = append(out, strings.TrimSpace(c))
+				}
+				return out
+			}
+		}
+	}
+	t.Fatalf("WORKFLOW.md's repository %s requires no capabilities", name)
+	return nil
+}
+
+// Scenario: A homelab vm chain. The supervisor requests the live proof of
+// a homelab story whose criterion is the full vm chain; its job runs on
+// taichi, whose worker alone offers the nested that homelab's repository
+// requires, and its result is the live-proof record on the pull request at
+// its head, linked from the head's live-proof status.
+func TestAHomelabVMChain(t *testing.T) {
+	sc := newScenario(t)
+	homelab := repositoryCapabilities(t, "homelab")
+	if !slices.Contains(homelab, "nested") {
+		t.Fatalf("homelab's repository requires %v, want nested", homelab)
+	}
+	sc.sortie.place = func(fix map[string]string) string {
+		need := homelab
+		if name, ok := fix["profile"]; ok {
+			need = append(slices.Clone(need), workflowProfiles(t)[name].capabilities...)
+		}
+		for _, w := range []worker{p1, taichi} {
+			if !slices.ContainsFunc(need, func(c string) bool { return !slices.Contains(w.capabilities, c) }) {
+				return w.name
+			}
+		}
+		return ""
+	}
+	sc.sortie.request(21, staging, sc.clock)
+	sc.pass()
+	if !slices.Equal(sc.sortie.placed, []string{"taichi"}) {
+		t.Fatalf("the vm chain's job was placed on %v, want taichi", sc.sortie.placed)
+	}
+	sc.wantStatus(headA, "pending", "the live-proof job runs")
+	sc.forge.comment(kitLogin, stepTable("proven", headA), sc.clock)
+	sc.pass()
+	sc.wantStatus(headA, "success", "proven at "+short(headA))
+	if got, _ := sc.forge.last(); !strings.Contains(got["target_url"], "/pull/41#issuecomment-") {
+		t.Errorf("the status does not link the record: %v", got)
+	}
+}
