@@ -16,6 +16,11 @@ STAGE0_WORKER_FLOOR_DISK_GIB=${STAGE0_WORKER_FLOOR_DISK_GIB:-50}
 STAGE0_AGENT_IMAGE=stage0.smolmachine
 STAGE0_HOMELAB_IMAGE=homelab.smolmachine
 STAGE0_LIVE_PROOF_IMAGE=live-proof.smolmachine
+# The agent command WORKFLOW.md runs (pack/agent-acp), and the command the
+# daemon runs in the machine after it to read the run's token usage
+# (pack/agent-usage). The daemon matches the command's base name.
+STAGE0_AGENT_COMMAND=agent-acp
+STAGE0_USAGE_COMMAND=agent-usage
 # Where a machine's setup puts the egress CA's certificate, so it trusts
 # nono's interception of the credential hosts.
 STAGE0_GUEST_CA=/usr/local/share/ca-certificates/ortus-egress.crt
@@ -129,6 +134,7 @@ render_worker_config() {
   "floor": {"disk_gib": $STAGE0_WORKER_FLOOR_DISK_GIB},
   "smallest_job": {"cpu": 4, "mem_gib": 8, "disk_gib": 20},
   "state_dir": $(json_str "$STAGE0_WORKER_STATE"),
+  "usage_commands": {$(json_str "$STAGE0_AGENT_COMMAND"): [$(json_str "$STAGE0_USAGE_COMMAND")]},
   "smolvm": {
     "packs": {$packs},
     "nested": $nested,

@@ -1,0 +1,42 @@
+#!/bin/sh
+# The worker daemon's usage command for agent-acp (worker-config.sh,
+# usage_commands): prints the run's token usage as one JSON object,
+#   {"input_tokens", "output_tokens", "cache_read_tokens",
+#    "cache_write_tokens", "model"}
+# from the file the opencode plugin sortie-usage.js keeps for the run
+# agent-acp started. Without that file (a Claude Code run, or an opencode
+# that did not load the plugin) it fails, so the daemon reports the run as
+# unmeasured rather than as a zero spend.
+file=${SORTIE_USAGE_FILE:-$HOME/.local/state/sortie/usage.json}
+if [ ! -s "$file" ]; then
+  echo "agent-usage: no usage file $file: this run's agent ($(agent-acp --which 2>/dev/null || echo unknown)) did not record its token usage" >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # JavaScript, not shell
+exec node -e '
+const fs = require("fs")
+const file = process.argv[1]
+let u
+try {
+  u = JSON.parse(fs.readFileSync(file, "utf8"))
+} catch (e) {
+  console.error(`agent-usage: ${file} is not JSON: ${e.message}`)
+  process.exit(1)
+}
+const n = (k) => {
+  const v = u[k]
+  if (!Number.isSafeInteger(v) || v < 0) {
+    console.error(`agent-usage: ${file} has no count ${k}`)
+    process.exit(1)
+  }
+  return v
+}
+const out = {
+  input_tokens: n("input_tokens"),
+  output_tokens: n("output_tokens"),
+  cache_read_tokens: n("cache_read_tokens"),
+  cache_write_tokens: n("cache_write_tokens"),
+}
+if (typeof u.model === "string" && u.model) out.model = u.model
+console.log(JSON.stringify(out))
+' "$file"
