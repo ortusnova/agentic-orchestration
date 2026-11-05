@@ -6,6 +6,7 @@
   import type { MergedGraph } from "../lib/types";
   import HomeLanes from "./HomeLanes.svelte";
   import HomeNeeds from "./HomeNeeds.svelte";
+  import HomeReleased from "./HomeReleased.svelte";
   import HomeTimeline from "./HomeTimeline.svelte";
   import SupervisorPanel from "./SupervisorPanel.svelte";
   import TopBar, { type Tab } from "./TopBar.svelte";
@@ -84,6 +85,8 @@
     </section>
 
     <HomeLanes lanes={home.lanes ?? null} health={health} questions={home.questions ?? []} {slug} canAct={can("approver")} {onanswer} {onsessions} />
+
+    <HomeReleased stories={home.released ?? []} {health} {slug} {marks} />
 
     {#if home.critical_path && next}
       <section class="path" aria-labelledby="path-h">
