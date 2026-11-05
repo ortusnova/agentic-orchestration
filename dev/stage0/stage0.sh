@@ -248,6 +248,8 @@ done
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
 # shellcheck source=worker-config.sh
 . "$KIT/worker-config.sh"
+# shellcheck source=staged-pack.sh
+. "$KIT/staged-pack.sh"
 # shellcheck source=notify-channel.sh
 . "$KIT/notify-channel.sh"
 migrate_max_agents "$ENV_FILE"
@@ -296,6 +298,17 @@ if [[ $STAGE0_PROFILE == worker ]]; then
   (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
   export PATH=$STAGE0_HOME/bin:$PATH
   build_pack
+  # A worker host that offers nested virtualization (taichi) declares nested,
+  # with the live-proof pack the nested profile runs in (WORKFLOW.md).
+  STAGE0_WORKER_NESTED=false
+  if host_nested; then
+    STAGE0_WORKER_NESTED=true
+    # shellcheck source=live-proof-pack.sh
+    . "$KIT/live-proof-pack.sh"
+    live_proof_pack
+  else
+    say "This host offers no nested virtualization: its worker takes no homelab job and no live proof of the nested profile"
+  fi
   if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
     command -v python3 > /dev/null || die "python3 is not on PATH; homelab's inputs need it"
     # shellcheck source=homelab-inputs.sh
@@ -449,11 +462,11 @@ mkdir -p "$STAGE0_LIVE_PROOFS"
 
 build_pack
 STAGE0_EGRESS_CA=$STAGE0_HOME/egress-ca/ca.crt
-# p1 takes homelab jobs only with homelab's dev host here (STAGE0_HOMELAB_SRC).
+# p1's worker never declares nested: only a worker host does (taichi), so a
+# homelab job and a live proof of the nested profile never run on p1.
+STAGE0_WORKER_NESTED=false
 if [[ -n ${STAGE0_HOMELAB_SRC:-} && -d $STAGE0_HOMELAB_SRC ]]; then
-  # shellcheck source=homelab-inputs.sh
-  . "$KIT/homelab-inputs.sh"
-  homelab_inputs
+  say "p1's worker declares no nested, so it takes no homelab job: STAGE0_HOMELAB_SRC is not used here; homelab runs on taichi"
 fi
 # p1's own worker dials Pomerium as every worker host does.
 local_tls=$STAGE0_CP_HOME/workers/$STAGE0_WORKER_NAME

@@ -7,15 +7,18 @@
 //
 //   - Each new live_proof action of Sortie's supervisor (GET /api/v1/state,
 //     supervisor_actions) opens a live proof of its pull request, with the
-//     action's evidence as the criterion.
+//     action's evidence as the criterion and its profile, when it names
+//     one, as the job profile (WORKFLOW.md environment.remote.profiles).
 //   - The pull request's head gets the commit status live-proof, pending
 //     until the job's result proves it. Sortie's auto_merge requires CI,
 //     and CI is every status and check run of the head, so a pull request
 //     whose live criterion is unproven is not merged.
 //   - The job is a review fix run on the story's branch, which Sortie
 //     starts on POST /api/v1/{identifier}/fix with a message that opens with
-//     the live-proof marker; the workflow's fix prompt runs it as a live
-//     proof. For a parked story Sortie starts the job itself when it takes
+//     the live-proof marker, and with the request's job profile, so Sortie
+//     places it only on a worker that offers what the profile requires and
+//     runs it in the profile's pack; the workflow's fix prompt runs it as a
+//     live proof. For a parked story Sortie starts the job itself when it takes
 //     the request, with the same marker, and keeps the park: the pass asks
 //     for no fix run, which Sortie refuses for a parked story. While it runs, its identifier is in the active file, and the
 //     egress gate behind Pomerium gives its CONNECTs the live-proof egress.
@@ -92,6 +95,9 @@ type Proof struct {
 	Result      *Result    `json:"result,omitempty"`
 	// Posted is the last status the pass set: head, state and description.
 	Posted string `json:"posted,omitempty"`
+	// Profile is the job profile the request named; empty for the
+	// story's repository's own image and requirements.
+	Profile string `json:"profile,omitempty"`
 }
 
 // Result is a live-proof job's result, from its comment.
@@ -144,6 +150,9 @@ func (s *Syncer) Pass(ctx context.Context) error {
 			Identifier: *a.IssueIdentifier, PullRequest: *a.PullRequest,
 			Criterion: a.Evidence, Action: a.ID, RequestedAt: a.At.UTC(),
 		}
+		if a.Profile != nil {
+			p.Profile = *a.Profile
+		}
 		if parked[p.Identifier] {
 			// Sortie started the job of a parked story itself, when it
 			// took the request; it refuses a fix run of a parked story.
@@ -151,7 +160,7 @@ func (s *Syncer) Pass(ctx context.Context) error {
 			p.Started = &started
 		}
 		rec.Proofs[*a.PullRequest] = p
-		s.Log.Info("live proof requested", slog.String("issue", *a.IssueIdentifier), slog.String("pull_request", *a.PullRequest), slog.Int64("action", a.ID), slog.Bool("parked", parked[p.Identifier]))
+		s.Log.Info("live proof requested", slog.String("issue", *a.IssueIdentifier), slog.String("pull_request", *a.PullRequest), slog.Int64("action", a.ID), slog.String("profile", p.Profile), slog.Bool("parked", parked[p.Identifier]))
 	}
 	keys := make([]string, 0, len(rec.Proofs))
 	for k := range rec.Proofs {
@@ -249,7 +258,8 @@ func short(sha string) string {
 }
 
 // start asks Sortie for the live-proof job: a review fix run on the
-// story's branch whose message carries the marker and the criterion.
+// story's branch whose message carries the marker and the criterion, run
+// with the request's job profile when it names one.
 func (s *Syncer) start(ctx context.Context, p *Proof, pr pull) error {
 	msg := RequestMarker + "\n" + jobMessage(p, pr.Head.Ref)
 	var answer struct {
@@ -258,8 +268,11 @@ func (s *Syncer) start(ctx context.Context, p *Proof, pr pull) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	status, err := s.call(ctx, http.MethodPost, s.Sortie+"/api/v1/"+url.PathEscape(p.Identifier)+"/fix", s.SortieToken,
-		map[string]string{"message": msg}, &answer)
+	body := map[string]string{"message": msg}
+	if p.Profile != "" {
+		body["profile"] = p.Profile
+	}
+	status, err := s.call(ctx, http.MethodPost, s.Sortie+"/api/v1/"+url.PathEscape(p.Identifier)+"/fix", s.SortieToken, body, &answer)
 	if err != nil {
 		return err
 	}
@@ -268,16 +281,20 @@ func (s *Syncer) start(ctx context.Context, p *Proof, pr pull) error {
 	}
 	now := s.now()
 	p.Started = &now
-	s.Log.Info("live-proof job started", slog.String("issue", p.Identifier), slog.String("pull_request", p.PullRequest), slog.String("branch", pr.Head.Ref))
+	s.Log.Info("live-proof job started", slog.String("issue", p.Identifier), slog.String("pull_request", p.PullRequest), slog.String("branch", pr.Head.Ref), slog.String("profile", p.Profile))
 	return nil
 }
 
 // jobMessage is what the job reads after the marker: where it runs from,
-// where it comments, and the criterion.
+// where it comments, the job profile it runs with, and the criterion.
 func jobMessage(p *Proof, branch string) string {
+	profile := ""
+	if p.Profile != "" {
+		profile = "Profile: " + p.Profile + "\n"
+	}
 	return "Live proof of " + p.Identifier + ", requested by the supervisor (action " + strconv.FormatInt(p.Action, 10) + ").\n" +
 		"Pull request: " + p.PullRequest + "\n" +
-		"Branch: " + branch + "\n" +
+		"Branch: " + branch + "\n" + profile +
 		"Criterion, and why the story's machine could not run it, as the supervisor wrote them:\n" + p.Criterion
 }
 
@@ -404,6 +421,7 @@ type action struct {
 	Evidence        string    `json:"evidence"`
 	Result          string    `json:"result"`
 	PullRequest     *string   `json:"pull_request"`
+	Profile         *string   `json:"profile"`
 	At              time.Time `json:"at"`
 }
 
