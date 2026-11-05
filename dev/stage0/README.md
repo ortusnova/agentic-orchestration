@@ -193,9 +193,11 @@ by the same Sortie, like any other.
   | `agentic-orchestration` | `STAGE0_AO_REPO_*` | no | `stage0.smolmachine` | 4 CPUs, 8 GiB, 20 GiB of disk |
   | `homelab` | `STAGE0_HOMELAB_REPO_*` | no | `homelab.smolmachine` | `nested`, 8 CPUs, 20 GiB, 60 GiB of disk |
 
-  A worker declares `nested` only when it has homelab's inputs, so any
-  worker may take a sortie story and any worker with homelab's dev host a
-  homelab one. Plan sync refuses a story naming a repository the workflow
+  Only a worker host whose host offers nested virtualization declares
+  `nested` (`worker-config.sh`, `host_nested`): taichi. p1's worker never
+  does. So any worker may take a sortie or agentic-orchestration story,
+  and only taichi a homelab one, or a live proof of the `nested` profile
+  ("Live proofs"). Plan sync refuses a story naming a repository the workflow
   does not list. A `stage0.env` written before these settings
   existed keeps working: `stage0.sh` fills in each missing one with its
   default. To change one, set it in `stage0.env` and run `stage0.sh` again.
@@ -376,7 +378,8 @@ machine could not run it as its `evidence`. Every minute
   the fix run, and the pass asks again a minute later. The fix run runs on
   the story's branch, in the story's repository, on a worker whose profile
   allows it: a homelab job only on a worker that declares `nested`, which is
-  taichi. The workflow's fix prompt runs it as a live proof. It follows the
+  taichi. A request that names a job profile (below) runs with that
+  profile's pack and requirements instead. The workflow's fix prompt runs it as a live proof. It follows the
   repository's `AGENTS.md`: for homelab, `sandbox create --wait`, the
   cheapest proof that runs the changed code, and an open issue for every
   failure whose cause is unknown. It pushes its fixes as new commits, never
@@ -427,10 +430,70 @@ result posted before the job starts settles the proof, and the pass starts
 no job. `stage0-live-proofs` keeps its record in
 `$STAGE0_HOME/live-proofs/record.json`.
 `go test ./...` in `live-proofs/` checks the request, the job, the comment
-and the status against a fake Sortie and a fake GitHub. `test-review-gate.sh`
-checks the job's prompt, its placement on taichi by Sortie's matcher, and
+and the status against a fake Sortie and a fake GitHub, and that a request
+naming the `nested` profile starts its job with it and is never placed on
+p1's worker. `test-review-gate.sh` checks the job's prompt, its placement on
+taichi by Sortie's matcher, a nested proof's too and never on p1, and
 Sortie's merge gate on the status, with Sortie's GitHub adapter against a
 fake forge. `control-plane/internal/egress` checks the live-proof egress.
+
+### The nested profile
+
+A live criterion that needs nested KVM, smolvm or a machine started inside
+the job's machine, such as one of a worker-daemon or smol-builder story,
+cannot run on the story's own machine, nor in the stage-0 pack on p1 (spec
+store `agent-platform/supervisor-autonomy`, "A live proof that needs nested
+KVM, smolvm or the host runs in-band"; design D6). Its live proof names the
+job profile `nested`:
+
+- **The profile.** `WORKFLOW.md` declares it in
+  `environment.remote.profiles`: the image `live-proof.smolmachine`, and
+  `nested`, 4 CPUs, 12 GiB and 40 GiB of disk. The supervisor names it in
+  its request (`POST /api/v1/<identifier>/live-proof` with
+  `"profile": "nested"`); Sortie refuses a profile the workflow does not
+  declare (`409 unknown_profile`) and serves the request's `profile` in
+  `supervisor_actions`. The pass starts the job with it
+  (`POST /api/v1/<identifier>/fix` with `profile`), and its message names it
+  (`Profile: nested`); for a parked story Sortie starts the job with it
+  itself. Sortie runs the job, and each retry of it, in the profile's image,
+  offers it only to a worker that declares `nested`, and still seeds it from
+  and pushes it to the story's own repository (Sortie's
+  `environment.remote.profiles`, ortusnova/sortie). Only taichi's worker
+  declares `nested`: `stage0.sh` sets it on a worker host whose host offers
+  nested virtualization (`/dev/kvm`, and the `nested` parameter of
+  `kvm_intel` or `kvm_amd`), never on p1. So a nested proof never runs on
+  p1's worker; while taichi is gone it waits.
+- **The pack.** `live-proof-pack/`, built by `live-proof-pack.sh` as the
+  homelab pack is (`staged-pack.sh`): staged with the harness, named
+  `$STAGE0_HOME/packs/live-proof-<hash>.smolmachine` by a hash of its
+  inputs, smol-builder and the host's smolvm, built again only when one
+  changes, with smol-builder's report in
+  `$STAGE0_HOME/live-proof-pack-report.json`, and the pack it replaced
+  deleted while no job runs. It holds Go 1.27.3 (smol-builder's go layer),
+  Node and the agent harness, smolvm 1.33.0 (the release tarball, checked
+  by its SHA-256, in `/opt/smolvm`), and pasta (`passt`
+  0.0~git20250503.587980c-2+deb13u1) and dnsmasq (`dnsmasq-base`
+  2.91-1+deb13u2) from Debian at those versions. Its build runs
+  `check-tools.sh`, which fails unless every tool is at its pin; a job runs
+  it again as `/opt/live-proof/check-tools.sh` to record the versions. The
+  job runs as root, with the egress CA, as a stage-0 job does. To move a
+  pin, change it in `live-proof-pack/Dockerfile`; `test-live-proof-pack.sh`
+  checks that each tool is pinned, Go at the go layer's pin and smolvm at or
+  above the kit's minimum.
+- **The measurement.** Whether smolvm nests in a job machine the worker
+  daemon made is measured on taichi with
+  `/opt/live-proof/nested-probe.sh <allowed host> <denied host>` in a job of
+  the profile: it prints smolvm's version, `/dev/kvm`, the CPU's
+  virtualization flag, the command that starts a machine inside the job's
+  machine (smolvm's bare VM, no image pull) whose egress policy declares the
+  allowed host alone, its output, and `nested boot: booted|failed`,
+  `nested allowed: reached|refused`, `nested denied: reached|refused`. It
+  nests when the machine boots, reaches the allowed host and is refused the
+  denied one. The allowed host must be one the job's own egress reaches,
+  such as `api.github.com`. The result, with the version, the commands and
+  their output, goes on the pull request that added the profile (ONS-134).
+  When it does not nest, the profile stays, and the host proof runner
+  takes these proofs (design D6).
 
 ## A deploy never drains
 
@@ -770,7 +833,7 @@ dev/stage0/stage0.sh            # later runs read it from stage0.env
 | --- | --- |
 | Worker | unit `ortus-stage0-worker`, `$STAGE0_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$STAGE0_HOME/worker.json` (`worker-config.sh`), state in `$STAGE0_HOME/worker`. It dials p1's Pomerium at `control-plane-url` with its client certificate (`cp-worker.crt`, `cp-worker.key`, `cp-ca.crt` in `~/.config/ortus-nova`, from `worker-host.sh add`), and Pomerium names it by that certificate |
 | Live kit | as on p1, `$STAGE0_HOME/kit` follows `origin/main` (`ortus-stage0-deploy.timer`); a change to the kit runs `stage0.sh` (the worker profile) at once, which restarts the worker daemon only when what it runs changed. A worker host builds no Sortie, follows no `plan-bench` merge and asks no Sortie to pause or resume, whatever Sortie or Huly settings its `stage0.env` kept from the retired homelab profile; nothing on it reads them |
-| Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
+| Packs | `stage0.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; on a host that offers nested virtualization, `$STAGE0_HOME/packs/live-proof-<hash>.smolmachine`, the pack of the `nested` live-proof profile ("Live proofs"); and, with homelab's dev host, `$STAGE0_HOME/packs/homelab-<hash>.smolmachine` (below) |
 | Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
 | Previews | nothing of its own: a review job on taichi opens a ui story's preview at the commented `http://<identifier>.preview.<Pomerium's host>/` through its machine's proxy, on the egress route to p1's Pomerium with taichi's certificate and the job's token, as a job on p1's worker does ([Previews of ui stories](#previews-of-ui-stories)); no preview port on p1 is open to taichi |
 
@@ -786,10 +849,11 @@ otherwise.
 ### homelab's inputs
 
 With homelab's dev host (`make dev-host` in homelab) and its checkout at
-`STAGE0_HOMELAB_SRC` (default `~/dev/homelab`), `stage0.sh` gives the
-worker the homelab image (`homelab-inputs.sh`) and the worker declares
-`nested`. Without them it declares no `nested`, so the matcher gives it no
-homelab job. What a homelab job gets is what the homelab Sortie gave its
+`STAGE0_HOMELAB_SRC` (default `~/dev/homelab`), `stage0.sh` gives a worker
+host's worker the homelab image (`homelab-inputs.sh`); the worker declares
+`nested` when the host offers it, as taichi does. Without them the matcher
+gives it no homelab job: its image would be missing. p1 builds no homelab
+image: its worker declares no `nested`. What a homelab job gets is what the homelab Sortie gave its
 machines (spec store `run-homelab-through-sortie`, design D5-D12):
 
 | Part | Where |

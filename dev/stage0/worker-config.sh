@@ -5,7 +5,9 @@
 # same images, so the matcher may give a job to any of them (spec store
 # agent-platform/one-sortie): the stage-0 pack as stage0.smolmachine, and,
 # where homelab's inputs are on the host, the homelab pack as
-# homelab.smolmachine with them.
+# homelab.smolmachine with them. Only a worker host that offers nested
+# virtualization, taichi, declares nested, with the live-proof pack as
+# live-proof.smolmachine; p1's worker never does.
 STAGE0_WORKER_STATE=$STAGE0_HOME/worker
 STAGE0_WORKER_RESERVE_MEM_GIB=${STAGE0_WORKER_RESERVE_MEM_GIB:-8}
 STAGE0_WORKER_RESERVE_CPU=${STAGE0_WORKER_RESERVE_CPU:-2}
@@ -13,6 +15,7 @@ STAGE0_WORKER_FLOOR_DISK_GIB=${STAGE0_WORKER_FLOOR_DISK_GIB:-50}
 # The image names WORKFLOW.md gives each repository.
 STAGE0_AGENT_IMAGE=stage0.smolmachine
 STAGE0_HOMELAB_IMAGE=homelab.smolmachine
+STAGE0_LIVE_PROOF_IMAGE=live-proof.smolmachine
 # Where a machine's setup puts the egress CA's certificate, so it trusts
 # nono's interception of the credential hosts.
 STAGE0_GUEST_CA=/usr/local/share/ca-certificates/ortus-egress.crt
@@ -57,6 +60,18 @@ printf '%s\\n' "\$ORTUS_EGRESS_CA" | \$s tee $STAGE0_GUEST_CA > /dev/null
 EOF
 }
 
+# host_nested: this host offers nested virtualization: /dev/kvm, and the
+# nested parameter of kvm_intel or kvm_amd on. STAGE0_HOST_ROOT, for tests,
+# is where /dev and /sys are.
+host_nested() {
+  local root=${STAGE0_HOST_ROOT:-} p
+  [[ -e $root/dev/kvm ]] || return 1
+  for p in "$root"/sys/module/kvm_intel/parameters/nested "$root"/sys/module/kvm_amd/parameters/nested; do
+    [[ -r $p && $(cat "$p") == [Yy1] ]] && return 0
+  done
+  return 1
+}
+
 # render_worker_config FILE NAME URL CA CERT KEY CP_CA
 #   NAME   the worker's name; Pomerium names it by its certificate anyway
 #   URL    the control plane as every worker reaches it: Pomerium's public
@@ -65,9 +80,12 @@ EOF
 #   CERT   the worker's client certificate from the control plane's CA,
 #   KEY    its key, and
 #   CP_CA  that CA, which signs Pomerium's certificate too
-# Reads STAGE0_PACK and STAGE0_WORKER_SLOTS, and, when homelab_inputs ran,
-# STAGE0_HOMELAB_PACK and STAGE0_HOMELAB_IMAGE_JSON. Without them the worker
-# does not declare nested: it has no image that needs it.
+# Reads STAGE0_PACK and STAGE0_WORKER_SLOTS; when homelab_inputs ran,
+# STAGE0_HOMELAB_PACK and STAGE0_HOMELAB_IMAGE_JSON; and STAGE0_WORKER_NESTED,
+# true only on a worker host that offers nested (stage0.sh), with
+# STAGE0_LIVE_PROOF_PACK and STAGE0_LIVE_PROOF_IMAGE_JSON from
+# live_proof_pack. Without it the worker does not declare nested, so the
+# matcher gives it no homelab job and no job of the nested profile.
 # Without STAGE0_WORKER_SLOTS the file has no run_slots, so the daemon
 # declares as many smallest jobs as the host's CPUs and memory hold above
 # the reserve, read at each check-in (worker-daemon's operator guide, "Run
@@ -86,11 +104,18 @@ render_worker_config() {
         \"env_files\": {\"ORTUS_EGRESS_CA\": $(json_str "$ca")},
         \"setup\": [$(json_str "$(guest_ca_setup)")]
       }"
+  if [[ ${STAGE0_WORKER_NESTED:-false} == true ]]; then
+    [[ -n ${STAGE0_LIVE_PROOF_PACK:-} && -n ${STAGE0_LIVE_PROOF_IMAGE_JSON:-} ]] \
+      || { echo "a worker that declares nested needs the live-proof pack (live_proof_pack)" >&2; return 1; }
+    packs+=", $(json_str "$STAGE0_LIVE_PROOF_IMAGE"): $(json_str "$STAGE0_LIVE_PROOF_PACK")"
+    images+=",
+      $(json_str "$STAGE0_LIVE_PROOF_IMAGE"): $STAGE0_LIVE_PROOF_IMAGE_JSON"
+    nested=true
+  fi
   if [[ -n ${STAGE0_HOMELAB_PACK:-} ]]; then
     packs+=", $(json_str "$STAGE0_HOMELAB_IMAGE"): $(json_str "$STAGE0_HOMELAB_PACK")"
     images+=",
       $(json_str "$STAGE0_HOMELAB_IMAGE"): $STAGE0_HOMELAB_IMAGE_JSON"
-    nested=true
   fi
   mkdir -p "$STAGE0_WORKER_STATE"
   (umask 077; cat > "$out.tmp" <<EOF

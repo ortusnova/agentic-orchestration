@@ -1,0 +1,10 @@
+# The live-proof pack (README.md "Live proofs"): the job profile nested
+# (WORKFLOW.md environment.remote.profiles) runs its job in it, on a worker
+# that declares nested. Go (smol-builder's go layer) and Node, with the
+# stage-0 agent harness, and smolvm, pasta and dnsmasq at the versions
+# Dockerfile pins, and nested-probe.sh, the measurement of a machine started
+# inside the job's machine. live-proof-pack.sh stages this directory and the
+# harness (harness/), then builds the pack with smol-builder --repo <staged
+# dir>.
+layers = ["go", "node"]
+project_layer = "Dockerfile"
