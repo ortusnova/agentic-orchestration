@@ -614,6 +614,11 @@ elsewhere it is skipped and says which of the three is missing:
 WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
 ```
 
+`TestSmolvmTelemetryEndToEnd`, with the same needs, runs one job whose
+offer names a `telemetry` flow: the agent sends one OTLP/HTTP JSON export
+of each signal to `127.0.0.1:4318` in the guest, and each must reach the
+flow stamped with the attempt's `sortie.*` attributes before the result.
+
 `TestSmolvmEgressEndToEnd` runs one job whose `run.egress` declares
 `WORKER_DAEMON_E2E_ALLOWED` (default `ghcr.io`): the machine must reach
 it on port 443 and be refused `WORKER_DAEMON_E2E_DENIED` (default

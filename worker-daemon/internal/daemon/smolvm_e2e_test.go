@@ -18,6 +18,7 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/hostinfo"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/otlp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
@@ -90,6 +91,85 @@ func TestSmolvmEndToEnd(t *testing.T) {
 		}
 	}
 	if r := h.reports(id, 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded || r[0].Machine != protocol.MachineDeleted {
+		t.Errorf("reports = %+v", r)
+	}
+}
+
+// e2eTelemetryAgent sends one OTLP/HTTP JSON export of each signal to
+// the receiver its environment names, as an SDK does, with no
+// credential, and prints its OTLP variables.
+const e2eTelemetryAgent = `read -r line
+env | grep -E '^(OTEL_|TRACEPARENT=)'
+for sig in traces logs metrics; do
+  case $sig in
+    traces) body='{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"e2e-span"}]}]}]}' ;;
+    logs) body='{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"e2e-log"}}]}]}]}' ;;
+    metrics) body='{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"e2e-metric"}]}]}]}' ;;
+  esac
+  printf 'POST /v1/%s HTTP/1.1\r\nHost: 127.0.0.1:4318\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "$sig" "${#body}" "$body" | socat -t5 - TCP:127.0.0.1:4318 | head -n1
+done
+git -c user.name=agent -c user.email=agent@example.invalid commit -q --allow-empty -m 'agent work'
+echo done
+`
+
+// The smolvm telemetry end-to-end run (agent-platform/session-telemetry):
+// a job machine whose offer names a telemetry flow reaches the OTLP
+// receiver at 127.0.0.1:4318 in the guest, and each signal it sends is
+// shipped stamped on the flow before the result. It needs what
+// TestSmolvmEndToEnd needs.
+func TestSmolvmTelemetryEndToEnd(t *testing.T) {
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		t.Skip("skipped: this host has no /dev/kvm, so smolvm cannot start a machine here")
+	}
+	bin, err := exec.LookPath("smolvm")
+	if err != nil {
+		t.Skip("skipped: /dev/kvm exists but smolvm is not on PATH")
+	}
+	pack := os.Getenv("WORKER_DAEMON_E2E_PACK")
+	if pack == "" {
+		t.Skip("skipped: set WORKER_DAEMON_E2E_PACK to a .smolmachine pack with sh, git and socat (smol-builder's base layer has them)")
+	}
+	s := defaults()
+	s.backend = &machine.Smolvm{Binary: bin}
+	s.pack = pack
+	var id string
+	s.workerID, id = e2eNames()
+	s.leaseMS = 30000
+	h := newHarness(t, s)
+	h.fake.Offer(fakecp.Job{
+		ID: id, Attempt: 1, TelemetryFlow: true,
+		Requires: protocol.Requires{CPU: 1, MemGiB: 1, DiskGiB: 2},
+		Run: protocol.Run{Backend: "smolvm", Image: testImage, Command: "sh", Args: []string{"-c", e2eTelemetryAgent},
+			Env:       map[string]string{"SORTIE_ISSUE_IDENTIFIER": id},
+			Telemetry: &protocol.RunTelemetry{Traceparent: testTraceparent, DispatchID: "D-e2e"}},
+		Seed: seedBundle(t, "sortie/"+id), StdioInput: []string{"hello agent\n"},
+	})
+	h.waitFor("the report", 5*time.Minute, func() bool { return h.fake.Count("report", id, 1) > 0 })
+	out := h.fake.StdioOutput(id, 1)
+	for _, want := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318", "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+		"TRACEPARENT=" + testTraceparent, "sortie.dispatch.id=D-e2e,sortie.attempt=1", "HTTP/1.1 200 OK", "done"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdio output has no %q: %q", want, out)
+		}
+	}
+	reqs := h.fake.Telemetry(id, 1)
+	var sigs []string
+	for _, r := range reqs {
+		sigs = append(sigs, r.Signal)
+		rs, err := otlp.Inspect(r.Signal, r.ContentType, r.Body)
+		if err != nil || len(rs) != 1 || rs[0].Attributes["sortie.attempt"] != "1" || rs[0].Attributes["sortie.dispatch.id"] != "D-e2e" {
+			t.Errorf("%s: %v %+v", r.Signal, err, rs)
+		}
+	}
+	if !slices.Equal(sigs, otlp.Signals) {
+		t.Errorf("shipped %q, want %q", sigs, otlp.Signals)
+	}
+	ev := h.fake.Events()
+	result := indexOf(ev, 0, is("result", id, 1))
+	if result < 0 || indexOf(ev, result, is("telemetry", id, 1)) >= 0 {
+		t.Errorf("telemetry not shipped before the result: %s", h.describe())
+	}
+	if r := h.reports(id, 1); len(r) != 1 || r[0].Outcome != protocol.OutcomeSucceeded || r[0].Telemetry == nil || r[0].Telemetry.Shipped != 3 {
 		t.Errorf("reports = %+v", r)
 	}
 }
