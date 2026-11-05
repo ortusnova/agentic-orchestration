@@ -168,8 +168,9 @@ STAGE0_NOTIFY_KIND=
 STAGE0_NOTIFY_CHAT_ID=
 STAGE0_WORKBENCH_PUBLIC_URL=http://127.0.0.1:8793
 # The previews of review: ui stories' pull requests (run-previews.sh): the
-# live workbench's TLS name, which each preview's name sits beside (empty:
-# loopback ports only), the first preview port, and a command to run when
+# live workbench's TLS name, which each preview's name for people sits
+# beside (empty: none; the address the review opens is always a name under
+# Pomerium's, README.md), the first preview port, and a command to run when
 # \$STAGE0_HOME/previews/routes changes, such as a proxy reload.
 STAGE0_WORKBENCH_URL=
 STAGE0_PREVIEW_FIRST_PORT=8800
@@ -416,6 +417,9 @@ supervisor_install "$STAGE0_HOME" "$KIT" || die "could not install the superviso
 # credential hosts with the egress CA, whose certificate each worker gets
 # (worker-host.sh, worker-config.sh) and whose key never leaves this host.
 secret "$STAGE0_HOME/nono-pass"
+# The egress gate gives a review job's requests to a ui story's preview this
+# key, which signs the review in there (run-egress-gate.sh, run-workbench.sh).
+secret "$STAGE0_HOME/preview-review-key"
 if [[ ! -s $STAGE0_HOME/egress-ca/ca.key ]]; then
   say "Creating the egress CA in $STAGE0_HOME/egress-ca"
   mkdir -p "$STAGE0_HOME/egress-ca"

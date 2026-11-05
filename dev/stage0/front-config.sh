@@ -27,6 +27,19 @@ STAGE0_WORKER_HOST_CONFIG=.config/ortus-nova
 # certificate (egress-ca.crt) and Pomerium's URL (control-plane-url).
 STAGE0_WORKER_TLS_FILES=(cp-worker.crt cp-worker.key cp-ca.crt)
 
+# The previews of review: ui stories' pull requests (README.md "Previews of
+# ui stories"): a job's machine on any worker opens one at
+# http://<identifier>.$(preview_domain)/ through its HTTP proxy, which
+# reaches the egress gate through Pomerium's egress route; the gate serves
+# it from the preview's port on p1's loopback, by the "NAME PORT" lines of
+# STAGE0_PREVIEW_FRONT_ROUTES (preview.sh), and gives a review job's
+# requests the review key, which signs the review in on the preview.
+STAGE0_PREVIEW_FRONT_ROUTES=$STAGE0_HOME/previews/front-routes
+STAGE0_PREVIEW_REVIEW_KEY=$STAGE0_HOME/preview-review-key
+# p1's own worker's certificate, which preview-sync checks a preview
+# through Pomerium with (stage0.sh names p1's worker p1).
+STAGE0_PREVIEW_CHECK_TLS=$STAGE0_CP_HOME/workers/p1
+
 # A worker's name is its identity: a DNS label (control-plane/internal/workers).
 FRONT_WORKER_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 
@@ -35,6 +48,16 @@ cp_public_port() {
   local hostport=${STAGE0_CP_PUBLIC_URL#https://}
   hostport=${hostport%%/*}
   if [[ $hostport == *:* ]]; then echo "${hostport##*:}"; else echo 443; fi
+}
+
+# preview_domain: the previews' domain, under the public URL's host
+# (https://p1.example.org:8443 gives preview.p1.example.org). No name needs
+# to resolve: a job's proxy sends it to Pomerium as a CONNECT.
+preview_domain() {
+  local host=${STAGE0_CP_PUBLIC_URL#https://}
+  host=${host%%/*}
+  host=${host%:*}
+  echo "preview.${host,,}"
 }
 
 # pomerium_image: the Pomerium image the compose project pins by digest

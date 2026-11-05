@@ -3,9 +3,11 @@
 # (preview.sh, run-workbench.sh IDENTIFIER, run-previews.sh) against a
 # throwaway repository with the story's branch, with uv, npm, npx, systemctl
 # and curl stubbed: a deploy checks out the branch's head, builds it, starts
-# its read-only workbench (WORKBENCH_SYNC=0) on its port with a copy of the
-# live registry, and routes its name; a new head moves it; a closed pull
-# request removes it. Which pull request gets a preview, and when, is
+# its read-only workbench (WORKBENCH_SYNC=0) on its loopback port with a copy
+# of the live registry, and routes its name under the previews' domain for
+# the egress gate behind Pomerium (and its name for people, when it has
+# one); an address that is not under that domain, such as a loopback one,
+# is refused; a new head moves it; a closed pull request removes it. Which pull request gets a preview, and when, is
 # workbench preview-sync's (workbench/tests/workbench/test_preview.py).
 # check NAME CONDITION evaluates CONDITION here, so its expansions are quoted on purpose.
 # shellcheck disable=SC2016,SC2034
@@ -47,6 +49,7 @@ STAGE0_KIT_ROOT=$tmp/kit
 STAGE0_STORE=$tmp/store
 STAGE0_HULY_PROJECT=ONS
 STAGE0_SORTIE_PORT=7680
+STAGE0_CP_PUBLIC_URL=https://p1.example.org:8443
 STAGE0_WORKBENCH_PORT=8793
 STAGE0_AO_REPO_PROJECT=ortusnova/agentic-orchestration
 STAGE0_WORKBENCH_URL=https://workbench.example.net
@@ -60,47 +63,66 @@ else
 fi
 
 P=$STAGE0_HOME/previews/ONS-97
-ADDRESS=https://workbench-ons-97.example.net/
+# The address a job's machine opens through the control plane's front, and
+# the name people open beside the live workbench's.
+ADDRESS=http://ons-97.preview.p1.example.org/
+PUBLIC=https://workbench-ons-97.example.net/
 
 # Scenario: A UI story from spec to merge: its reviewed, green head is deployed.
 : > "$tmp/calls"
-if "$KIT/preview.sh" up ONS-97 sortie/ONS-97 "$sha1" 8800 "$ADDRESS" 2> "$tmp/err"; then ok "up deploys"; else fail "up: $(cat "$tmp/err")"; fi
+if "$KIT/preview.sh" up ONS-97 sortie/ONS-97 "$sha1" 8800 "$ADDRESS" "$PUBLIC" 2> "$tmp/err"; then ok "up deploys"; else fail "up: $(cat "$tmp/err")"; fi
 check "the checkout is the branch's head" '[[ $(git -C "$P/src" rev-parse HEAD) == "$sha1" && -e $P/src/workbench/view.txt ]]'
 check "it builds the branch's workbench" 'grep -qx "uv sync -q" "$tmp/calls" && grep -qx "npm ci --silent" "$tmp/calls" && grep -qx "npx vite build --logLevel warn" "$tmp/calls"'
 check "it enables and restarts its unit" 'grep -qx "systemctl --user enable -q ortus-stage0-preview@ONS-97.service" "$tmp/calls" && grep -qx "systemctl --user restart ortus-stage0-preview@ONS-97.service" "$tmp/calls"'
 check "it has a copy of the live registry" '[[ -s $P/home/workbench.db ]] && ! [[ $P/home/workbench.db -ef $STAGE0_HOME/home/workbench.db ]]'
-check "its name is routed to its port" '[[ $(cat "$STAGE0_HOME/previews/routes") == "workbench-ons-97.example.net 8800" ]] && grep -qx hook "$tmp/calls"'
+check "the egress gate serves its address's name from its port" '[[ $(cat "$STAGE0_HOME/previews/front-routes") == "ons-97.preview.p1.example.org 8800" ]]'
+check "its name for people is routed to its port" '[[ $(cat "$STAGE0_HOME/previews/routes") == "workbench-ons-97.example.net 8800" ]] && grep -qx hook "$tmp/calls"'
+check "its record holds both addresses" 'grep -qx "PREVIEW_ADDRESS=$ADDRESS" "$P/preview.env" && grep -qx "PREVIEW_PUBLIC=$PUBLIC" "$P/preview.env"'
 
 # The unit's workbench: the branch's, read-only, on its own port and home, against the live store and Sortie.
 mkdir -p "$P/src/workbench/.venv/bin"
-printf '#!/bin/sh\necho "sync=$WORKBENCH_SYNC home=$WORKBENCH_HOME store=$WORKBENCH_STORE sortie=$WORKBENCH_SORTIE_URL previews=${WORKBENCH_PREVIEWS:-none} $*"\n' > "$P/src/workbench/.venv/bin/workbench"
+printf '#!/bin/sh\necho "sync=$WORKBENCH_SYNC home=$WORKBENCH_HOME store=$WORKBENCH_STORE sortie=$WORKBENCH_SORTIE_URL previews=${WORKBENCH_PREVIEWS:-none} review=${WORKBENCH_REVIEW_KEY_FILE:-none} $*"\n' > "$P/src/workbench/.venv/bin/workbench"
 chmod +x "$P/src/workbench/.venv/bin/workbench"
 check "the preview unit runs run-workbench.sh for its identifier" 'grep -qx "ExecStart=@KIT@/run-workbench.sh %i" "$KIT/units/ortus-stage0-preview@.service"'
 out=$("$KIT/run-workbench.sh" ONS-97)
-check "the preview is read-only, on its port" '[[ $out == "sync=0 home=$P/home store=$tmp/store sortie=http://127.0.0.1:7680 previews=none serve --host 127.0.0.1 --port 8800" ]]'
+check "the preview is read-only, on its port" '[[ $out == "sync=0 home=$P/home store=$tmp/store sortie=http://127.0.0.1:7680 previews=none review=$STAGE0_HOME/preview-review-key serve --host 127.0.0.1 --port 8800" ]]'
 mkdir -p "$tmp/kit/workbench/.venv/bin"
 cp "$P/src/workbench/.venv/bin/workbench" "$tmp/kit/workbench/.venv/bin/workbench"
 out=$("$KIT/run-workbench.sh")
-check "the live workbench shows the previews and syncs" '[[ $out == "sync= home=$STAGE0_HOME/home store=$tmp/store sortie=http://127.0.0.1:7680 previews=$STAGE0_HOME/previews.json serve --host 127.0.0.1 --port 8793" ]]'
+check "the live workbench shows the previews and syncs" '[[ $out == "sync= home=$STAGE0_HOME/home store=$tmp/store sortie=http://127.0.0.1:7680 previews=$STAGE0_HOME/previews.json review=none serve --host 127.0.0.1 --port 8793" ]]'
 
 # Scenario: The operator asks for a change: the fix's head moves the preview.
 echo two > "$tmp/up/workbench/view.txt"
 g -C "$tmp/up" commit -qam two && g -C "$tmp/up" push -q origin sortie/ONS-97
 sha2=$(g -C "$tmp/up" rev-parse HEAD)
 : > "$tmp/calls"
-if "$KIT/preview.sh" up ONS-97 sortie/ONS-97 "$sha2" 8800 "$ADDRESS" 2> "$tmp/err"; then ok "up follows the branch"; else fail "up again: $(cat "$tmp/err")"; fi
+if "$KIT/preview.sh" up ONS-97 sortie/ONS-97 "$sha2" 8800 "$ADDRESS" "$PUBLIC" 2> "$tmp/err"; then ok "up follows the branch"; else fail "up again: $(cat "$tmp/err")"; fi
 check "the checkout moved to the new head" '[[ $(git -C "$P/src" rev-parse HEAD) == "$sha2" && $(cat "$P/src/workbench/view.txt") == two ]]'
 check "an unchanged lock file needs no npm ci" '! grep -q "npm ci" "$tmp/calls" && grep -qx "systemctl --user restart ortus-stage0-preview@ONS-97.service" "$tmp/calls"'
 
-# Refusals: nothing that is not an identifier, a commit, or a free port.
-for args in "up ../x sortie/ONS-97 $sha2 8801 $ADDRESS" "up ONS-98 sortie/ONS-97 HEAD 8801 $ADDRESS" \
-  "up ONS-98 sortie/ONS-97 $sha2 8793 $ADDRESS" "up ONS-98 sortie/ONS-97 $sha2 8801" "down"; do
+# Refusals: nothing that is not an identifier, a commit, a free port, or an
+# address under the previews' domain: never a loopback one, which no other
+# machine can open, nor the name for people.
+A98=http://ons-98.preview.p1.example.org/
+for args in "up ../x sortie/ONS-97 $sha2 8801 $A98" "up ONS-98 sortie/ONS-97 HEAD 8801 $A98" \
+  "up ONS-98 sortie/ONS-97 $sha2 8793 $A98" "up ONS-98 sortie/ONS-97 $sha2 8801" "down" \
+  "up ONS-98 sortie/ONS-97 $sha2 8801 http://127.0.0.1:8801/" "up ONS-98 sortie/ONS-97 $sha2 8801 https://workbench-ons-98.example.net/" \
+  "up ONS-98 sortie/ONS-97 $sha2 8801 http://ons-98.preview.p1.example.org:8801/" "up ONS-98 sortie/ONS-97 $sha2 8801 http://ons-98.preview.evil.example/"; do
   # shellcheck disable=SC2086 # split on purpose
-  if "$KIT/preview.sh" $args 2> /dev/null; then fail "preview.sh $args was accepted"; else ok "refused: preview.sh ${args%% *} …"; fi
+  if "$KIT/preview.sh" $args 2> /dev/null; then fail "preview.sh $args was accepted"; else ok "refused: preview.sh ${args%% *} … ${args##* }"; fi
 done
 check "a refusal deploys nothing" '[[ ! -e $STAGE0_HOME/previews/ONS-98 ]]'
+
+# Without STAGE0_WORKBENCH_URL a preview has no name for people: the egress
+# gate still serves its address, and the people's proxy gets no route.
+if "$KIT/preview.sh" up ONS-98 sortie/ONS-97 "$sha2" 8801 "$A98" 2> "$tmp/err"; then ok "up with no name for people"; else fail "up ONS-98: $(cat "$tmp/err")"; fi
+check "the egress gate serves it beside the other" '[[ $(cat "$STAGE0_HOME/previews/front-routes") == "ons-97.preview.p1.example.org 8800"$'"'"'\n'"'"'"ons-98.preview.p1.example.org 8801" ]]'
+check "the people's proxy gets no route for it" '[[ $(cat "$STAGE0_HOME/previews/routes") == "workbench-ons-97.example.net 8800" ]]'
+"$KIT/preview.sh" down ONS-98 2> /dev/null
+check "down takes it off the egress gate's routes" '[[ $(cat "$STAGE0_HOME/previews/front-routes") == "ons-97.preview.p1.example.org 8800" ]]'
+
 touch "$tmp/no-start"
-if "$KIT/preview.sh" up ONS-99 sortie/ONS-97 "$sha2" 8801 https://workbench-ons-99.example.net/ 2> /dev/null; then
+if "$KIT/preview.sh" up ONS-99 sortie/ONS-97 "$sha2" 8801 http://ons-99.preview.p1.example.org/ 2> /dev/null; then
   fail "a preview that does not start counts as deployed"
 else
   ok "a preview that does not start fails the deploy"
@@ -114,17 +136,22 @@ if "$KIT/preview.sh" down ONS-97 2> "$tmp/err"; then ok "down"; else fail "down:
 check "its unit is stopped and disabled" 'grep -qx "systemctl --user disable -q --now ortus-stage0-preview@ONS-97.service" "$tmp/calls"'
 check "its checkout and home are gone" '[[ ! -e $P ]] && ! git -C "$tmp/kit" worktree list | grep -q ONS-97'
 check "its ref is gone" '! git -C "$tmp/kit" rev-parse -q --verify refs/previews/ONS-97 > /dev/null'
-check "its route is gone" '[[ ! -s $STAGE0_HOME/previews/routes ]] && grep -qx hook "$tmp/calls"'
+check "its routes are gone" '[[ ! -s $STAGE0_HOME/previews/routes && ! -s $STAGE0_HOME/previews/front-routes ]] && grep -qx hook "$tmp/calls"'
 if "$KIT/preview.sh" down ONS-97 2> /dev/null; then ok "down twice is fine"; else fail "down twice"; fi
 
 # run-previews.sh: one pass of workbench preview-sync, with the kit's settings.
 printf '#!/bin/sh\necho "sortie=$WORKBENCH_SORTIE_URL project=$WORKBENCH_HULY_PROJECT token=$WORKBENCH_SORTIE_TOKEN github=$WORKBENCH_GITHUB_TOKEN $*"\n' > "$tmp/kit/workbench/.venv/bin/workbench"
 out=$("$KIT/run-previews.sh")
-want="sortie=http://127.0.0.1:7680 project=ONS token=sortie-token-value github=github-token-value preview-sync --repo ortusnova/agentic-orchestration --record $STAGE0_HOME/previews.json --deploy $KIT/preview.sh --live-url https://workbench.example.net --first-port 8800"
-check "run-previews.sh runs preview-sync with the kit's settings" '[[ $out == "$want" ]]'
+p1=$STAGE0_HOME/control-plane/workers/p1
+front="--front-url https://p1.example.org:8443 --front-cert $p1/worker.crt --front-key $p1/worker.key --front-ca $p1/ca.crt"
+want="sortie=http://127.0.0.1:7680 project=ONS token=sortie-token-value github=github-token-value preview-sync --repo ortusnova/agentic-orchestration --record $STAGE0_HOME/previews.json --deploy $KIT/preview.sh $front --live-url https://workbench.example.net --first-port 8800"
+check "run-previews.sh runs preview-sync with the kit's settings, and checks through Pomerium with p1's worker" '[[ $out == "$want" ]]'
 sed -i '/^STAGE0_AO_REPO_PROJECT=/d' "$STAGE0_HOME/stage0.env"
 out=$("$KIT/run-previews.sh" 2> "$tmp/err") || true
 check "run-previews.sh gives a stage0.env without STAGE0_AO_REPO_PROJECT its default" '[[ $out == "$want" ]]'
+sed -i 's|^STAGE0_WORKBENCH_URL=.*|STAGE0_WORKBENCH_URL=|' "$STAGE0_HOME/stage0.env"
+out=$("$KIT/run-previews.sh" 2> "$tmp/err") || true
+check "without STAGE0_WORKBENCH_URL, as on p1, the addresses are still the front's" '[[ $out == *" $front --live-url  --first-port 8800" ]]'
 check "the previews' timer runs run-previews.sh" 'grep -qx "ExecStart=@KIT@/run-previews.sh" "$KIT/units/ortus-stage0-previews.service" && grep -q ortus-stage0-previews.timer "$KIT/stage0.sh"'
 
 exit "$failed"

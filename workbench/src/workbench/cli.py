@@ -29,8 +29,14 @@ def main(argv: list[str] | None = None) -> int:
     pv = sub.add_parser("preview-sync", help="deploy, follow and remove the previews of the review: ui stories' pull requests, once")
     pv.add_argument("--repo", required=True, help="owner/repo of the pull requests to preview")
     pv.add_argument("--record", required=True, help="the previews' record, which the live workbench reads as WORKBENCH_PREVIEWS")
-    pv.add_argument("--deploy", required=True, help="the command that runs `up IDENTIFIER BRANCH SHA PORT ADDRESS` and `down IDENTIFIER`")
-    pv.add_argument("--live-url", default="", help="the live workbench's address; each preview gets a name beside it")
+    pv.add_argument("--deploy", required=True,
+                    help="the command that runs `up IDENTIFIER BRANCH SHA PORT ADDRESS [PUBLIC]` and `down IDENTIFIER`")
+    pv.add_argument("--front-url", required=True,
+                    help="the control plane's front, Pomerium's public URL: each preview's address is a name under its host")
+    pv.add_argument("--front-cert", required=True, help="the client certificate the answer check dials the front with")
+    pv.add_argument("--front-key", required=True, help="its key")
+    pv.add_argument("--front-ca", required=True, help="the CA that signs the front's certificate")
+    pv.add_argument("--live-url", default="", help="the live workbench's TLS name; each preview gets a name for people beside it")
     pv.add_argument("--first-port", type=int, default=8800)
     pv.add_argument("--handoff-state", default="In Review", help="the state a story waits in once its review passed")
     pv.add_argument("--branch-prefix", default="sortie/")
@@ -97,7 +103,7 @@ def preview_sync(args) -> int:
     from pathlib import Path
 
     from .delivery import GitHubClient
-    from .preview import CommandDeployer, Settings, sync_once
+    from .preview import CommandDeployer, FrontChecker, PreviewError, Settings, sync_once
     from .sortie import SortieClient
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -108,7 +114,14 @@ def preview_sync(args) -> int:
         print("workbench: preview-sync needs WORKBENCH_SORTIE_URL, WORKBENCH_HULY_PROJECT and --repo owner/repo",
               file=sys.stderr)
         return 2
-    settings = Settings(repo=args.repo, record=Path(args.record).expanduser(), live_url=args.live_url,
+    try:
+        checker = FrontChecker(args.front_url, args.front_cert, args.front_key, args.front_ca,
+                               env.get("WORKBENCH_SORTIE_TOKEN", ""))
+    except PreviewError as exc:
+        print(f"workbench: preview-sync: {exc}", file=sys.stderr)
+        return 2
+    settings = Settings(repo=args.repo, record=Path(args.record).expanduser(), front_url=args.front_url,
+                        live_url=args.live_url,
                         first_port=args.first_port, handoff_state=args.handoff_state, branch_prefix=args.branch_prefix)
 
     async def run() -> int:
@@ -116,7 +129,8 @@ def preview_sync(args) -> int:
         github = GitHubClient((env.get("WORKBENCH_GITHUB_API_URL", "").strip() or "https://api.github.com").rstrip("/"),
                               env.get("WORKBENCH_GITHUB_TOKEN", "").strip())
         try:
-            return await sync_once(settings, sortie.bind(project), github, CommandDeployer(shlex.split(args.deploy)))
+            return await sync_once(settings, sortie.bind(project), github, CommandDeployer(shlex.split(args.deploy)),
+                                   checker)
         finally:
             await sortie.aclose()
             await github.aclose()

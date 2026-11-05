@@ -149,7 +149,7 @@ func carry(ctx context.Context, j *flows.Job) error {
 
 func connect(ctx context.Context, j *flows.Job, host string) error {
 	a := j.Flows[protocol.FlowEgress]
-	e := &flows.Egress{Upstream: a.URL, Token: a.Token, TLS: j.TLS}
+	e := &flows.Egress{Upstream: a.URL, Token: a.Token, TLS: j.TLS, Job: j.ID}
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {

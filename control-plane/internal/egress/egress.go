@@ -5,7 +5,9 @@
 // live and granted for the egress flow, logs it with the worker, job and
 // attempt, and tunnels it through nono's proxy, which holds the
 // credentials and decides the host. A live-proof job that runs gets a
-// second nono's, of the live-proof profile, instead. While Sortie cannot
+// second nono's, of the live-proof profile, instead. A CONNECT for a
+// preview's name (Previews) is served from the preview's port on the
+// gate's loopback instead of nono. While Sortie cannot
 // answer, as while it restarts, the gate answers 503, which a worker
 // retries, never 407.
 package egress
@@ -54,6 +56,9 @@ type Config struct {
 	// LiveProof, when set, is the egress of live-proof jobs: the jobs
 	// its file names go through a second nono, of the live-proof profile.
 	LiveProof *LiveProof
+	// Previews, when set, are the previews a job reaches at a name under
+	// their domain, from the gate's loopback, never through nono.
+	Previews *Previews
 }
 
 // LiveProof is the egress of live-proof jobs (agent-platform/run-supervision,
@@ -103,6 +108,11 @@ func New(cfg Config, log *slog.Logger) (*Gate, error) {
 			return nil, errors.New("live proof: the jobs file is missing")
 		}
 	}
+	if p := cfg.Previews; p != nil {
+		if err := p.validate(); err != nil {
+			return nil, err
+		}
+	}
 	control, err := ReadSecret(cfg.ControlTokenFile)
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
@@ -147,6 +157,10 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the egress flow takes CONNECT only", http.StatusMethodNotAllowed)
 		return
 	}
+	if g.isPreview(r.Host) {
+		g.preview(w, r, worker)
+		return
+	}
 	host := r.Host
 	grant, ok, err := g.admit(r.Context(), proxyToken(r))
 	if err != nil {
@@ -154,7 +168,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		g.log.Info("egress refused", slog.String("worker", worker), slog.String("host", host), slog.String("reason", "no live egress token"))
+		g.log.Info("egress refused", slog.String("worker", worker), slog.String("job", r.Header.Get(JobHeader)), slog.String("host", host), slog.String("reason", "no live egress token"))
 		w.Header().Set("Proxy-Authenticate", `Bearer realm="sortie-job"`)
 		http.Error(w, "the job token does not admit the egress flow", http.StatusProxyAuthRequired)
 		return

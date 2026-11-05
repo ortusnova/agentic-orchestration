@@ -94,7 +94,7 @@ def create_app(config: Config, **services) -> FastAPI:
         oidc = OIDCClient(config.oidc_issuer, config.oidc_client_id, config.oidc_client_secret, config.oidc_redirect_url,
                           scopes=config.oidc_scopes)
     app.state.oidc = oidc
-    current_identity, require_role = make_checks(sessions)
+    current_identity, require_role = make_checks(sessions, config.review_key)
     # Every signed-in person holds at least the planner role.
     require_operator = require_role(PLANNER)
     app.state.require_operator = require_operator

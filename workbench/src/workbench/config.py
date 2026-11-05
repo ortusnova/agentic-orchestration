@@ -183,6 +183,11 @@ class Config:
     notify_chat_id: str = ""
     # Where people reach this workbench, for the links in what it pushes.
     public_url: str = ""
+    # A preview's review key (WORKBENCH_REVIEW_KEY_FILE): a request that
+    # carries it, as the control plane's egress gate sets it on a review
+    # job's requests, is that review's, signed in. Only a read-only
+    # workbench (WORKBENCH_SYNC=0), a preview, takes one.
+    review_key: str = field(default="", repr=False)
     # The directory of <host>.token files: the token each host's Sortie
     # posts its notifications with (workbench.notifications). None: the
     # notifications endpoint takes none.
@@ -238,6 +243,16 @@ class Config:
                 raise ConfigError("WORKBENCH_NOTIFY_CHAT_ID is required with WORKBENCH_NOTIFY_KIND=telegram")
             if not public_url.startswith(("http://", "https://")):
                 raise ConfigError("WORKBENCH_PUBLIC_URL is required with WORKBENCH_NOTIFY_KIND: the links in each question point there")
+        review_key = ""
+        if env.get("WORKBENCH_REVIEW_KEY_FILE", "").strip():
+            try:
+                review_key = Path(env["WORKBENCH_REVIEW_KEY_FILE"].strip()).expanduser().read_text().strip()
+            except OSError as exc:
+                raise ConfigError(f"WORKBENCH_REVIEW_KEY_FILE: {exc}") from exc
+            if not review_key:
+                raise ConfigError("WORKBENCH_REVIEW_KEY_FILE is empty")
+            if env.get("WORKBENCH_SYNC", "1").strip() != "0":
+                raise ConfigError("WORKBENCH_REVIEW_KEY_FILE is for a preview: it needs WORKBENCH_SYNC=0")
         prompt = env.get("WORKBENCH_PROMPT_FILE") or str(bundled("prompts/planning-session.md", "prompts/planning-session.md"))
         frontend = env.get("WORKBENCH_FRONTEND_DIR") or str(bundled("frontend", "frontend/dist"))
         return cls(
@@ -277,6 +292,7 @@ class Config:
             notify_secret=notify_secret,
             notify_chat_id=notify_chat_id,
             public_url=public_url,
+            review_key=review_key,
             notify_tokens_dir=(Path(env["WORKBENCH_NOTIFY_TOKENS"].strip()).expanduser()
                                if env.get("WORKBENCH_NOTIFY_TOKENS", "").strip() else None),
         )

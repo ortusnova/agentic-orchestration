@@ -10,8 +10,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from .auth import (
-    APPROVER, COOKIE_NAME, LOGIN_COOKIE_NAME, LOGIN_MAX_AGE, PLANNER, Identity, Sessions,
-    local_identity, roles_from_groups, safe_next, verify_password,
+    APPROVER, COOKIE_NAME, LOGIN_COOKIE_NAME, LOGIN_MAX_AGE, PLANNER, REVIEW_JOB_HEADER, REVIEW_KEY_HEADER, Identity,
+    Sessions, local_identity, review_identity, roles_from_groups, safe_next, verify_password,
 )
 from .config import Config
 from .oidc import OIDCClient, OIDCError, pkce_pair
@@ -21,12 +21,17 @@ class LoginBody(BaseModel):
     password: str
 
 
-def make_checks(sessions: Sessions) -> tuple[Callable, Callable[[str], Callable]]:
+def make_checks(sessions: Sessions, review_key: str = "") -> tuple[Callable, Callable[[str], Callable]]:
     """``current_identity``, a dependency that returns the signed-in person or
-    answers 401, and ``require_role(role)``, one that also answers 403."""
+    answers 401, and ``require_role(role)``, one that also answers 403. With
+    ``review_key``, a preview's, a request that carries it in
+    ``REVIEW_KEY_HEADER`` is its review's (``review_identity``)."""
 
     def current_identity(request: Request) -> Identity:
         identity = sessions.identity(request.cookies.get(COOKIE_NAME))
+        if identity is None and review_key:
+            identity = review_identity(review_key, request.headers.get(REVIEW_KEY_HEADER),
+                                       request.headers.get(REVIEW_JOB_HEADER))
         if identity is None:
             raise HTTPException(status_code=401, detail="sign in first")
         return identity

@@ -356,8 +356,18 @@ branch, which Sortie has pushed and opened a pull request for. Read its
    comment names. When it is not, that preview is of an earlier commit:
    write no record and end; the kit deploys the head once CI passes on it,
    and its comment starts the review on it.
-3. Open the preview's address in a headless browser (Debian's `chromium`
-   installs with apt here, and `playwright-core` from npm drives it). Click
+3. Open the preview's address, exactly as the kit's comment gives it, in a
+   headless browser (Debian's `chromium` installs with apt here, and
+   `playwright-core` from npm drives it), with this machine's proxy
+   settings: launch it with `proxy: { server: process.env.HTTP_PROXY }`
+   (or `chromium --proxy-server="$HTTP_PROXY"`). That proxy carries the
+   address through the control plane's front with this job's token; the
+   preview signs you in as its review, so there is no login page. The kit
+   checked that the preview answers there before it commented. When the
+   address does not answer, or answers an error, that is a platform fault:
+   stop with `blocked` in `.sortie/status`, and give on the lines after it
+   the address and the error you got. Never ask a person to redeploy the
+   preview: the kit redeploys one that does not answer on its own. Click
    every action the story's acceptance criteria name, on the story's
    preview, one at a time, and check that each does what its criterion says
    and what the approved prototype shows. Keep, for each action, what you

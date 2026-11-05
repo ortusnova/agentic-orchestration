@@ -22,6 +22,12 @@ LOGIN_MAX_AGE = 600
 PLANNER = "planner"
 APPROVER = "approver"
 LOCAL_ISSUER = "local"
+# A preview's review (workbench.preview): the control plane's egress gate
+# gives each request of a review job to a preview the previews' review key
+# and the job, in these headers, and drops any value the job sent.
+REVIEW_ISSUER = "review"
+REVIEW_KEY_HEADER = "X-Workbench-Review-Key"
+REVIEW_JOB_HEADER = "X-Workbench-Review-Job"
 
 _N, _R, _P = 2**14, 8, 1
 
@@ -74,6 +80,16 @@ def local_identity() -> Identity:
     """The one person of local mode. Its issuer is ``local``, so no record made
     in local mode can be mistaken for a provider identity."""
     return Identity(iss=LOCAL_ISSUER, sub="operator", name="Local operator", email="", roles=(PLANNER, APPROVER), mode="local")
+
+
+def review_identity(key: str, header_key: str | None, job: str | None) -> Identity | None:
+    """The review of a preview, signed in by the previews' review key that the
+    egress gate sets on its requests: ``Review of <job>``, with both roles,
+    so it can click every action. None without a key, or with another one."""
+    if not key or not header_key or not hmac.compare_digest(key.encode(), header_key.encode()):
+        return None
+    job = (job or "").strip()[:64] or "review"
+    return Identity(iss=REVIEW_ISSUER, sub=job, name=f"Review of {job}", email="", roles=(PLANNER, APPROVER), mode="local")
 
 
 def roles_from_groups(groups: object, planner_group: str, approver_group: str) -> tuple[str, ...]:

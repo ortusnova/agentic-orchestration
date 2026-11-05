@@ -35,9 +35,16 @@ func run() error {
 	var lp egress.LiveProof
 	flag.StringVar(&lp.Nono, "live-proof-nono", "", "the live-proof nono's proxy, host:port; empty: no live-proof egress")
 	flag.StringVar(&lp.JobsFile, "live-proof-jobs-file", "", "the file of the live-proof jobs that run, one per line")
+	var pv egress.Previews
+	flag.StringVar(&pv.Domain, "preview-domain", "", "the previews' domain: a CONNECT for a name under it is served from the preview's loopback port; empty: no previews")
+	flag.StringVar(&pv.RoutesFile, "previews-file", "", "the deployed previews, one \"NAME PORT\" line each")
+	flag.StringVar(&pv.ReviewKeyFile, "preview-review-key-file", "", "the key the gate gives a job's requests to a preview, which signs its review in")
 	flag.Parse()
 	if lp.Nono != "" || lp.JobsFile != "" {
 		cfg.LiveProof = &lp
+	}
+	if pv.Domain != "" || pv.RoutesFile != "" || pv.ReviewKeyFile != "" {
+		cfg.Previews = &pv
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	g, err := egress.New(cfg, log)

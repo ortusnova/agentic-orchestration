@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,15 +21,22 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 )
 
-// Egress is the guest's HTTP proxy. It carries each CONNECT tunnel and
-// each plain proxied request to the egress flow, itself an HTTP proxy,
-// adding the job's egress token as Proxy-Authorization. A guest's own
-// Proxy-Authorization is dropped. Requests counts what it carried, so
-// the daemon knows whether a run made model requests.
+// Egress is the guest's HTTP proxy. It carries each CONNECT tunnel to
+// the egress flow, itself an HTTP proxy, adding the job's egress token as
+// Proxy-Authorization and the job's identifier as JobHeader. A plain
+// proxied request, such as a browser's for an http:// address, goes the
+// same way: the forwarder opens a CONNECT tunnel to its host, port 80 by
+// default, on the egress flow and sends the request inside it, so the
+// control plane's front sees a CONNECT for every request the guest makes.
+// A guest's own Proxy-Authorization is dropped. Requests counts what it
+// carried, so the daemon knows whether a run made model requests.
 type Egress struct {
 	Upstream *url.URL
 	Token    secret.Token
 	TLS      *tls.Config
+	// Job is the job's identifier, which the forwarder names on each
+	// CONNECT so the egress gate can log the job of a refused token.
+	Job string
 
 	requests  atomic.Int64
 	once      sync.Once
@@ -66,25 +74,30 @@ func (e *Egress) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e.once.Do(func() {
-		up := httpScheme(e.Upstream)
-		var cfg *tls.Config
-		if e.TLS != nil {
-			cfg = e.TLS.Clone()
+		e.transport = &http.Transport{
+			DialContext:           e.dialTunnel,
+			ResponseHeaderTimeout: 10 * time.Minute,
+			MaxIdleConnsPerHost:   4,
+			IdleConnTimeout:       90 * time.Second,
 		}
-		e.transport = &http.Transport{Proxy: http.ProxyURL(up), TLSClientConfig: cfg, ResponseHeaderTimeout: 10 * time.Minute}
 	})
 	e.requests.Add(1)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = pr.In.URL
 			pr.Out.Host = pr.In.Host
-			if a := e.proxyAuth(); a != "" {
-				pr.Out.Header.Set("Proxy-Authorization", a)
-			}
-			pr.Out.Header.Set(protocol.ProtocolHeader, strconv.Itoa(protocol.Version))
+			pr.Out.Header.Del("Proxy-Authorization")
 		},
 		Transport:     e.transport,
 		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			if refused, ok := errors.AsType[*tunnelRefused](err); ok {
+				w.WriteHeader(refused.status)
+				_, _ = w.Write(refused.body)
+				return
+			}
+			http.Error(w, "egress flow: "+err.Error(), http.StatusBadGateway)
+		},
 	}
 	r, cancel := detached(r)
 	defer cancel()
@@ -104,17 +117,49 @@ func detached(r *http.Request) (*http.Request, context.CancelFunc) {
 	return r.WithContext(ctx), cancel
 }
 
-func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
-	e.requests.Add(1)
-	addr, useTLS := e.upstreamAddr()
-	// Not r's context: the guest's half-close cancels it (see detached).
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
+// tunnelRefused is the egress flow's answer to a CONNECT other than 200.
+type tunnelRefused struct {
+	status int
+	body   []byte
+}
+
+func (t *tunnelRefused) Error() string { return fmt.Sprintf("the egress flow answered %d", t.status) }
+
+// dialTunnel is the plain requests' dialer: a CONNECT tunnel to addr on
+// the egress flow.
+func (e *Egress) dialTunnel(ctx context.Context, _, addr string) (net.Conn, error) {
+	conn, br, resp, err := e.tunnel(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer func() { _ = conn.Close() }()
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return nil, &tunnelRefused{status: resp.StatusCode, body: body}
+	}
+	_ = resp.Body.Close()
+	return &bufferedConn{Conn: conn, r: br}, nil
+}
+
+// bufferedConn reads what the CONNECT answer's reader already buffered first.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// tunnel sends a CONNECT for addr on the egress flow and returns the
+// connection, its reader and the flow's answer.
+func (e *Egress) tunnel(ctx context.Context, addr string) (net.Conn, *bufio.Reader, *http.Response, error) {
+	upAddr, useTLS := e.upstreamAddr()
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var d net.Dialer
-	up, err := d.DialContext(ctx, "tcp", addr)
+	up, err := d.DialContext(ctx, "tcp", upAddr)
 	if err != nil {
-		http.Error(w, "egress flow unreachable", http.StatusBadGateway)
-		return
+		return nil, nil, nil, fmt.Errorf("egress flow unreachable: %w", err)
 	}
 	if useTLS {
 		cfg := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -130,26 +175,41 @@ func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
 		tc := tls.Client(up, cfg)
 		if err := tc.HandshakeContext(ctx); err != nil {
 			_ = up.Close()
-			http.Error(w, "egress flow TLS failed", http.StatusBadGateway)
-			return
+			return nil, nil, nil, fmt.Errorf("egress flow TLS failed: %w", err)
 		}
 		up = tc
 	}
-	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: r.Host}, Host: r.Host, Header: http.Header{}}
+	req := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: addr}, Host: addr, Header: http.Header{}}
 	if a := e.proxyAuth(); a != "" {
 		req.Header.Set("Proxy-Authorization", a)
 	}
 	req.Header.Set(protocol.ProtocolHeader, strconv.Itoa(protocol.Version))
+	if e.Job != "" {
+		req.Header.Set(protocol.JobHeader, e.Job)
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		_ = up.SetDeadline(dl)
+	}
 	if err := req.Write(up); err != nil {
 		_ = up.Close()
-		http.Error(w, "egress flow write failed", http.StatusBadGateway)
-		return
+		return nil, nil, nil, fmt.Errorf("egress flow write failed: %w", err)
 	}
 	br := bufio.NewReader(up)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
 		_ = up.Close()
-		http.Error(w, "egress flow answered nothing", http.StatusBadGateway)
+		return nil, nil, nil, fmt.Errorf("egress flow answered nothing: %w", err)
+	}
+	_ = up.SetDeadline(time.Time{})
+	return up, br, resp, nil
+}
+
+func (e *Egress) connect(w http.ResponseWriter, r *http.Request) {
+	e.requests.Add(1)
+	// Not r's context: the guest's half-close cancels it (see detached).
+	up, br, resp, err := e.tunnel(context.WithoutCancel(r.Context()), r.Host)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
