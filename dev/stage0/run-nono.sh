@@ -4,7 +4,9 @@
 # and only the egress gate reaches it, with the credential in
 # $STAGE0_HOME/nono-pass. It allows the hosts in the control plane's egress
 # profile (control-plane/nono/egress-profile.json, the compose project's
-# too) and replaces each credential's placeholder on requests to its host,
+# too), as the rollout puts it in force ($STAGE0_HOME/nono/egress-profile.json,
+# nono-rollout.sh: while a change that removes hosts waits, it keeps them),
+# and replaces each credential's placeholder on requests to its host,
 # intercepting TLS with the kit's egress CA ($STAGE0_HOME/egress-ca). The
 # credentials are read here at start (egress-credentials.sh) and live only
 # in nono's memory.
@@ -19,6 +21,8 @@ set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 PROFILE=$(cd "$KIT/../../control-plane/nono" && pwd)/egress-profile.json
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
+# The profile in force, which stage0.sh writes before it starts nono.
+[[ -s $STAGE0_HOME/nono/egress-profile.json ]] && PROFILE=$STAGE0_HOME/nono/egress-profile.json
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
 die() { printf 'run-nono.sh: %s\n' "$*" >&2; exit 1; }

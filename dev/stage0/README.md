@@ -706,6 +706,34 @@ What a worker's request meets:
   that the kit holds no host only one repository's jobs need. The remote
   kind takes no `allow_hosts`, so the workflow has none. A live-proof job
   that runs goes through the live-proof nono instead.
+
+  *The rollout order* (`nono-rollout.sh`; spec store
+  `agent-platform/supervisor-autonomy`, design D8). A job's offer is made
+  when it is dispatched, from the workflow Sortie ran then, and the job
+  keeps it to its end, across Sortie's restarts. So a change that moves
+  hosts from nono to the offer's policy must not cut nono while a job
+  with an earlier offer runs: ONS-122, dispatched 4 s before Sortie
+  restarted on the workflow that offered the harness hosts, reached them
+  through nono only, which was already cut. nono runs the profile in
+  force, `$STAGE0_HOME/nono/egress-profile.json`, not the kit's:
+  1. A kit profile that removes no host is in force at once.
+  2. One that removes hosts waits (`$STAGE0_HOME/nono/egress-profile.next.json`);
+     nono keeps every host it allowed before, the full list.
+  3. `stage0.sh` restarts Sortie on the rendered workflow first, and
+     records its revision and when the Sortie on it started, from the
+     state API's `started_at` (`$STAGE0_HOME/nono/narrowing`).
+  4. The kit's profile goes in force, and both nonos restart onto it, only
+     once the state API shows a Sortie started on that workflow, which has
+     polled since (it re-adopts the runs it restored before its first
+     poll), and no running job whose `started_at` is before it: none holds
+     an offer from an earlier revision. `stage0.sh` checks right after its
+     restart of Sortie, and the deploy timer at each tick until then; each
+     check that waits says in the deploy's journal what for
+     (`nono keeps the full list: ONS-122, started 2026-11-05T09:59:56Z holds an offer from
+     before Sortie ran that workflow`).
+
+  `test-deploy.sh` covers the order against a stubbed Sortie, the ONS-122
+  case among them.
 - **Previews.** A `CONNECT` for a name under `preview.<Pomerium's host>`
   (`front-config.sh` `preview_domain`) on port 80 is a ui story's preview
   ([Previews of ui stories](#previews-of-ui-stories)): the same egress
