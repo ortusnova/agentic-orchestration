@@ -52,6 +52,16 @@ grep -q '"nested": false' "$conf" && ok "a worker without homelab's inputs does 
 grep -q '"ORTUS_EGRESS_CA": "'"$tmp/ca.crt"'"' "$conf" && grep -q 'update-ca-certificates' "$conf" \
   && ok "every machine trusts the egress CA's interception" || fail "CA: $(cat "$conf")"
 grep -q '"IS_SANDBOX": "1"' "$conf" && ok "the agent runs with IS_SANDBOX, which the remote kind does not pass" || fail "IS_SANDBOX: $(cat "$conf")"
+python3 - "$conf" "$KIT/WORKFLOW.md" <<'PY' && ok "the workflow's agent command reads its token usage with agent-usage" || fail "usage_commands: $(cat "$conf")"
+import json, os, re, sys
+usage = json.load(open(sys.argv[1]))["usage_commands"]
+command = re.search(r"^\s*command:\s*(\S+)", open(sys.argv[2]).read(), re.M).group(1)
+# The daemon looks the run's command up by its base name.
+sys.exit(0 if usage == {os.path.basename(command): ["agent-usage"]} else 1)
+PY
+# shellcheck disable=SC2016 # the script's own text
+[[ -x $KIT/pack/agent-usage ]] && grep -q '"$dir/agent-usage"' "$KIT/pack/install-harness.sh" \
+  && ok "the pack installs agent-usage" || fail "the pack does not install agent-usage"
 grep -q '"url": "https://p1.example.org:8443"' "$conf" \
   && grep -q '"tls": {"cert_file": "'"$tmp/cp-worker.crt"'", "key_file": "'"$tmp/cp-worker.key"'", "ca_file": "'"$tmp/cp-ca.crt"'"}' "$conf" \
   && ok "the worker dials Pomerium with its client certificate" || fail "url: $(cat "$conf")"

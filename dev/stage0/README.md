@@ -149,6 +149,13 @@ by the same Sortie, like any other.
   with the Claude sign-in plugin 2.0.0-next.6. opencode 2 keeps credentials
   in its own store, so `pack/agent-acp` imports the placeholder login with
   `opencode auth import` before each start.
+- **Token usage.** After each run the worker daemon runs `agent-usage` in
+  the machine (`usage_commands` in `worker.json`, `worker-config.sh`). It
+  prints the totals the opencode plugin `pack/sortie-usage.js` keeps for
+  the run `agent-acp` started, over every session of that opencode
+  (subagents' too), so Sortie records the run's tokens. A Claude Code run
+  records none yet: `agent-usage` fails, and the daemon reports the run
+  unmeasured, never as a zero spend.
 - **No permission prompts.** The VM is the sandbox, so neither harness asks
   before acting: opencode's `permissions` allow everything except `webfetch`
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
