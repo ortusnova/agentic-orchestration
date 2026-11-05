@@ -16,7 +16,7 @@ from .home import History, build_home
 from .merge import merge
 from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
-from .notifications import project_notifications
+from .notifications import Clearing, project_notifications
 from .questions import home_questions, parked, parked_at_of, question
 from .sortie import ProjectSortie, SortieError
 from .supervisor import supervisor_view
@@ -33,13 +33,16 @@ class Hub:
                  peers: list[ProjectSortie] | None = None, previews=None,
                  alerts: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
                  history: RunHistory | None = None,
-                 notifications: Callable[[list[str]], list[dict[str, Any]]] | None = None,
-                 clock: Callable[[], float] = time.time):
+                 notifications=None, clock: Callable[[], float] = time.time):
         self.plan = plan
-        # What the Sorties' notifications sent of these identifiers, as kept
-        # (workbench.notifications), and the time their repeats count in.
+        # Where the Sorties' notifications are kept (workbench.notifications,
+        # the registry), what clears a story's once it moves on, and the time
+        # their repeats count in.
         self.notifications = notifications
+        self.clearing = Clearing(notifications) if notifications is not None else None
         self.clock = clock
+        # Whether the questions were read since the start: until then no park is known.
+        self._questions_read = False
         # The other Sorties whose workers this project's stories may run on,
         # and the last state each gave, or why it gave none.
         self.peers = list(peers or [])
@@ -153,6 +156,7 @@ class Hub:
         if not graph.get("dispatched"):
             self.agent_state, self.state_error = None, None
             self.questions = await self._questions(self._peer_pairs())
+            self._questions_read = True
             return self._peer_fields()
         try:
             state = await self.sortie.state()
@@ -160,10 +164,12 @@ class Hub:
             log.warning("sortie state unavailable: %s", exc)
             self.agent_state, self.state_error = None, exc.message
             self.questions = await self._questions(self._peer_pairs())
+            self._questions_read = True
             return self._peer_fields()
         self.agent_state, self.state_error = state, None
         await self._runs(self.sortie, state)
         self.questions = await self._questions([(self.sortie, state)] + self._peer_pairs())
+        self._questions_read = True
         fields = worker_fields(state) if any(n.get("runtime") for n in graph.get("nodes") or []) else {}
         return {**self._peer_fields(), **fields}
 
@@ -402,23 +408,38 @@ class Hub:
         except Exception:  # the home must never take the graph down with it
             log.exception("could not build the project home")
             return {"error": "the home could not be computed; see the workbench log"}
-        home["notifications"] = self._notifications(doc.get("nodes") or [])
+        home["notifications"] = self._notifications(doc.get("nodes") or [], doc.get("plan_states"))
+        # Stories, not notifications: one entry stands for each story's.
         home["needs_person"]["unread"] = sum(1 for n in home["notifications"] if n["unread"])
         home["lanes"] = {**lanes_summary(self.fleet, home.get("health")), "workers": self.fleet.get("workers") or []}
         home["version"] = doc.get("version")
         return home
 
-    def _notifications(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """What "Needs a person" shows of the notifications the Sorties sent."""
+    def _notifications(self, nodes: list[dict[str, Any]], plan_states: dict[str, str] | None) -> list[dict[str, Any]]:
+        """What "Needs a person" shows of the notifications the Sorties sent,
+        once those of the stories that moved on are cleared."""
         if self.notifications is None:
             return []
         idents = [n["tracker"]["identifier"] for n in nodes if n.get("kind") == "story" and n.get("tracker")]
         try:
-            rows = self.notifications(idents)
+            if self.tracker is not None:
+                self.clearing.observe(nodes, plan_states, self._parked(), self.clock())
+        except Exception:  # the home must never fail for them
+            log.exception("could not clear the notifications of the stories that moved on")
+        try:
+            rows = self.notifications.notifications(idents)
         except Exception:  # the home must never fail for them
             log.exception("could not read the notifications")
             return []
         return project_notifications(rows, nodes, self.open_questions(), self.clock())
+
+    def _parked(self) -> set[str] | None:
+        """The parked stories, by identifier; None while some Sortie's parks
+        are unknown: its state could not be read, or never was."""
+        if not self._questions_read or self.state_error is not None \
+                or any(p.name not in self._peer_questions for p in self.peers):
+            return None
+        return set(self.questions)
 
     def open_questions(self) -> dict[str, dict[str, Any]]:
         """The questions that wait on a person: none of a story the

@@ -15,7 +15,7 @@
     faults?: HomeFault[];
     /** The stories whose supervisor lease ran out, ranked after the questions. */
     expiredHolds?: ExpiredHold[];
-    /** What the Sorties' notifications sent: unread ones first. */
+    /** What the Sorties' notifications sent, one entry per story: unread ones first. */
     notifications?: HomeNotification[];
     /** A person saw these notifications; resolves to an error message, or null. */
     onseen?: (ids: number[]) => Promise<string | null>;
@@ -75,6 +75,8 @@
       : i.action.kind === "task" ? "Open task" : "Plan in graph";
 
   const unread = $derived(notifications.filter((n) => n.unread));
+  /** The ids an entry stands for: every notification of its story it shows. */
+  const idsOf = (n: HomeNotification) => (n.ids?.length ? n.ids : [n.id]);
   let seeing = $state(false);
   let seenError = $state("");
   async function see(ids: number[]) {
@@ -110,15 +112,15 @@
     <div class="inbox" data-notifications role="region" aria-labelledby="inbox-h">
       <div class="ch">
         <h3 id="inbox-h">From Sortie</h3>
-        <span>{unread.length} unread · {notifications.length} shown</span>
+        <span>{unread.length} unread · {notifications.length} {notifications.length === 1 ? "story" : "stories"}</span>
         {#if onseen && unread.length > 1}
-          <button type="button" class="more" disabled={seeing} onclick={() => see(unread.map((n) => n.id))}>Mark all seen</button>
+          <button type="button" class="more" disabled={seeing} onclick={() => see(unread.flatMap(idsOf))}>Mark all seen</button>
         {/if}
       </div>
       {#if seenError}<p class="err" role="alert">{seenError}</p>{/if}
       <ol>
         {#each notifications as n (n.id)}
-          <li class="note-item" class:unread={n.unread} data-notification={n.id} data-event={n.event_type} data-unread={n.unread}>
+          <li class="note-item" class:unread={n.unread} data-notification={n.id} data-event={n.event_type} data-unread={n.unread} data-earlier={n.earlier ?? 0}>
             <span class="dot" aria-label={n.unread ? "Unread" : "Seen"}></span>
             <div class="body">
               <span class="line">
@@ -128,11 +130,11 @@
               </span>
               <span class="said">{said(n)}</span>
               <span class="note">
-                {when(n.sent_at)}{#if n.question} · answer it under Answer{/if}{#if n.escalation?.url} · <a href={n.escalation.url} target="_blank" rel="noreferrer">open the session</a>{/if}{#if !n.unread && n.seen_by} · seen by {n.seen_by}{/if}
+                {when(n.sent_at)}{#if n.earlier} · <span class="earlier">{n.earlier} earlier {n.earlier === 1 ? "notification" : "notifications"}</span>{/if}{#if n.question} · answer it under Answer{/if}{#if n.escalation?.url} · <a href={n.escalation.url} target="_blank" rel="noreferrer">open the session</a>{/if}{#if !n.unread && n.seen_by} · seen by {n.seen_by}{/if}
               </span>
             </div>
             {#if n.unread && onseen}
-              <button type="button" class="btn" disabled={seeing} onclick={() => see([n.id])}>Seen</button>
+              <button type="button" class="btn" disabled={seeing} onclick={() => see(idsOf(n))}>Seen</button>
             {/if}
           </li>
         {/each}

@@ -20,7 +20,7 @@ def test_migrates_once_and_reopens(tmp_path, open_registry):
     again = open_registry()
     assert [p.slug for p in again.list()] == ["billing"]
     with closing(sqlite3.connect(tmp_path / "wb.db")) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_a_closed_registry_opens_no_connection(open_registry):
