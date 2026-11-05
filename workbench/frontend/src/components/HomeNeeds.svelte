@@ -1,12 +1,12 @@
 <script lang="ts">
   import { can } from "../lib/identity.svelte";
   import { graphHref } from "../lib/router";
-  import { eventText, plainTask, REASON_TEXT, slackText, slackWidth, type Column, type ExpiredHold, type HomeFault, type HomeNotification, type HomeQuestion, type NotReadyItem } from "../lib/home";
+  import { eventText, plainTask, REASON_TEXT, slackText, slackWidth, type Column, type ApprovalTask, type ExpiredHold, type HomeFault, type HomeNotification, type HomeQuestion, type NotReadyItem } from "../lib/home";
   import FaultBox from "./FaultBox.svelte";
   import QuestionBox from "./QuestionBox.svelte";
 
   let {
-    items, questions = [], faults = [], expiredHolds = [], notifications = [], slug, marks, onapprove, onanswer, onreplace, onfaultdone, onseen,
+    items, questions = [], faults = [], expiredHolds = [], notifications = [], doneByApproval = [], slug, marks, onapprove, onanswer, onreplace, onfaultdone, onseen,
   }: {
     items: NotReadyItem[];
     /** The open questions of parked stories, ranked first. */
@@ -17,6 +17,8 @@
     expiredHolds?: ExpiredHold[];
     /** What the Sorties' notifications sent: unread ones first. */
     notifications?: HomeNotification[];
+    /** The approval tasks unticked in tasks.md that their stories' approvals did. */
+    doneByApproval?: ApprovalTask[];
     /** A person saw these notifications; resolves to an error message, or null. */
     onseen?: (ids: number[]) => Promise<string | null>;
     slug: string;
@@ -213,6 +215,20 @@
             </li>
           {/each}
         </ol>
+        {#if col.id === "operator" && doneByApproval.length}
+          <div class="byapproval" data-done-by-approval>
+            <p>{doneByApproval.length} {doneByApproval.length === 1 ? "task is" : "tasks are"} done by approval, unticked in tasks.md:</p>
+            <ul>
+              {#each doneByApproval as t (t.id)}
+                <li data-task={t.id}>
+                  <a href={graphHref(slug, { epic: t.change, selected: t.change })} title={plainTask(t.text)}>{plainTask(t.text)}</a>
+                  <span class="note">{[t.change, t.number ? `task ${t.number}` : null].filter(Boolean).join(" · ")}</span>
+                  <span class="by">done by approval</span>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
         {#if list.length > SHOWN}
           <button type="button" class="more" aria-expanded={!!expanded[col.id]} onclick={() => (expanded = { ...expanded, [col.id]: !expanded[col.id] })}>
             {expanded[col.id] ? "Show the top 5" : `Show all ${list.length}`}
@@ -279,6 +295,11 @@
   .btn:disabled { opacity: 0.6; cursor: progress; }
   .more { margin: 6px 0 4px; padding: 4px 0; font-size: 12px; font-weight: 600; color: var(--mute); text-decoration: underline; text-underline-offset: 3px; }
   .more:hover { color: var(--ink); }
+  .byapproval { margin: 6px 0 4px; padding-top: 6px; border-top: 1px solid var(--hair); font-size: 11.5px; color: var(--mute); }
+  .byapproval ul { list-style: none; }
+  .byapproval li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 3px 0; }
+  .byapproval a { color: var(--mute); font-weight: 600; text-decoration: line-through; overflow-wrap: anywhere; }
+  .by { flex: none; padding: 0 5px; border: 1px solid var(--done); border-radius: var(--r-tag); color: var(--done); font-size: 10.5px; font-weight: 700; line-height: 16px; }
   .quiet { margin-top: 10px; font-size: 12px; color: var(--mute); }
   .inbox { margin-bottom: 14px; padding: 10px 14px 6px; border: 1px solid var(--line); border-radius: var(--r-well); background: var(--panel); }
   .inbox .ch { justify-content: flex-start; }

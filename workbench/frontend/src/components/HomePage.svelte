@@ -111,7 +111,7 @@
       </section>
     {/if}
 
-    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} faults={home.faults ?? []} expiredHolds={home.expired_holds ?? []} notifications={home.notifications ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onfaultdone} {onseen} />
+    <HomeNeeds items={home.not_ready} questions={home.questions ?? []} faults={home.faults ?? []} expiredHolds={home.expired_holds ?? []} notifications={home.notifications ?? []} doneByApproval={home.done_by_approval ?? []} {slug} {marks} {onapprove} {onanswer} {onreplace} {onfaultdone} {onseen} />
 
     <SupervisorPanel supervisor={doc.supervisor} {slug} dispatched={!!doc.sortie.dispatched} reachable={doc.sortie.reachable} oncontrol={onsupervisor} />
 
