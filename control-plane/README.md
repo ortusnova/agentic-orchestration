@@ -13,6 +13,10 @@ plane's CA (spec store `agent-platform/control-plane`, design D18).
 - `cmd/cp-egress`: the egress gate behind Pomerium's egress route.
 - `cmd/cp-probe`: the health probe the images carry.
 - `livetest/`: every scenario, against the running project.
+- [`telemetry/`](telemetry/README.md): the telemetry store, a compose project
+  of its own (`ortus-telemetry`): Langfuse and the OpenTelemetry Collector
+  that is its only ingest address, with backups and retention.
+  `telemetry.sh` starts, stops, checks, backs up, restores and prunes it.
 
 ## Develop
 

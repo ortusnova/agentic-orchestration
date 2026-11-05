@@ -17,15 +17,18 @@ help: ## Show the targets
 build: ## Build bin/cpctl, bin/cp-egress and bin/cp-probe for this host
 	CGO_ENABLED=0 go build -o bin/ ./cmd/cpctl ./cmd/cp-egress ./cmd/cp-probe
 
-test: ## Run the tests (the live scenarios skip; live-test runs them)
+test: ## Run the tests (the live scenarios skip; live-test runs them), and the telemetry store's
 	go test -race -count=1 $(if $(RUN),-run '$(RUN)') ./...
+	$(MAKE) -s -C telemetry test
 
 lint: ## Lint the Go code and shellcheck the scripts
 	golangci-lint run ./...
 	shellcheck -x cp.sh pin-images.sh livetest/run.sh
+	$(MAKE) -s -C telemetry lint
 
-pins: ## List each upstream image of the compose project and whether it is pinned by digest
+pins: ## List each upstream image of both compose projects (ortus-cp, telemetry/) and whether it is pinned by digest
 	./pin-images.sh --check
+	$(MAKE) -s -C telemetry pins
 
 check-latest: ## Fail when Pomerium or nono has a stable release newer than the compose project's (network)
 	@set -e; for pair in pomerium/pomerium:docker.io/pomerium/pomerium nolabs-ai/nono:ghcr.io/nolabs-ai/nono; do \

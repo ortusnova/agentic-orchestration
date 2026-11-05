@@ -8,6 +8,7 @@
 #
 #   control-plane/pin-images.sh            pin from each tag
 #   control-plane/pin-images.sh --check    only list the images and their pins
+#   COMPOSE_FILE=control-plane/telemetry/compose.yaml control-plane/pin-images.sh   the telemetry store's
 #
 # Needs skopeo (or set SKOPEO to a compatible command).
 set -euo pipefail

@@ -1,0 +1,246 @@
+# The telemetry store: Langfuse, with an OpenTelemetry Collector as its only
+# ingest address, as one compose project under rootless podman (README.md).
+# Start, stop and check it with telemetry.sh, which turns the files in
+# $TELEMETRY_HOME/secrets into podman secrets first and gives podman-compose
+# the one environment file, $TELEMETRY_HOME/telemetry.env: no secret is a
+# value in this file or in that one.
+#
+# Every image is pinned by digest (../pin-images.sh, COMPOSE_FILE=this file).
+#
+# Networks: `internal` has no route out; every service is on it, and a
+# client container that joins it reaches the collector at collector:4317
+# and collector:4318. `outside` carries the two published ports, both on
+# 127.0.0.1 only: the collector's OTLP ports and Langfuse's web port.
+name: ortus-telemetry
+
+x-podman:
+  in_pod: false
+
+networks:
+  internal:
+    name: ortus-telemetry-internal
+    internal: true
+  outside:
+    name: ortus-telemetry-outside
+
+secrets:
+  ortus-telemetry-langfuse-salt: {external: true}
+  ortus-telemetry-langfuse-encryption-key: {external: true}
+  ortus-telemetry-langfuse-nextauth-secret: {external: true}
+  ortus-telemetry-langfuse-init-project-secret-key: {external: true}
+  ortus-telemetry-langfuse-init-user-password: {external: true}
+  ortus-telemetry-postgresql-auth-password: {external: true}
+  ortus-telemetry-clickhouse-auth-password: {external: true}
+  ortus-telemetry-redis-auth-password: {external: true}
+  ortus-telemetry-s3-auth-root-password: {external: true}
+  ortus-telemetry-collector-ingest-token: {external: true}
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  redis-data:
+  minio-data:
+
+# The settings Langfuse's web and worker share (the chart's langfuse.*,
+# postgresql.*, clickhouse.*, redis.* and s3.* values; README.md).
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL}
+  DATABASE_HOST: postgres:5432
+  DATABASE_USERNAME: ${POSTGRESQL_AUTH_USERNAME}
+  DATABASE_NAME: ${POSTGRESQL_AUTH_DATABASE}
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_USER: ${CLICKHOUSE_AUTH_USERNAME}
+  CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_USERNAME: ${REDIS_AUTH_USERNAME}
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: ${S3_BUCKET}
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: ${S3_EVENT_UPLOAD_PREFIX}
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: ${S3_REGION}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${S3_AUTH_ROOT_USER}
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: ${S3_BUCKET}
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: ${S3_MEDIA_UPLOAD_PREFIX}
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: ${S3_REGION}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${S3_AUTH_ROOT_USER}
+  LANGFUSE_S3_BATCH_EXPORT_ENABLED: ${S3_BATCH_EXPORT_ENABLED}
+  TELEMETRY_ENABLED: ${LANGFUSE_FEATURES_TELEMETRY_ENABLED}
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: ${LANGFUSE_FEATURES_EXPERIMENTAL_FEATURES_ENABLED}
+  LANGFUSE_LOG_LEVEL: ${LANGFUSE_LOGGING_LEVEL}
+  LANGFUSE_LOG_FORMAT: ${LANGFUSE_LOGGING_FORMAT}
+  NODE_ENV: production
+
+x-langfuse-secrets: &langfuse-secrets
+  - {source: ortus-telemetry-postgresql-auth-password, type: env, target: DATABASE_PASSWORD}
+  - {source: ortus-telemetry-clickhouse-auth-password, type: env, target: CLICKHOUSE_PASSWORD}
+  - {source: ortus-telemetry-redis-auth-password, type: env, target: REDIS_AUTH}
+  - {source: ortus-telemetry-s3-auth-root-password, type: env, target: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY}
+  - {source: ortus-telemetry-s3-auth-root-password, type: env, target: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY}
+  - {source: ortus-telemetry-langfuse-salt, type: env, target: SALT}
+  - {source: ortus-telemetry-langfuse-encryption-key, type: env, target: ENCRYPTION_KEY}
+
+services:
+  postgres:
+    image: docker.io/library/postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583
+    container_name: ortus-telemetry-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRESQL_AUTH_USERNAME}
+      POSTGRES_DB: ${POSTGRESQL_AUTH_DATABASE}
+      POSTGRES_PASSWORD_FILE: /run/secrets/ortus-telemetry-postgresql-auth-password
+      TZ: UTC
+      PGTZ: UTC
+    secrets:
+      - ortus-telemetry-postgresql-auth-password
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRESQL_AUTH_USERNAME}", "-d", "${POSTGRESQL_AUTH_DATABASE}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:26.10.3.7@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce
+    container_name: ortus-telemetry-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
+      CLICKHOUSE_USER: ${CLICKHOUSE_AUTH_USERNAME}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    secrets:
+      - {source: ortus-telemetry-clickhouse-auth-password, type: env, target: CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      # BACKUP and RESTORE write and read the disk `backups` (telemetry.sh backup).
+      - ./clickhouse-backups.xml:/etc/clickhouse-server/config.d/backups.xml:ro,z
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: docker.io/valkey/valkey:9.2@sha256:247b5e730bdc9dc29fddb8274d1731b203a1a1a46af63eae3a9d55b4bf74853f
+    container_name: ortus-telemetry-redis
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", 'exec valkey-server --requirepass "$$REDISCLI_AUTH" --maxmemory-policy noeviction --appendonly yes']
+    secrets:
+      - {source: ortus-telemetry-redis-auth-password, type: env, target: REDISCLI_AUTH}
+    volumes:
+      - redis-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: docker.io/chainguard/minio:latest@sha256:cee9a8e35885e93f14b3cb32960e5017aff74e2adfb52ba87c65003b0163886b
+    container_name: ortus-telemetry-minio
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", 'mkdir -p "/data/$$LANGFUSE_BUCKET" && exec minio server --address :9000 --console-address :9001 /data']
+    environment:
+      MINIO_ROOT_USER: ${S3_AUTH_ROOT_USER}
+      LANGFUSE_BUCKET: ${S3_BUCKET}
+    secrets:
+      - {source: ortus-telemetry-s3-auth-root-password, type: env, target: MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:4.75.0@sha256:5fd09700a8af5328f3ef004ca8ce5602f6e799aba13da5054d9b18ba1724533e
+    container_name: ortus-telemetry-langfuse-worker
+    restart: unless-stopped
+    environment:
+      <<: *langfuse-env
+      HOSTNAME: 0.0.0.0
+    secrets: *langfuse-secrets
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3030/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # Headless initialisation (langfuse.additionalEnv, README.md): one
+  # organisation, one project with its key pair, and the operator's user;
+  # sign-up is off.
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:4.75.0@sha256:23378ae8cdf1d92b647d68b81c0d0cea3632b43e9fbcbe9b765420af9c9c8662
+    container_name: ortus-telemetry-langfuse-web
+    restart: unless-stopped
+    environment:
+      <<: *langfuse-env
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      AUTH_DISABLE_SIGNUP: ${LANGFUSE_FEATURES_SIGN_UP_DISABLED}
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://minio:9000
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME}
+    secrets:
+      - {source: ortus-telemetry-postgresql-auth-password, type: env, target: DATABASE_PASSWORD}
+      - {source: ortus-telemetry-clickhouse-auth-password, type: env, target: CLICKHOUSE_PASSWORD}
+      - {source: ortus-telemetry-redis-auth-password, type: env, target: REDIS_AUTH}
+      - {source: ortus-telemetry-s3-auth-root-password, type: env, target: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY}
+      - {source: ortus-telemetry-s3-auth-root-password, type: env, target: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY}
+      - {source: ortus-telemetry-langfuse-salt, type: env, target: SALT}
+      - {source: ortus-telemetry-langfuse-encryption-key, type: env, target: ENCRYPTION_KEY}
+      - {source: ortus-telemetry-langfuse-nextauth-secret, type: env, target: NEXTAUTH_SECRET}
+      - {source: ortus-telemetry-langfuse-init-project-secret-key, type: env, target: LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      - {source: ortus-telemetry-langfuse-init-user-password, type: env, target: LANGFUSE_INIT_USER_PASSWORD}
+    networks: [internal, outside]
+    ports:
+      - "127.0.0.1:${LANGFUSE_WEB_SERVICE_PORT}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/public/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # The only ingest address (otelcol.yaml): OTLP over gRPC and HTTP behind
+  # the ingest token; traces to Langfuse, log records and metrics to the
+  # file store, $TELEMETRY_HOME/file-store, which it writes as this user.
+  collector:
+    image: docker.io/otel/opentelemetry-collector-contrib:0.164.0@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+    container_name: ortus-telemetry-collector
+    restart: unless-stopped
+    # The image runs as 10001: that is this user on the host, so the file
+    # store is its own (telemetry.sh retention prunes it).
+    userns_mode: keep-id:uid=10001,gid=10001
+    command: ["--config=/etc/otelcol/otelcol.yaml"]
+    environment:
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_INGESTION_VERSION: ${COLLECTOR_CONFIG_EXPORTERS_OTLP_HTTP_LANGFUSE_HEADERS_X_LANGFUSE_INGESTION_VERSION}
+      FILE_STORE_MAX_MEGABYTES: ${COLLECTOR_CONFIG_EXPORTERS_FILE_ROTATION_MAX_MEGABYTES}
+      TELEMETRY_RETENTION_DAYS: ${TELEMETRY_RETENTION_DAYS}
+    secrets:
+      - {source: ortus-telemetry-langfuse-init-project-secret-key, type: env, target: LANGFUSE_SECRET_KEY}
+      - ortus-telemetry-collector-ingest-token
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol/otelcol.yaml:ro,z
+      - ${TELEMETRY_FILE_STORE}:/var/lib/otelcol/file-store:z
+    networks: [internal, outside]
+    ports:
+      - "127.0.0.1:${COLLECTOR_PORTS_OTLP_HOST_PORT}:4317"
+      - "127.0.0.1:${COLLECTOR_PORTS_OTLP_HTTP_HOST_PORT}:4318"

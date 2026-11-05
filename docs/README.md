@@ -21,6 +21,7 @@ workbench, which reaches each broker over HTTP.
 | [ACP broker notes](../acp-broker/docs/notes.md) | The upstream ACP work the broker depends on, and what each agent does. |
 | [smol-builder](../smol-builder/README.md) | Build the smolvm packs agents run in. |
 | [Control plane operator guide](../control-plane/docs/operator-guide.md) | Run the control plane as one compose project under rootless podman: Sortie, acp-broker, the workbench, Pomerium, nono and Huly; issue and revoke worker certificates; where each secret file goes. |
+| [Telemetry store](../control-plane/telemetry/README.md) | Run Langfuse and its OpenTelemetry Collector as one compose project under rootless podman: settings, secrets, access by SSH tunnel, masking, backups, restore and retention. |
 | [Worker daemon operator guide](../worker-daemon/docs/operator-guide.md) | Run a worker host: the daemon's configuration (control-plane URL, reserve, floor, client certificate), what a job does, and its flows. |
 | [Sortie](../sortie/docs/README.md) | The orchestrator: our fork's documentation. |
 | [Specs](../specs/openspec/specs) | The requirements of every component, as OpenSpec specs. |
