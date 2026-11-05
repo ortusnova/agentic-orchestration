@@ -10,6 +10,12 @@ case "${SORTIE_RULE:-}" in
   *) agent=opencode ;;
 esac
 if [ "${1:-}" = --which ]; then echo "$agent"; exit 0; fi
+# The run's token usage, which agent-usage prints for the worker daemon:
+# opencode's sortie-usage plugin writes it. A file an earlier run in this
+# machine left goes first, so a run that records none is never reported
+# with another run's numbers.
+usage=${SORTIE_USAGE_FILE:-$HOME/.local/state/sortie/usage.json}
+rm -f "$usage" "$usage.log"
 case "$agent" in
   claude) exec claude-agent-acp "$@" ;;
   *)
@@ -32,5 +38,6 @@ case "$agent" in
     # input, and smolvm refuses every later request of that session ("a
     # request may carry one placeholder").
     unset CLAUDE_CODE_OAUTH_TOKEN
+    export SORTIE_USAGE_FILE="$usage"
     exec opencode acp "$@" ;;
 esac

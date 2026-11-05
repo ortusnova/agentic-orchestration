@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installs the stage-0 agent harness in a pack build, for the user the
-# pack's agent runs as: Claude Code behind ACP, the agent-acp launcher, both
+# pack's agent runs as: Claude Code behind ACP, the agent-acp launcher and its
+# usage command agent-usage, opencode's usage plugin, both
 # harnesses' policy files, and opencode's plugins. Shared by the stage-0 pack (agent.Dockerfile,
 # as root) and the homelab pack (homelab-pack/Dockerfile, as builder), so the
 # harness and its pin live in one place.
@@ -15,9 +16,11 @@ user=$1 home=$2
 dir=$(dirname "$0")
 npm install -g --no-fund --no-audit @agentclientprotocol/claude-agent-acp@0.99.1
 command -v claude-agent-acp
-install -m 0755 "$dir/agent-acp" /usr/local/bin/agent-acp
-install -d -o "$user" -g "$user" "$home/.claude" "$home/.config" "$home/.config/opencode"
+install -m 0755 "$dir/agent-acp" "$dir/agent-usage" /usr/local/bin/
+install -d -o "$user" -g "$user" "$home/.claude" "$home/.config" "$home/.config/opencode" "$home/.config/opencode/plugins"
 install -m 0644 -o "$user" -g "$user" "$dir/claude-settings.json" "$home/.claude/settings.json"
 install -m 0644 -o "$user" -g "$user" "$dir/opencode.json" "$home/.config/opencode/opencode.json"
+# The run's token usage, for agent-usage: opencode loads every plugin in this directory.
+install -m 0644 -o "$user" -g "$user" "$dir/sortie-usage.js" "$home/.config/opencode/plugins/sortie-usage.js"
 "$dir/install-opencode-plugins.sh" "$user" "$home" "$home/.config/opencode/opencode.json"
 agent-acp --which

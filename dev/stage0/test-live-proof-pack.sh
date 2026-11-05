@@ -116,7 +116,7 @@ live_proof_pack
 pack=$STAGE0_LIVE_PROOF_PACK
 [[ $pack == "$STAGE0_HOME"/packs/live-proof-*.smolmachine && -s $pack && $(wc -l < "$tmp/builds") == 1 ]] \
   && ok "the pack is built as live-proof-<hash>.smolmachine" || fail "build: $pack, $(cat "$tmp/builds")"
-for f in Dockerfile smol-builder.toml check-tools.sh nested-probe.sh install-harness.sh agent-acp opencode.json; do
+for f in Dockerfile smol-builder.toml check-tools.sh nested-probe.sh install-harness.sh agent-acp agent-usage sortie-usage.js opencode.json; do
   grep -qx "$f" "$tmp/staged" && ok "its build context holds $f" || fail "the staged context lacks $f: $(cat "$tmp/staged")"
 done
 [[ -s $STAGE0_HOME/live-proof-pack-report.json && ! -e $STAGE0_HOME/live-proof-pack-src ]] \

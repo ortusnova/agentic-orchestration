@@ -149,6 +149,13 @@ by the same Sortie, like any other.
   with the Claude sign-in plugin 2.0.0-next.6. opencode 2 keeps credentials
   in its own store, so `pack/agent-acp` imports the placeholder login with
   `opencode auth import` before each start.
+- **Token usage.** After each run the worker daemon runs `agent-usage` in
+  the machine (`usage_commands` in `worker.json`, `worker-config.sh`). It
+  prints the totals the opencode plugin `pack/sortie-usage.js` keeps for
+  the run `agent-acp` started, over every session of that opencode
+  (subagents' too), so Sortie records the run's tokens. A Claude Code run
+  records none yet: `agent-usage` fails, and the daemon reports the run
+  unmeasured, never as a zero spend.
 - **No permission prompts.** The VM is the sandbox, so neither harness asks
   before acting: opencode's `permissions` allow everything except `webfetch`
   (`pack/opencode.json`), and Claude Code runs with `bypassPermissions`
@@ -553,8 +560,34 @@ it up.
 `$STAGE0_HOME/deploy-state.json` (`deploy-state.sh`, design D7), the file
 Sortie's `internal/deploystate` reads: `status`, `commit` (the kit's commit
 that runs), `main` (the newest `origin/main` seen), `behind_since` (when
-`commit` first fell behind `main`, `null` while it is `main`), `error` and
-`updated_at`.
+`commit` first fell behind `main`, `null` while it is `main`), `error`,
+`repositories` and `updated_at`.
+
+`repositories` lists every repository the host deploys (design D13), keyed
+by `owner/repo`, each `{"branch", "commit"}`, so merge-and-prove can wait on
+the hosts that deploy a pull request's repository and compare its merge
+commit there:
+
+```json
+"repositories": {
+  "ortusnova/agentic-orchestration": {"branch": "main", "commit": "<the kit's commit that runs>"},
+  "ortusnova/sortie": {"branch": "plan-bench", "commit": "<the commit of the Sortie that runs>"}
+}
+```
+
+- `ortusnova/agentic-orchestration` is `commit`, on `main`, on every host.
+- `ortusnova/sortie` is listed only on a host that builds and runs a Sortie
+  (the control profile, p1): the commit of the Sortie checkout
+  (`STAGE0_SORTIE_SRC`) that `stage0.sh` built, recorded in
+  `$STAGE0_HOME/sortie.commit` once that Sortie restarted; never
+  `origin/plan-bench`. A failed Sortie build or update leaves it at the
+  commit still running. Before `stage0.sh` first records it, it is the
+  checkout's commit. A worker host (taichi) runs no Sortie and lists only the
+  kit, whatever Sortie checkout its `stage0.env` still names; its
+  `stage0.sh` drops the record a retired Sortie left.
+
+Sortie ignores `repositories` until its merge-and-prove reads it per
+repository; p1's copy of each worker host's file keeps it.
 
 - `deploying` while a deploy or an apply runs.
 - `succeeded`, Sortie's word for applied, only once the new commit runs and
