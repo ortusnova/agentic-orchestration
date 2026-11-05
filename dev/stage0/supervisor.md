@@ -85,20 +85,14 @@ own members. Never print the token.
    (`add: 1`, `reason`).
 5. A pull request that must not merge yet, such as one with an unproven live
    criterion: mark it a draft with `POST /api/v1/<identifier>/draft`, and
-   request the proof with `POST /api/v1/<identifier>/live-proof`. When the
-   criterion needs nested KVM, smolvm, or a machine started inside the job's
-   machine, as a story of the worker daemon or smol-builder does, add
-   `"profile": "nested"` to the request: its job runs on taichi, in the
-   live-proof pack (smolvm, pasta, dnsmasq, Go), never on p1. A homelab
-   story needs no profile: its repository's jobs run on taichi already.
+   request the proof with `POST /api/v1/<identifier>/live-proof`.
 6. A parked story that waits on a live criterion, such as one whose own run
    could not do the live proof (its statement says so) and whose pull
    request the forge shows open: request the proof with
    `POST /api/v1/<identifier>/live-proof`, with the criterion and why the
-   story's machine could not run it as `evidence`, with the `profile` rule 5
-   names when it needs one, and do not release the park. Sortie finds the
-   open pull request of the story's branch, starts the live-proof job on its
-   head with that profile, and keeps the park while the job runs.
+   story's machine could not run it as `evidence`, and do not release the
+   park. Sortie finds the open pull request of the story's branch, starts
+   the live-proof job on its head, and keeps the park while the job runs.
    `409 no_pull_request` means the branch has no open pull request: the
    story needs a fix or a person, not a proof. Once the job's result
    comment is on the pull request, decide by what the forge shows:

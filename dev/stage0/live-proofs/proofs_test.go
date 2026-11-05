@@ -36,11 +36,6 @@ type fakeSortie struct {
 	refuse  string // the error code of the next fix, when set
 	fixes   []map[string]string
 	parked  []string // the identifiers of the parked stories
-	// place, when set, is the matcher: it takes each fix run and names
-	// the worker that runs its job, or "" when none may.
-	place func(fix map[string]string) string
-	// placed is the worker each fix run's job went to, in order.
-	placed []string
 }
 
 func newFakeSortie(t *testing.T) *fakeSortie {
@@ -72,9 +67,6 @@ func newFakeSortie(t *testing.T) *fakeSortie {
 		}
 		body["identifier"] = r.PathValue("identifier")
 		f.fixes = append(f.fixes, body)
-		if f.place != nil {
-			f.placed = append(f.placed, f.place(body))
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"action": "fix_run", "issue_identifier": body["identifier"], "pull_request": homelabPR})
 	})
 	f.Server = httptest.NewServer(mux)
@@ -85,23 +77,12 @@ func newFakeSortie(t *testing.T) *fakeSortie {
 // request is the supervisor's POST /api/v1/ONS-41/live-proof, as Sortie
 // records it.
 func (f *fakeSortie) request(id int64, evidence string, at time.Time) {
-	f.requestWith(id, evidence, "", at)
-}
-
-// requestWith is the supervisor's request naming the job profile
-// profile, which Sortie records as the action's profile; "" names none,
-// which Sortie serves as null.
-func (f *fakeSortie) requestWith(id int64, evidence, profile string, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ident, pr := "ONS-41", homelabPR
-	var named any
-	if profile != "" {
-		named = profile
-	}
 	f.actions = append(f.actions, map[string]any{
 		"id": id, "action": "live_proof", "route": "/api/v1/ONS-41/live-proof", "issue_identifier": ident,
-		"evidence": evidence, "result": "done", "status": 200, "pull_request": pr, "profile": named, "at": at,
+		"evidence": evidence, "result": "done", "status": 200, "pull_request": pr, "at": at,
 	})
 }
 
@@ -279,9 +260,6 @@ func TestAVMChainTheStorysMachineCannotRun(t *testing.T) {
 		if !strings.Contains(fix["message"], want) {
 			t.Errorf("the job's message lacks %q:\n%s", want, fix["message"])
 		}
-	}
-	if _, named := fix["profile"]; named || strings.Contains(fix["message"], "Profile:") {
-		t.Errorf("a request that names no profile started a job with one: %v", fix)
 	}
 	sc.wantStatus(headA, "pending", "the live-proof job runs")
 	sc.wantActive("ONS-41\n")

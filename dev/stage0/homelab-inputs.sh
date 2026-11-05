@@ -9,8 +9,8 @@
 #                              user builder, homelab's guest kernel, the shared
 #                              folders, the vm key, and the setup the
 #                              workflow's hooks ran
-# Needs stage0.sh's say, die, STAGE0_* settings, REBUILD_PACK,
-# worker-config.sh and staged-pack.sh.
+# Needs stage0.sh's say, die, STAGE0_* settings, REBUILD_PACK and
+# worker-config.sh.
 
 homelab_inputs() {
   local src=${STAGE0_HOMELAB_SRC:-$HOME/dev/homelab} hl=$STAGE0_HOME/homelab
@@ -136,11 +136,13 @@ EOF
 }
 
 # homelab_pack HL: stage homelab's image scripts and the kit's harness into one
-# build context (design D12) and build the pack (staged-pack.sh).
+# build context (design D12) and build the pack, named by a hash of that
+# context and of the toolchain, so a change to either builds a new one. While
+# no job runs, the packs it replaced are deleted.
 homelab_pack() {
-  local hl=$1 stage=$STAGE0_HOME/pack-src
+  local hl=$1 stage=$STAGE0_HOME/pack-src packs=$STAGE0_HOME/packs hash pack old
   rm -rf "$stage"
-  mkdir -p "$stage/homelab" "$stage/harness"
+  mkdir -p "$stage/homelab" "$stage/harness" "$packs"
   cp "$KIT/homelab-pack/smol-builder.toml" "$KIT/homelab-pack/Dockerfile" "$stage/"
   cp "$hl/scripts/vmhost/install-tools.sh" "$hl/scripts/vmhost/fetch.sh" \
      "$hl/scripts/smolvm/image/guest-setup.sh" "$hl/scripts/smolvm/image/guest-start.sh" \
@@ -148,8 +150,29 @@ homelab_pack() {
   # homelab's guest-setup.sh gives its guest user these ids: smolvm's shared
   # folders let a guest write only as their host owner, this user.
   printf '%s:%s\n' "$(id -u)" "$(id -g)" > "$stage/homelab/guest-uid"
-  stage_harness "$stage/harness"
-  build_staged_pack homelab "$stage"
+  cp "$KIT/pack/install-harness.sh" "$KIT/pack/install-opencode-plugins.sh" \
+     "$KIT/pack/agent-acp" "$KIT/pack/claude-settings.json" \
+     "$KIT/pack/opencode.json" "$stage/harness/"
+  hash=$({
+    (cd "$stage" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+    # smol-builder's source, which embeds its layers; not its binary, which
+    # Go stamps with the kit's commit, so every kit change would build anew.
+    (cd "$ROOT" && find smol-builder -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+    smolvm --version
+  } | sha256sum | cut -c1-16)
+  pack=$packs/homelab-$hash.smolmachine
+  if [[ -n $REBUILD_PACK || ! -s $pack ]]; then
+    say "Building the homelab pack $hash (report $STAGE0_HOME/pack-report.json)"
+    smol-builder build --repo "$stage" --output "$pack.tmp" > "$STAGE0_HOME/pack-report.json" \
+      || { rm -f "$pack.tmp"; die "the homelab pack did not build: $STAGE0_HOME/pack-report.json"; }
+    mv "$pack.tmp" "$pack"
+  fi
   rm -rf "$stage"
-  export STAGE0_HOMELAB_PACK=$STAGED_PACK
+  if (( $(worker_jobs) == 0 )); then
+    for old in "$packs"/homelab-*.smolmachine "$packs"/*.tmp; do
+      [[ -e $old && $old != "$pack" ]] || continue
+      rm -f "$old" && say "Deleted the unused pack $(basename "$old")"
+    done
+  fi
+  export STAGE0_HOMELAB_PACK=$pack
 }
