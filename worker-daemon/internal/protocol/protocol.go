@@ -147,7 +147,27 @@ type Run struct {
 	// kept as sent so that the daemon checks it strictly; absent, the
 	// machine gets no network. See [Egress].
 	Egress json.RawMessage `json:"egress,omitempty"`
+	// Telemetry says how the attempt's telemetry is joined and spooled
+	// when the offer names a telemetry flow.
+	Telemetry *RunTelemetry `json:"telemetry,omitempty"`
 }
+
+// RunTelemetry is run.telemetry (agent-platform/session-telemetry).
+type RunTelemetry struct {
+	// Traceparent is the W3C trace context of the attempt's span, given
+	// to the agent as TRACEPARENT.
+	Traceparent string `json:"traceparent,omitempty"`
+	// SpoolBytes bounds the attempt's spool on the host; 0 is
+	// DefaultSpoolBytes.
+	SpoolBytes int64 `json:"spool_bytes,omitempty"`
+	// DispatchID is the attempt's sortie.dispatch.id; "" takes run.env's
+	// SORTIE_DISPATCH_ID.
+	DispatchID string `json:"dispatch_id,omitempty"`
+}
+
+// DefaultSpoolBytes bounds a telemetry spool when run.telemetry names no
+// spool_bytes: 64 MiB.
+const DefaultSpoolBytes = 64 << 20
 
 // Egress is run.egress: the policies whose hosts the job's machine
 // reaches directly, apart so that each host's source is known, and the
@@ -248,10 +268,16 @@ const (
 	FlowMCP     = "mcp"
 	FlowBundles = "bundles"
 	FlowUsage   = "usage"
+	// FlowTelemetry carries the OTLP the job's machine sends. An offer
+	// names it or not.
+	FlowTelemetry = "telemetry"
 )
 
 // Flows lists every flow an offer carries.
 var Flows = []string{FlowStdio, FlowEgress, FlowMCP, FlowBundles, FlowUsage}
+
+// OptionalFlows lists the flows an offer may carry.
+var OptionalFlows = []string{FlowTelemetry}
 
 // Report outcomes and machine states.
 const (
@@ -268,6 +294,26 @@ type Report struct {
 	Outcome string `json:"outcome"`
 	Reason  string `json:"reason"`
 	Machine string `json:"machine"`
+	// Telemetry counts the attempt's telemetry when its offer named a
+	// telemetry flow.
+	Telemetry *TelemetryCounts `json:"telemetry,omitempty"`
+}
+
+// TelemetryCounts is what became of the OTLP requests an attempt's
+// machine sent: Received of them, Shipped on the telemetry flow, and
+// Dropped, with their DroppedBytes, because the spool was full, the flow
+// refused them, or they were still spooled when the attempt ended.
+type TelemetryCounts struct {
+	Received     int64 `json:"received"`
+	Shipped      int64 `json:"shipped"`
+	Dropped      int64 `json:"dropped"`
+	DroppedBytes int64 `json:"dropped_bytes"`
+}
+
+// TelemetryPath is where, on the telemetry flow, the daemon ships one
+// OTLP request of signal (traces, logs or metrics).
+func TelemetryPath(job string, attempt int, signal string) string {
+	return AttemptSuffix(job, attempt) + "/v1/" + signal
 }
 
 // ErrorBody is the control plane's error answer.

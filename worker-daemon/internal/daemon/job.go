@@ -25,7 +25,9 @@ import (
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/cp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/flows"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/otlp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/secret"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/stdio"
 )
 
@@ -33,6 +35,9 @@ import (
 const (
 	EgressGuestPort = 47801
 	MCPGuestPort    = 47802
+	// TelemetryGuestPort is OTLP/HTTP's own port, where an OpenTelemetry
+	// SDK sends by default.
+	TelemetryGuestPort = 4318
 )
 
 // MCPURLEnv names the variable that tells the agent where its tool
@@ -64,6 +69,8 @@ type job struct {
 	state   string
 	servers []*flows.Server
 	egress  *flows.Egress
+	// telemetry is the OTLP receiver, nil without a telemetry flow.
+	telemetry *flows.Telemetry
 }
 
 func (j *job) id() string   { return j.offer.Job.ID }
@@ -211,6 +218,7 @@ func (j *job) finish(work func(dir string) (string, string)) {
 	defer j.closeServers()
 
 	outcome, reason := work(dir)
+	telemetry := j.closeTelemetry()
 	if j.left() {
 		j.mu.Lock()
 		m := j.m
@@ -234,7 +242,7 @@ func (j *job) finish(work func(dir string) (string, string)) {
 	if errors.Is(context.Cause(j.ctx), errSilent) {
 		outcome, reason = protocol.OutcomeFailed, errSilent.Error()
 	}
-	j.d.report(j.log, j.id(), j.attempt(), protocol.Report{Outcome: outcome, Reason: reason, Machine: machineState})
+	j.d.report(j.log, j.id(), j.attempt(), protocol.Report{Outcome: outcome, Reason: reason, Machine: machineState, Telemetry: telemetry})
 }
 
 // dispose deletes the machine and returns the state it is left in.
@@ -277,22 +285,124 @@ func failed(format string, args ...any) (string, string) {
 	return protocol.OutcomeFailed, fmt.Sprintf(format, args...)
 }
 
-// forwards are the job's forwarders, each a host socket in dir.
-func forwards(dir string) []machine.Forward {
-	return []machine.Forward{
+// hasTelemetry reports whether the job's offer names a telemetry flow:
+// only then does its machine get the OTLP receiver.
+func (j *job) hasTelemetry() bool {
+	_, ok := j.offer.Flows[protocol.FlowTelemetry]
+	return ok
+}
+
+// forwards are the job's forwarders, each a host socket in dir: egress,
+// mcp, and telemetry when the offer names its flow.
+func (j *job) forwards(dir string) []machine.Forward {
+	fs := []machine.Forward{
 		{Name: protocol.FlowEgress, HostSocket: filepath.Join(dir, "egress.sock"), GuestPort: EgressGuestPort},
 		{Name: protocol.FlowMCP, HostSocket: filepath.Join(dir, "mcp.sock"), GuestPort: MCPGuestPort},
 	}
+	if j.hasTelemetry() {
+		fs = append(fs, machine.Forward{Name: protocol.FlowTelemetry, HostSocket: filepath.Join(dir, "otlp.sock"), GuestPort: TelemetryGuestPort})
+	}
+	return fs
 }
 
-// serveForwarders serves the job's egress and mcp forwarders on their
-// host sockets in dir.
+// telemetryAttrs are the attributes that join what the attempt's
+// machine sends to the attempt.
+func (j *job) telemetryAttrs() []otlp.Attr {
+	issue := j.offer.Job.Issue.Identifier
+	if issue == "" {
+		issue = j.id()
+	}
+	attrs := []otlp.Attr{{Key: "sortie.issue.identifier", Value: issue}}
+	if d := j.dispatchID(); d != "" {
+		attrs = append(attrs, otlp.Attr{Key: "sortie.dispatch.id", Value: d})
+	}
+	return append(attrs, otlp.Attr{Key: "sortie.attempt", Value: strconv.Itoa(j.attempt())})
+}
+
+// dispatchID is run.telemetry.dispatch_id, or else run.env's
+// SORTIE_DISPATCH_ID.
+func (j *job) dispatchID() string {
+	if t := j.offer.Run.Telemetry; t != nil && t.DispatchID != "" {
+		return t.DispatchID
+	}
+	return j.offer.Run.Env["SORTIE_DISPATCH_ID"]
+}
+
+// newTelemetry starts the job's OTLP receiver: it masks every flow token
+// of the job, and stamps the attempt's attributes.
+func (j *job) newTelemetry() *flows.Telemetry {
+	masker := &secret.Masker{}
+	for _, name := range slices.Sorted(maps.Keys(j.flows.Flows)) {
+		masker.Add(j.flows.Flows[name].Token)
+	}
+	var spool int64
+	if t := j.offer.Run.Telemetry; t != nil {
+		spool = t.SpoolBytes
+	}
+	t := &flows.Telemetry{Job: j.flows, Attrs: j.telemetryAttrs(), Mask: masker.Mask, SpoolBytes: spool,
+		Log: j.log, Gone: func(err error) { j.release(err) }}
+	t.Start()
+	return t
+}
+
+// flushTelemetry ships the job's telemetry spool, waiting at most the
+// daemon's flush bound.
+func (j *job) flushTelemetry() {
+	t := j.telemetrySpool()
+	if t == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(j.ctx, j.d.telemetryFlush)
+	defer cancel()
+	start := time.Now()
+	if t.Flush(ctx) {
+		j.log.Info("telemetry flushed", slog.Duration("took", time.Since(start)))
+		return
+	}
+	n, size := t.Spooled()
+	j.log.Warn("telemetry not flushed within its bound: returning the result", slog.Duration("bound", j.d.telemetryFlush),
+		slog.Int("spooled", n), slog.Int64("spooled_bytes", size))
+}
+
+func (j *job) telemetrySpool() *flows.Telemetry {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.telemetry
+}
+
+// closeTelemetry stops the job's receiver's shipper and returns its
+// counts, nil for a job without a telemetry flow.
+func (j *job) closeTelemetry() *protocol.TelemetryCounts {
+	t := j.telemetrySpool()
+	if t == nil {
+		if !j.hasTelemetry() {
+			return nil
+		}
+		return &protocol.TelemetryCounts{}
+	}
+	c := t.Close()
+	return &c
+}
+
+// serveForwarders serves the job's egress and mcp forwarders, and its
+// OTLP receiver when the offer names a telemetry flow, on their host
+// sockets in dir.
 func (j *job) serveForwarders(dir string) error {
 	eg := j.flows.Flows[protocol.FlowEgress]
 	j.egress = &flows.Egress{Upstream: eg.URL, Token: eg.Token, TLS: j.d.tls, Job: j.id()}
 	mcp := &flows.MCP{Job: j.flows}
 	handlers := map[string]http.Handler{protocol.FlowEgress: j.egress, protocol.FlowMCP: mcp}
-	for _, f := range forwards(dir) {
+	if j.hasTelemetry() && j.flows.HasTelemetry() {
+		t := j.newTelemetry()
+		j.mu.Lock()
+		j.telemetry = t
+		j.mu.Unlock()
+		handlers[protocol.FlowTelemetry] = t
+	}
+	for _, f := range j.forwards(dir) {
+		if handlers[f.Name] == nil {
+			continue
+		}
 		s, err := flows.Serve(f.HostSocket, handlers[f.Name])
 		if err != nil {
 			return err
@@ -325,7 +435,7 @@ func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
 		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
 		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt()),
 			machine.LabelWorker: j.d.cfg.WorkerID},
-		Share: filepath.Join(dir, "share"), Forwards: forwards(dir),
+		Share: filepath.Join(dir, "share"), Forwards: j.forwards(dir),
 		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
 	}
 	if img.LibDir != "" {
@@ -434,6 +544,9 @@ func (j *job) agentAndResult(m machine.Machine, share string, seed seed, adopted
 	// result it finishes the attempt, and a later report could find the
 	// attempt's flows closed. The result goes before the report.
 	j.reportUsage(ctx, m)
+	// The machine's telemetry goes before the result too, for at most
+	// the flush bound.
+	j.flushTelemetry()
 	exportNote, exportErr := j.returnResult(ctx, m, share, seed)
 	switch {
 	case runErr != nil:
@@ -557,14 +670,32 @@ func (j *job) seedWorkspace(ctx context.Context, m machine.Machine) (seed, error
 	return s, nil
 }
 
+// Variables of the OTLP receiver in the agent's environment.
+const (
+	OTLPEndpointEnv       = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	OTLPProtocolEnv       = "OTEL_EXPORTER_OTLP_PROTOCOL"
+	OTLPResourceAttrsEnv  = "OTEL_RESOURCE_ATTRIBUTES"
+	TraceparentEnv        = "TRACEPARENT"
+	otlpProtocolHTTPProto = "http/protobuf"
+)
+
 // agentEnv is the agent's environment: the run's variables, sorted,
-// then the forwarders' addresses. It holds no job token.
+// then the forwarders' addresses, and the OTLP receiver's when the
+// offer names a telemetry flow. It holds no job token.
 func (j *job) agentEnv(m machine.Machine) []string {
 	run := j.offer.Run
+	var telemetry []string
+	if j.hasTelemetry() {
+		telemetry = j.telemetryEnv(m)
+	}
 	var env []string
 	for _, k := range slices.Sorted(maps.Keys(run.Env)) {
+		if slices.ContainsFunc(telemetry, func(kv string) bool { return strings.HasPrefix(kv, k+"=") }) {
+			continue
+		}
 		env = append(env, k+"="+run.Env[k])
 	}
+	env = append(env, telemetry...)
 	proxy := "http://" + m.GuestAddr(protocol.FlowEgress)
 	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"} {
 		env = append(env, k+"="+proxy)
@@ -576,6 +707,44 @@ func (j *job) agentEnv(m machine.Machine) []string {
 		MCPURLEnv+"=http://"+m.GuestAddr(protocol.FlowMCP)+"/",
 		StepFileEnv+"="+machine.GuestShare+"/"+StepFile)
 	return append(env, j.inputEnv...)
+}
+
+// telemetryEnv points the agent's OpenTelemetry SDK at the OTLP
+// receiver: protobuf over HTTP, the attempt's sortie.* attributes on
+// its resource, after any the run sets, and the attempt's trace context.
+func (j *job) telemetryEnv(m machine.Machine) []string {
+	var attrs []string
+	if v := j.offer.Run.Env[OTLPResourceAttrsEnv]; v != "" {
+		attrs = append(attrs, v)
+	}
+	for _, a := range j.telemetryAttrs() {
+		attrs = append(attrs, a.Key+"="+resourceAttrEscape(a.Value))
+	}
+	env := []string{
+		OTLPEndpointEnv + "=http://" + m.GuestAddr(protocol.FlowTelemetry),
+		OTLPProtocolEnv + "=" + otlpProtocolHTTPProto,
+		OTLPResourceAttrsEnv + "=" + strings.Join(attrs, ","),
+	}
+	if t := j.offer.Run.Telemetry; t != nil && t.Traceparent != "" {
+		env = append(env, TraceparentEnv+"="+t.Traceparent)
+	}
+	return env
+}
+
+// resourceAttrEscape percent-encodes a value of OTEL_RESOURCE_ATTRIBUTES,
+// as W3C Baggage writes one: every byte but a printable ASCII character
+// other than space, '"', ',', ';', '\\', '%' and '='.
+func resourceAttrEscape(v string) string {
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c > 0x20 && c < 0x7f && !strings.ContainsRune("\",;\\%=", rune(c)) {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return b.String()
 }
 
 // CapabilityNested is the capability a job requires to get nested

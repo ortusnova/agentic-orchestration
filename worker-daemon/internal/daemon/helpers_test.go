@@ -305,6 +305,7 @@ type harness struct {
 	probe   *fakeProbe
 	d       *daemon.Daemon
 	cfg     config.Config
+	flush   time.Duration
 	logs    *syncBuffer
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -331,6 +332,8 @@ type setup struct {
 	// so the daemon under test never deletes a live worker's machines as
 	// strays.
 	workerID string
+	// telemetryFlush, when set, bounds the telemetry flush.
+	telemetryFlush time.Duration
 }
 
 func defaults() setup {
@@ -396,12 +399,12 @@ func newHarness(t *testing.T, s setup) *harness {
 	if s.backend != nil {
 		mb = s.backend
 	}
-	d, err := daemon.New(daemon.Options{Config: cfg, Probe: probe, Backend: mb,
+	d, err := daemon.New(daemon.Options{Config: cfg, Probe: probe, Backend: mb, TelemetryFlush: s.telemetryFlush,
 		Log: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{t: t, fake: fake, backend: backend, probe: probe, d: d, cfg: cfg, logs: logs, done: make(chan struct{})}
+	h := &harness{t: t, fake: fake, backend: backend, probe: probe, d: d, cfg: cfg, flush: s.telemetryFlush, logs: logs, done: make(chan struct{})}
 	if !s.noStart {
 		h.start()
 	}
@@ -437,7 +440,7 @@ func (h *harness) restartDaemon() {
 // startNewDaemon starts a new daemon on the host, after h.stop.
 func (h *harness) startNewDaemon() {
 	h.t.Helper()
-	d, err := daemon.New(daemon.Options{Config: h.cfg, Probe: h.probe, Backend: h.backend,
+	d, err := daemon.New(daemon.Options{Config: h.cfg, Probe: h.probe, Backend: h.backend, TelemetryFlush: h.flush,
 		Log: slog.New(slog.NewTextHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		h.t.Fatal(err)

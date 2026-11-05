@@ -1,8 +1,8 @@
 // Package flows carries one job's data-plane traffic: the workspace
 // seed and the result bundle on bundles, token usage on usage, the
-// agent's standard input and output on stdio, and, through the two
-// guest-facing forwarders, its model traffic on egress and its tool
-// calls on mcp.
+// agent's standard input and output on stdio, and, through the
+// guest-facing forwarders, its model traffic on egress, its tool calls
+// on mcp, and its OTLP on telemetry.
 //
 // Each request carries that flow's job token, which the daemon adds
 // itself: the guest never sees one. Tokens stay in memory.
@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -42,13 +43,16 @@ type Job struct {
 	TLS     *tls.Config
 }
 
-// New checks an offer's flows: each one present, with an absolute
-// http, https, ws or wss URL.
+// New checks an offer's flows: each one present, an optional one
+// present or not, with an absolute http, https, ws or wss URL.
 func New(o *protocol.Offer, client *http.Client, tlsConfig *tls.Config) (*Job, error) {
 	j := &Job{ID: o.Job.ID, Attempt: o.Job.Attempt, Flows: map[string]Access{}, HTTP: client, TLS: tlsConfig}
-	for _, name := range protocol.Flows {
+	for _, name := range append(slices.Clone(protocol.Flows), protocol.OptionalFlows...) {
 		fa, ok := o.Flows[name]
 		if !ok {
+			if slices.Contains(protocol.OptionalFlows, name) {
+				continue
+			}
 			return nil, fmt.Errorf("flows: the offer has no %s flow", name)
 		}
 		u, err := url.Parse(fa.URL)

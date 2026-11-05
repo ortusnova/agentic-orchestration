@@ -38,7 +38,13 @@ type Options struct {
 	// TLS is the client TLS of the control plane and the flows; nil
 	// builds it from the configuration.
 	TLS *tls.Config
+	// TelemetryFlush bounds the wait for a job's telemetry to ship before
+	// its result is returned; 0 is [DefaultTelemetryFlush].
+	TelemetryFlush time.Duration
 }
+
+// DefaultTelemetryFlush bounds the flush of a job's telemetry spool.
+const DefaultTelemetryFlush = 30 * time.Second
 
 // Daemon is one worker.
 type Daemon struct {
@@ -49,6 +55,8 @@ type Daemon struct {
 	tls     *tls.Config
 	http    *http.Client
 	cp      *cp.Client
+
+	telemetryFlush time.Duration
 
 	heartbeat atomic.Int64
 	lease     atomic.Int64
@@ -98,6 +106,11 @@ func New(opt Options) (*Daemon, error) {
 			IdentityHeader: opt.Config.ControlPlane.IdentityHeader, HTTP: client},
 		wake: make(chan struct{}, 1),
 		jobs: map[string]*job{},
+
+		telemetryFlush: opt.TelemetryFlush,
+	}
+	if d.telemetryFlush <= 0 {
+		d.telemetryFlush = DefaultTelemetryFlush
 	}
 	d.heartbeat.Store(int64(DefaultHeartbeat))
 	d.lease.Store(int64(3 * DefaultHeartbeat))
