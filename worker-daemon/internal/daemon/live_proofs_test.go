@@ -18,7 +18,7 @@ import (
 // liveProofs is worker-daemon/live-proofs.json: the proofs a live-proof
 // job of the job profile it names runs, each a command run from
 // worker-daemon/ in the live-proof pack, which sets LIVE_PROOF_BASE_PACK
-// (dev/stage0, README.md "The nested profile").
+// (docs/operator-guide.md, "Live proofs of the smolvm tests").
 type liveProofs struct {
 	Profile string `json:"profile"`
 	Proofs  []struct {

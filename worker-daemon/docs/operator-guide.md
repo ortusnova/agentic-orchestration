@@ -521,8 +521,11 @@ no one runs them in a session of their own on taichi or any other host
 needs nested KVM, smolvm or the host runs in-band"). A story whose
 criterion they settle is proven when the supervisor requests its live
 proof with the job profile `nested` (`POST /api/v1/<identifier>/live-proof`
-with `"profile": "nested"`; the stage-0 kit's `README.md`, "The nested
-profile"). Sortie places that job only on a worker that declares
+with `"profile": "nested"`; design D6). The stage-0 kit's `nested`
+profile (ONS-134) was reverted (#147), as the running Sortie refuses
+`environment.remote.profiles`: until it is declared again, no live-proof
+job runs these proofs, and they wait for it rather than being run by
+hand. Once it is, Sortie places that job only on a worker that declares
 `nested`, taichi's, in the live-proof pack, which has smolvm, pasta,
 dnsmasq and Go, and the stage-0 pack, whose base layer has `sh`, `git`
 and `socat`, at `$LIVE_PROOF_BASE_PACK`. The job runs, from
