@@ -50,7 +50,7 @@ func fakeTools(t *testing.T, log string) string {
 	t.Helper()
 	dir := t.TempDir()
 	tools := map[string]string{
-		"go": `echo "go $* | pack=$WORKER_DAEMON_E2E_PACK no_skip=$WORKER_DAEMON_E2E_NO_SKIP allowed=$WORKER_DAEMON_E2E_ALLOWED` +
+		"go": `echo "go $* | pack=$WORKER_DAEMON_E2E_PACK no_skip=$WORKER_DAEMON_SMOLVM_NO_SKIP allowed=$WORKER_DAEMON_E2E_ALLOWED` +
 			` name=$WORKER_DAEMON_E2E_PRIVATE_NAME port=$WORKER_DAEMON_E2E_PRIVATE_PORT" >> "$LOG"`,
 		"pasta":   `echo "pasta $*" >> "$LOG"; while [ "$1" != -- ]; do shift; done; shift; exec "$@"`,
 		"unshare": `echo "unshare $*" >> "$LOG"; while case $1 in -*) true ;; *) false ;; esac; do shift; done; exec "$@"`,
@@ -81,7 +81,7 @@ func runDeclared(t *testing.T, command string) []string {
 	cmd.Dir = "../.."
 	cmd.Env = append(os.Environ(), "PATH="+tools+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"LIVE_PROOF_BASE_PACK=/opt/live-proof/base/base.smolmachine", "LOG="+log)
-	for _, k := range []string{"WORKER_DAEMON_E2E_PACK", "WORKER_DAEMON_E2E_NO_SKIP", "WORKER_DAEMON_E2E_PRIVATE_PORT", "PRIVATE_LOCAL"} {
+	for _, k := range []string{"WORKER_DAEMON_E2E_PACK", "WORKER_DAEMON_SMOLVM_NO_SKIP", "WORKER_DAEMON_E2E_PRIVATE_PORT", "PRIVATE_LOCAL"} {
 		cmd.Env = append(cmd.Env, k+"=")
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {

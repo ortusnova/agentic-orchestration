@@ -324,13 +324,13 @@ func smolvmE2E(t *testing.T) (bin, pack string) {
 }
 
 // skipE2E skips an end-to-end test that cannot run here. With
-// WORKER_DAEMON_E2E_NO_SKIP set, as a live proof runs it
+// WORKER_DAEMON_SMOLVM_NO_SKIP set, as a live proof runs it
 // (live-proofs.json), it fails the test instead: a proof that did not
 // run proves nothing.
 func skipE2E(t *testing.T, why string) {
 	t.Helper()
-	if os.Getenv("WORKER_DAEMON_E2E_NO_SKIP") != "" {
-		t.Fatal("WORKER_DAEMON_E2E_NO_SKIP is set and the test cannot run here: " + why)
+	if os.Getenv("WORKER_DAEMON_SMOLVM_NO_SKIP") != "" {
+		t.Fatal("WORKER_DAEMON_SMOLVM_NO_SKIP is set and the test cannot run here: " + why)
 	}
 	t.Skip("skipped: " + why)
 }

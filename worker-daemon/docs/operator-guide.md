@@ -511,7 +511,10 @@ wire as Sortie's data plane does, with machines from
 `TestSmolvmEndToEnd` and `TestSmolvmEgressEndToEnd`, need `/dev/kvm`,
 smolvm on `PATH` and `WORKER_DAEMON_E2E_PACK` naming a pack with `sh`,
 `git` and `socat`; elsewhere they are skipped and say which of the three
-is missing, and with `WORKER_DAEMON_E2E_NO_SKIP=1` they fail instead.
+is missing, and with `WORKER_DAEMON_SMOLVM_NO_SKIP=1` they fail instead.
+`WORKER_DAEMON_E2E_NO_SKIP`, which CI sets so that the Sortie tests
+below cannot skip, does not reach them: CI's runners have no smolvm, and
+only a live proof runs them.
 
 ### Live proofs of the smolvm tests
 
@@ -538,7 +541,7 @@ as its live-proof record, at its head:
 | `TestSmolvmEndToEnd` | `go test -run '^TestSmolvmEndToEnd$' ./internal/daemon/` with `WORKER_DAEMON_E2E_PACK="$LIVE_PROOF_BASE_PACK"` |
 | `TestSmolvmEgressEndToEnd` | `internal/daemon/testdata/private-name-netns.sh private-name.e2e.test 10.255.0.1` with the same pack, `WORKER_DAEMON_E2E_ALLOWED=api.github.com` and `PRIVATE_LOCAL=1` |
 
-Both set `WORKER_DAEMON_E2E_NO_SKIP=1`, so a proof whose machine cannot
+Both set `WORKER_DAEMON_SMOLVM_NO_SKIP=1`, so a proof whose machine cannot
 run the test fails rather than passes skipped. The egress proof first
 builds the package outside the namespace, so `go test` in it needs no
 network, and gives the test resolver the job machine's own resolver as
@@ -546,7 +549,7 @@ network, and gives the test resolver the job machine's own resolver as
 name answers an address of the namespace's own (`PRIVATE_LOCAL=1`, below)
 and the listener is the test resolver's. `TestTheLiveProofsAreDeclared`
 checks the declaration: both tests, each alone, with the pack and
-`WORKER_DAEMON_E2E_NO_SKIP`, and the egress one through the test
+`WORKER_DAEMON_SMOLVM_NO_SKIP`, and the egress one through the test
 resolver with a private address that is not loopback. A change to what
 these proofs run is a change to `live-proofs.json`.
 
