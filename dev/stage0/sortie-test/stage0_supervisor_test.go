@@ -316,7 +316,7 @@ func TestStage0_APullRequestNobodyIsMoving(t *testing.T) {
 			}
 			sup := h.o.Supervisor()
 			acted <- []SupervisorResult{sup.Merge(ctx, "id-41-ident"),
-				sup.FixRun(ctx, "id-41-ident", "owner/repo#41 conflicts with its base; bring the base in by a merge and resolve the conflict.", "")}
+				sup.FixRun(ctx, "id-41-ident", "owner/repo#41 conflicts with its base; bring the base in by a merge and resolve the conflict.")}
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		})
 		h.run()
