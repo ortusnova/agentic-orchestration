@@ -20,6 +20,7 @@ STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daem
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain, and the deploy state each host writes
+dev/stage0/test-logs.sh               # check the log files' install, follower and rotation, with stubs
 dev/stage0/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
 dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
@@ -61,7 +62,7 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Control plane's front | units `ortus-stage0-pomerium`, `ortus-stage0-egress-gate`, `ortus-stage0-nono` and `ortus-stage0-nono-live-proof`; see [Worker hosts](#worker-hosts-p1) |
 | Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
 | Telemetry | Langfuse and its OpenTelemetry Collector, the compose project `ortus-telemetry` (unit `ortus-stage0-telemetry`, `run-telemetry.sh`): Langfuse at `http://127.0.0.1:3000`, the collector at `127.0.0.1:4317` and `127.0.0.1:4318`; backed up nightly into `$STAGE0_HOME/telemetry-backups` and pruned daily; see [Telemetry](#telemetry) |
-| Logs | `journalctl --user -u ortus-stage0-sortie` (and `-workbench`, `-store`, `-deploy`, `-pomerium`, `-egress-gate`, `-nono`, `-nono-live-proof`, `-live-proofs`, `-worker`, `-previews`, `-preview@<identifier>`, `-telemetry`, `-telemetry-backup`, `-telemetry-retention`) |
+| Logs | `~/.local/state/ortus-nova/logs/<unit>.log` on each host, one file per `ortus-stage0-*` unit (`ortus-stage0-sortie.log`, `ortus-stage0-worker.log`, `ortus-stage0-preview@<identifier>.log`, `ortus-stage0-telemetry.log`, `ortus-stage0-telemetry-backup.log`, `ortus-stage0-telemetry-retention.log`, ...), rotated daily into `<unit>.log.<UTC date>.gz` and kept 30 days; see [Logs](#logs). Evidence and agents read these files, Sortie's state and the deploy state, never `journalctl` |
 
 ## How a story runs
 
@@ -343,7 +344,7 @@ sessions and 3,000,000 tokens a UTC day.
   (`curl -s http://127.0.0.1:7680/api/v1/state`: `supervisor`,
   `supervisor_actions`, and `platform_faults` of class
   `supervisor_question`). Each session's start and end, with its trigger,
-  outcome and tokens, is in `journalctl --user -u ortus-stage0-sortie`
+  outcome and tokens, is in `~/.local/state/ortus-nova/logs/ortus-stage0-sortie.log`
   (`supervisor session started`, `supervisor session ended`).
 - **Its questions.** For a credential, a key, an approval, a decision, or
   an action it cannot check, it raises a question naming the action, where
@@ -546,7 +547,7 @@ it up.
 
 - **Deploys.** `deploy.sh` runs `stage0.sh` within the minute of a kit or
   Sortie merge, whatever runs, on p1 and on a worker host alike.
-  `journalctl --user -u ortus-stage0-deploy` shows each one: the commit it
+  `~/.local/state/ortus-nova/logs/ortus-stage0-deploy.log` shows each one: the commit it
   applies, then `running <commit>`, or why it went back.
 - **Host setup changes**, such as a smolvm bump. Run
   `dev/stage0/dev-host-apply.sh` on the host instead of applying the change
@@ -562,8 +563,34 @@ it up.
 `$STAGE0_HOME/deploy-state.json` (`deploy-state.sh`, design D7), the file
 Sortie's `internal/deploystate` reads: `status`, `commit` (the kit's commit
 that runs), `main` (the newest `origin/main` seen), `behind_since` (when
-`commit` first fell behind `main`, `null` while it is `main`), `error` and
-`updated_at`.
+`commit` first fell behind `main`, `null` while it is `main`), `error`,
+`repositories` and `updated_at`.
+
+`repositories` lists every repository the host deploys (design D13), keyed
+by `owner/repo`, each `{"branch", "commit"}`, so merge-and-prove can wait on
+the hosts that deploy a pull request's repository and compare its merge
+commit there:
+
+```json
+"repositories": {
+  "ortusnova/agentic-orchestration": {"branch": "main", "commit": "<the kit's commit that runs>"},
+  "ortusnova/sortie": {"branch": "plan-bench", "commit": "<the commit of the Sortie that runs>"}
+}
+```
+
+- `ortusnova/agentic-orchestration` is `commit`, on `main`, on every host.
+- `ortusnova/sortie` is listed only on a host that builds and runs a Sortie
+  (the control profile, p1): the commit of the Sortie checkout
+  (`STAGE0_SORTIE_SRC`) that `stage0.sh` built, recorded in
+  `$STAGE0_HOME/sortie.commit` once that Sortie restarted; never
+  `origin/plan-bench`. A failed Sortie build or update leaves it at the
+  commit still running. Before `stage0.sh` first records it, it is the
+  checkout's commit. A worker host (taichi) runs no Sortie and lists only the
+  kit, whatever Sortie checkout its `stage0.env` still names; its
+  `stage0.sh` drops the record a retired Sortie left.
+
+Sortie ignores `repositories` until its merge-and-prove reads it per
+repository; p1's copy of each worker host's file keeps it.
 
 - `deploying` while a deploy or an apply runs.
 - `succeeded`, Sortie's word for applied, only once the new commit runs and
@@ -734,8 +761,8 @@ What a worker's request meets:
   Pomerium's egress route takes only `CONNECT`. A worker whose certificate
   is revoked (`worker-host.sh remove`) reaches no route: Pomerium answers
   it `403`, and its requests never reach the gate, so a revoked worker's
-  refusals are in Pomerium's journal (`journalctl --user -u
-  ortus-stage0-pomerium`), not the gate's. `cpctl` renders Pomerium's
+  refusals are in Pomerium's log (`~/.local/state/ortus-nova/logs/ortus-stage0-pomerium.log`),
+  not the gate's. `cpctl` renders Pomerium's
   `authorize_log_fields` and `access_log_fields` so that each refusal is
   two lines with the same `request-id`: the `authorize check` names the
   host and the job the forwarder names,
@@ -915,8 +942,8 @@ Each question names the Sortie that holds it, and an answer goes to that
 Sortie. To check it, park a story that runs on taichi: within one minute
 Sortie's notification of it is under **Needs a person** (**From Sortie**,
 unread) on the workbench, and its question under **Answer**; the channel,
-when one is set, has it with the link. `journalctl --user -u
-ortus-stage0-workbench` logs `notification from p1: session.stopped
+when one is set, has it with the link.
+`~/.local/state/ortus-nova/logs/ortus-stage0-workbench.log` has `notification from p1: session.stopped
 <identifier>`.
 
 ## Worker hosts (taichi)
@@ -1009,19 +1036,56 @@ run it again. The homelab Sortie's database and workspaces stay in
 and revoke the tokens.
 
 To remove a worker host: on the host, `systemctl --user disable --now
-ortus-stage0-worker ortus-stage0-deploy.timer`, then
+ortus-stage0-worker ortus-stage0-deploy.timer ortus-stage0-logs
+ortus-stage0-logs-rotate.timer`, then
 `git -C ~/dev/homelab worktree remove ~/.local/share/ortus-nova/stage0/homelab`
 and `rm -rf ~/.local/share/ortus-nova/stage0`. On p1:
 `dev/stage0/worker-host.sh remove <worker>`.
+
+## Logs
+
+Every stage-0 unit logs to the systemd user journal, and a host keeps only
+about 40 MB of it in all: on p1, a few hours. So `stage0.sh` sets up, on p1
+and on each worker host, durable files that outlive it:
+
+| Part | Where |
+| --- | --- |
+| Files | `~/.local/state/ortus-nova/logs/<unit>.log`, one per `ortus-stage0-*` unit, the `.service` suffix dropped: `ortus-stage0-sortie.log`, `ortus-stage0-worker.log`, `ortus-stage0-deploy.log`, `ortus-stage0-preview@<identifier>.log`, ... Each line is `<short-iso-precise, UTC> <host> <unit> <identifier>[<pid>]: <message>`, systemd's own lines about the unit (started, stopped, exited) included |
+| Archives | `<unit>.log.<UTC date>.gz`, the day its first line is from (a second archive of a day: `<unit>.log.<date>.1.gz`); kept 30 days |
+| Follower | unit `ortus-stage0-logs` (`logs-follow.sh`): one `journalctl --user --follow --output=json` of the whole user journal, which keeps the lines of each `ortus-stage0-*` unit, a unit that first logs later included. It resumes from the cursor it saved when it stopped (`.cursor` in the same directory), so a restart loses no line and repeats none; `Restart=always` |
+| Rotation | `ortus-stage0-logs-rotate.timer` (`logs-rotate.sh`, plain sh and gzip): just after midnight UTC it rotates each file from an earlier day, and every 10 minutes each file over 200 MiB. It renames the file, restarts the follower, which opens a new one from its cursor, then compresses it |
+
+Evidence and agents read these files, Sortie's state
+(`/api/v1/state`, its database) and the deploy state, never `journalctl`:
+the journal's oldest line is hours old, and its rotation looks like a
+reboot that never happened.
+
+```sh
+tail -f ~/.local/state/ortus-nova/logs/ortus-stage0-sortie.log
+zgrep 'level=ERROR' ~/.local/state/ortus-nova/logs/ortus-stage0-worker.log.2026-11-0*.gz
+# A rotation by hand, on a copy, as of a given UTC day, with no follower to restart:
+cp -r ~/.local/state/ortus-nova/logs /tmp/logs-copy
+STAGE0_LOGS_DIR=/tmp/logs-copy STAGE0_LOGS_TODAY=2026-11-06 STAGE0_LOGS_REOPEN= dev/stage0/logs-rotate.sh
+```
+
+`STAGE0_LOGS_KEEP_DAYS` and `STAGE0_LOGS_MAX_BYTES` change the days kept
+and the size cap (`logs-rotate.sh`). To remove only the log files: `systemctl --user disable --now
+ortus-stage0-logs ortus-stage0-logs-rotate.timer`, `rm
+~/.config/systemd/user/ortus-stage0-logs{.service,-rotate.service,-rotate.timer}`,
+`systemctl --user daemon-reload`, and `rm -rf ~/.local/state/ortus-nova/logs`;
+the next `stage0.sh`, which the deploy timer runs, installs them again.
+`test-logs.sh` checks the install, the follower against a stubbed
+`journalctl` and the rotation.
 
 ## Remove it
 
 ```sh
 systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-pomerium ortus-stage0-egress-gate \
-  ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-worker \
+  ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-worker ortus-stage0-logs ortus-stage0-logs-rotate.timer \
   ortus-stage0-telemetry ortus-stage0-telemetry-backup.timer ortus-stage0-telemetry-retention.timer
 podman volume rm ortus-telemetry_postgres-data ortus-telemetry_clickhouse-data ortus-telemetry_redis-data ortus-telemetry_minio-data
 smolvm machine ls   # delete each wd-* machine: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.{service,timer} && systemctl --user daemon-reload
 rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces, the pack, and the telemetry store's settings and backups
+rm -rf ~/.local/state/ortus-nova/logs     # the log files
 ```

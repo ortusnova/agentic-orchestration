@@ -100,7 +100,7 @@ restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
     "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile" \
-    "$tmp/failed-once" "$STAGE0_HOME/started" "$STAGE0_HOME/deploy-state.json"
+    "$tmp/failed-once" "$STAGE0_HOME/started" "$STAGE0_HOME/deploy-state.json" "$STAGE0_HOME/sortie.commit"
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
@@ -119,6 +119,8 @@ echo "\$STAGE0_PROFILE" > "$tmp/profile"
 [ -z "\$FAIL_STAGE0" ] || { echo "stage0.sh: the pack did not build" >&2; exit 1; }
 if [ -n "\$FAIL_STAGE0_ONCE" ] && [ ! -e "$tmp/failed-once" ]; then : > "$tmp/failed-once"; exit 1; fi
 [ "\$STAGE0_PROFILE" = worker ] || echo restart >> "\$SORTIE_STUB/restarts"
+. "$KIT/deploy-state.sh"
+if [ "\$STAGE0_PROFILE" = worker ]; then deploy_sortie_retired; else deploy_sortie_ran "\$(git -C "\$STAGE0_SORTIE_SRC" rev-parse HEAD)"; fi
 . "$KIT/unit-restart.sh"
 d=\$(cd "\$(dirname "\$0")" && pwd)
 if [ -e "\$d/gate.conf" ]; then restart_changed ortus-stage0-egress-gate.service "\$d/gate.conf" || [ -n "\$IGNORE_RESTART" ] || exit 1; fi
@@ -309,6 +311,47 @@ setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8; run;
 deploy_state_write deploying "$(sha main~1)" "$(sha main)"; sha main > "$STAGE0_HOME/deploy.failed"; run
 deployed "failed: a deploy that stopped while deploying is failed at the next tick" failed main~1 main behind "stopped before it finished"
 
+# Each host's deploy state lists every repository the host deploys (design
+# D13), keyed by owner/repo: the kit at the main commit it runs, and on a
+# host that builds and runs a Sortie (p1), Sortie at the plan-bench commit
+# of the binary it runs.
+ssha() { g -C "$tmp/sremote" rev-parse "$1"; }
+repos() { jq -c '.repositories' "${1:-$STAGE0_HOME/deploy-state.json}" 2> /dev/null; }
+kit_repo() { printf '"ortusnova/agentic-orchestration":{"branch":"main","commit":"%s"}' "$(sha "$1")"; }
+sortie_repo() { printf '"ortusnova/sortie":{"branch":"plan-bench","commit":"%s"}' "$1"; }
+lists() { # lists NAME WANT [FILE]: the file's repositories are {WANT}
+  if [[ $(repos "${3:-}") == "{$2}" ]]; then echo "ok: $1"
+  else echo "FAIL: $1: repositories $(repos "${3:-}"), want {$2}"; failed=1; fi
+}
+setup; merge dev/stage0/units; smerge; run
+deployed "repositories: p1's deploy keeps status, commit and main" succeeded main main level
+lists "repositories: p1 lists the kit at main and Sortie at the plan-bench it built" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench)")"
+smerge; FAIL_STAGE0=1 run
+deployed "repositories: a failed Sortie build is failed" failed main main level "(Sortie $(ssha plan-bench | cut -c1-12))"
+lists "repositories: and lists Sortie at the commit still running" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench~1)")"
+rm -f "$tmp/calls"; run
+lists "repositories: and still at the next tick" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench~1)")"
+built=$(ssha plan-bench~1)
+echo 2 > "$tmp/sortie/go"; g -C "$tmp/sortie" commit -qam try; run
+lists "repositories: a Sortie checkout moved since the build lists the Sortie that runs" "$(kit_repo main),$(sortie_repo "$built")"
+setup; echo 2 > "$tmp/sortie/go"; g -C "$tmp/sortie" commit -qam try; smerge; run
+lists "repositories: before stage0.sh records one, the Sortie checkout's commit, not origin's" \
+  "$(kit_repo main),$(sortie_repo "$(g -C "$tmp/sortie" rev-parse HEAD)")"
+setup; merge dev/stage0/units; FAIL_STAGE0=1 run
+lists "repositories: a failed kit deploy lists the kit commit that runs" "$(kit_repo main~1),$(sortie_repo "$(ssha plan-bench)")"
+# A worker host (taichi) builds and runs no Sortie: it lists the kit only,
+# whatever Sortie checkout its stage0.env still names and whatever record
+# its retired Sortie left.
+cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
+printf 'STAGE0_PROFILE=worker\nSTAGE0_SORTIE_SRC=%s\n' "$tmp/sortie" > "$STAGE0_HOME/stage0.env"
+setup; ssha plan-bench > "$STAGE0_HOME/sortie.commit"; run
+lists "repositories: a worker host lists the kit only" "$(kit_repo main)"
+merge dev/stage0/units; smerge; run
+lists "repositories: a worker host's deploy lists the kit only" "$(kit_repo main)"
+[[ ! -e $STAGE0_HOME/sortie.commit ]] && echo "ok: repositories: and its stage0.sh drops the retired Sortie's record" \
+  || { echo "FAIL: a worker host kept $STAGE0_HOME/sortie.commit"; failed=1; }
+cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
+
 # A unit whose configuration changed (ONS-123: a deploy restarted nono,
 # Pomerium and the worker but not the egress gate): applied only once it
 # restarted.
@@ -349,6 +392,8 @@ printf 'STAGE0_PROFILE=worker\n' > "$STAGE0_HOME/stage0.env"
 setup; merge dev/stage0/units; run
 deployed "a worker host writes its deploy state too" succeeded main main level
 cp "$STAGE0_HOME/deploy-state.json" "$taichi/deploy-state.json"
+taichi_repos="$(kit_repo main)"
+lists "and lists the kit only" "$taichi_repos" "$taichi/deploy-state.json"
 [[ ! -e $tmp/ssh ]] && echo "ok: and reads no other host's" || { echo "FAIL: a worker host ran ssh $(cat "$tmp/ssh")"; failed=1; }
 cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
 setup; deploy_host_add taichi taichi; run
@@ -356,6 +401,8 @@ copy=$STAGE0_HOME/hosts/taichi/deploy-state.json
 if cmp -s "$copy" "$taichi/deploy-state.json" && grep -q 'BatchMode=yes' "$tmp/ssh"; then
   echo "ok: p1 copies the worker host's deploy state over ssh at each tick"
 else echo "FAIL: p1's copy of taichi's: $(cat "$copy" 2> /dev/null), ssh: $(cat "$tmp/ssh" 2> /dev/null)"; failed=1; fi
+lists "and p1's copy keeps taichi's repositories" "$taichi_repos" "$copy"
+lists "beside p1's own, which lists both" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench)")"
 [[ $(deploy_hosts_yaml) == "    p1: $STAGE0_HOME/deploy-state.json"$'\n'"    taichi: $copy" ]] \
   && echo "ok: and Sortie's workflow names both hosts' files (merge_and_prove.hosts)" || { echo "FAIL: hosts: $(deploy_hosts_yaml)"; failed=1; }
 # shellcheck disable=SC2016 # literal placeholders
@@ -397,6 +444,7 @@ sortie 2 9 2; apply "${apply[@]}"
 applied "a smolvm bump on busy p1 applies at once, with its 2 runs going" 0 "apply: running 2, dispatching;stage0.sh;"
 never_drained "and pauses no dispatch nor waits for a run"
 deployed "the dev-host apply writes its deploy state: applied" succeeded main main level
+lists "with the repositories p1 runs" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench)")"
 sortie 1 4 1; apply false
 applied "a failed apply stops before stage0.sh" 1 ""
 never_drained "and drains nothing"

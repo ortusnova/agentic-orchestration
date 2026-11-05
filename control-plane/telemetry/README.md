@@ -54,8 +54,8 @@ control-plane/telemetry/telemetry.sh down      # stop and remove the containers;
 first `up` is enough; edit `LANGFUSE_INIT_USER_EMAIL` in `telemetry.env`
 before it. On p1 the kit's units run the same script through
 `dev/stage0/run-telemetry.sh`: `systemctl --user restart
-ortus-stage0-telemetry` stops and starts the store, `journalctl --user -u
-ortus-stage0-telemetry` shows it, and `dev/stage0/run-telemetry.sh health`
+ortus-stage0-telemetry` stops and starts the store, `~/.local/state/ortus-nova/logs/ortus-stage0-telemetry.log`
+shows it, and `dev/stage0/run-telemetry.sh health`
 checks it.
 
 `up` starts the stores first, waits until each answers its health check,
@@ -225,9 +225,9 @@ writes `$TELEMETRY_BACKUP_DIR/<UTC time>/` (default
 A backup is written as `<time>.partial` and renamed when complete; the
 newest `TELEMETRY_BACKUP_KEEP` (7) are kept and older ones removed. On p1,
 `ortus-stage0-telemetry-backup.timer` runs it nightly at 02:30 (and at the
-next start after a night p1 was off), and `stage0.sh` runs it once at
-once when no backup exists. `journalctl --user -u
-ortus-stage0-telemetry-backup` shows each.
+next start after a night p1 was off), and `stage0.sh` runs it
+once when no backup exists. `~/.local/state/ortus-nova/logs/ortus-stage0-telemetry-backup.log`
+shows each.
 
 ## Restore
 

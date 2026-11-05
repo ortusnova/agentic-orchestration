@@ -255,6 +255,10 @@ smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later;
 migrate_max_agents "$ENV_FILE"
 # shellcheck source=unit-restart.sh
 . "$KIT/unit-restart.sh"
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
+# shellcheck source=logs.sh
+. "$KIT/logs.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 # The worker daemon's machines carry the runs: it restarts only when its
 # binary, its configuration or its unit changed (worker-build.sh).
@@ -322,6 +326,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
   retire_sortie "$UNITS" || die "this host's Sortie keeps running until p1's Sortie holds its merge records (see above)"
+  # It runs no Sortie, so its deploy state lists no ortusnova/sortie.
+  deploy_sortie_retired
   say "Installing the user units"
   mkdir -p "$UNITS"
   units=(ortus-stage0-worker.service)
@@ -337,6 +343,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
   fi
   systemctl --user enable -q ortus-stage0-worker.service
+  # Every stage-0 unit's journal, into rotated files (logs.sh).
+  logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ortus-stage0-logs"
   restart_worker
   sleep 2
   systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
@@ -374,7 +382,8 @@ if [[ -n $UPDATE_SORTIE ]]; then
   git -C "$STAGE0_SORTIE_SRC" fetch -q origin plan-bench
   git -C "$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench
 fi
-say "Building sortie $(git -C "$STAGE0_SORTIE_SRC" rev-parse --short HEAD), acp-broker, smol-builder and worker-daemon into $STAGE0_HOME/bin"
+sortie_built=$(git -C "$STAGE0_SORTIE_SRC" rev-parse HEAD)
+say "Building sortie ${sortie_built:0:7}, acp-broker, smol-builder and worker-daemon into $STAGE0_HOME/bin"
 (cd "$STAGE0_SORTIE_SRC" && GOWORK=off go build -o "$STAGE0_HOME/bin/sortie" ./cmd/sortie)
 (cd "$ROOT/acp-broker" && go build -o "$STAGE0_HOME/bin/acp-broker" ./cmd/acp-broker)
 (cd "$ROOT/smol-builder" && go build -o "$STAGE0_HOME/bin/smol-builder" ./cmd/smol-builder)
@@ -462,8 +471,6 @@ for name in $carried; do say "Gave worker host $name its certificate: it dials P
 # (deploy-state.sh): p1's own, and a copy of each worker host's, which
 # deploy.sh fetches over SSH every minute. A worker host listed before
 # worker-host.sh add recorded its SSH destination is reached by its name.
-# shellcheck source=deploy-state.sh
-. "$KIT/deploy-state.sh"
 for name in $(front_workers); do
   [[ $name == "$STAGE0_WORKER_NAME" || -s $STAGE0_HOME/deploy-hosts/$name ]] && continue
   deploy_host_add "$name" "$name"
@@ -527,6 +534,8 @@ else
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
   ortus-stage0-nono-live-proof.service ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service
+# Every stage-0 unit's journal, into rotated files (logs.sh).
+logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ortus-stage0-logs"
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer
@@ -542,6 +551,9 @@ systemctl --user enable -q --now ortus-stage0-live-proofs.timer
 # kit change that leaves them as they are cuts no run's egress, stream or
 # machine.
 systemctl --user restart ortus-stage0-sortie.service
+# The deploy state lists ortusnova/sortie at the commit of the Sortie that
+# runs now (deploy-state.sh).
+deploy_sortie_ran "$sortie_built"
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 nono_inputs=("$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" "$KIT/anthropic-token.py"
   "$ROOT/control-plane/nono/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
