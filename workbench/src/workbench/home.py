@@ -21,6 +21,7 @@ from .delivery import pull_url
 from .faults import fault_text
 from .leases import expired_text, holder
 from .questions import statement_of
+from .released import ReleaseOrder, released_keys, released_list
 
 # Slack, in stories, up to which an item is "soon" rather than "later".
 SOON = 4
@@ -615,14 +616,16 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
                planning: dict[str, Any], plan_states: dict[str, str] | None, tracker_known: bool, valid: bool,
                errors: int, health_inputs: dict[str, Any], history: History | None = None,
                estimates: dict[str, float] | None = None, questions: list[dict[str, Any]] | None = None,
-               faults: list[dict[str, Any]] | None = None, fault_held: set[str] | None = None) -> dict[str, Any]:
+               faults: list[dict[str, Any]] | None = None, fault_held: set[str] | None = None,
+               asked: dict[str, dict[str, Any]] | None = None, release_order: ReleaseOrder | None = None) -> dict[str, Any]:
     """The home document. ``graph`` is the last valid plan graph; ``nodes`` the
     merged graph's nodes, with tracker state and plan fields; ``questions``
     the open questions of its stories, and ``faults`` the platform faults
     that hold its stories and only a person can clear: both are asked of a
     person, ranked together oldest first, before everything else that needs
     one. ``fault_held`` holds the plan keys of the stories any platform
-    fault holds out of dispatch."""
+    fault holds out of dispatch; ``asked`` the open questions by tracker
+    identifier; ``release_order`` the order the stories were released in."""
     estimates = estimates or {}
     questions = questions or []
     faults = faults or []
@@ -646,6 +649,11 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         history.add(health["busy"], health["runway"])
         health["history"] = history.buckets()
 
+    finished = done | dropped
+    order = (release_order.update(released_keys(nodes, plan_states, fields, finished))
+             if release_order is not None else None)
+    released = released_list(nodes, plan_states, fields, finished, health_inputs.get("state"), asked, order)
+
     base = {
         "generated_at": time.time(),
         "plan": {"valid": valid, "errors": errors, "has_graph": graph is not None},
@@ -655,6 +663,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         "questions": questions,
         "faults": faults,
         "expired_holds": (expired_holds := _expired_holds(nodes, health_inputs.get("leases"))),
+        "released": released,
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],

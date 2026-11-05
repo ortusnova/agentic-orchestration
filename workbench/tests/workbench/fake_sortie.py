@@ -136,11 +136,12 @@ class FakeSortie:
         else:
             self.brokers.pop(identifier, None)
 
-    def end(self, identifier: str, retry_attempt: int | None = None) -> None:
+    def end(self, identifier: str, retry_attempt: int | None = None, error: str | None = None) -> None:
+        """End the run; with ``retry_attempt``, Sortie retries it, after ``error``."""
         self.running.pop(identifier, None)
         self.brokers.pop(identifier, None)
         if retry_attempt is not None:
-            self.retrying[identifier] = {"issue_identifier": identifier, "attempt": retry_attempt}
+            self.retrying[identifier] = {"issue_identifier": identifier, "attempt": retry_attempt, "error": error}
 
     def park(self, identifier: str, statement: str, parked_at: str = "2026-11-01T18:35:26Z", reason: str = "agent_blocked",
              listed: str | None = None) -> None:

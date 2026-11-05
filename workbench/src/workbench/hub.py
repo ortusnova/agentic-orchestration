@@ -18,6 +18,7 @@ from .plan_overlay import frozen_set, overlay
 from .plan_state import PlanState
 from .notifications import project_notifications
 from .questions import home_questions, parked, parked_at_of, question
+from .released import ReleaseOrder
 from .sortie import ProjectSortie, SortieError
 from .supervisor import supervisor_view
 from .timeline import RunHistory, RunWorkers
@@ -90,6 +91,8 @@ class Hub:
         self.failures: dict[str, dict[str, Any]] = {}
         self._park_details: dict[tuple[str, str, Any], dict[str, Any]] = {}
         self.history = History()
+        # The order the stories were released in, as the hub saw them leave the backlog.
+        self.release_order = ReleaseOrder()
         # Read-only: never pull back an edited story on its own.
         self.read_only = False
         self.home: dict[str, Any] = {}
@@ -391,6 +394,7 @@ class Hub:
                 errors=len(snap["errors"]), history=self.history,
                 questions=home_questions(self.open_questions(), doc.get("nodes") or []),
                 faults=home_faults(self.faults), fault_held={k for f in self.faults for k in f["keys"]},
+                asked=self.open_questions(), release_order=self.release_order,
                 health_inputs={
                     "reachable": bool(sortie.get("reachable")), "sortie_error": sortie.get("error"),
                     "dispatched": bool(sortie.get("dispatched")), "project": self.sortie.project,
