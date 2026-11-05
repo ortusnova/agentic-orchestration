@@ -42,7 +42,7 @@ calls() { [[ -f $tmp/calls ]] && tr '\n' ';' < "$tmp/calls"; true; }
 deploy() { rm -f "$tmp/calls"; build_worker_daemon && restart_worker 2> /dev/null; }
 
 deploy
-[[ -z $(calls) ]] && ok "a running daemon an earlier kit started is adopted" || fail "first: $(calls)"
+[[ $(calls) == "restart ortus-stage0-worker.service;" ]] && ok "a running daemon with no record of what it runs restarts once" || fail "first: $(calls)"
 deploy; [[ -z $(calls) ]] && ok "the same kit leaves it running" || fail "same: $(calls)"
 
 cat > "$ROOT/worker-daemon/internal/daemon/zz_extra_test.go" <<'EOF'

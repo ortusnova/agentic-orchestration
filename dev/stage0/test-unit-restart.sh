@@ -15,12 +15,14 @@ ok() { echo "ok: $1"; }
 fail() { echo "FAIL: $1"; failed=1; }
 
 mkdir -p "$tmp/bin" "$STAGE0_HOME" "$tmp/src/sub"
-# is-active fails while $tmp/down names the unit; restart fails while $tmp/broken does.
+# is-active fails while $tmp/down names the unit, and a restart brings it up
+# unless $tmp/dies names it; restart fails while $tmp/broken does.
 cat > "$tmp/bin/systemctl" <<EOF
 #!/bin/sh
 case "\$2" in
   is-active) ! grep -qx "\$4" "$tmp/down" 2> /dev/null ;;
-  restart) echo "restart \$3" >> "$tmp/calls"; ! grep -qx "\$3" "$tmp/broken" 2> /dev/null ;;
+  restart) echo "restart \$3" >> "$tmp/calls"; ! grep -qx "\$3" "$tmp/broken" 2> /dev/null || exit 1
+    grep -qx "\$3" "$tmp/dies" 2> /dev/null || sed -i "/^\$3\$/d" "$tmp/down" 2> /dev/null; true ;;
 esac
 EOF
 chmod +x "$tmp/bin/systemctl"
@@ -36,8 +38,8 @@ echo worker.service > "$tmp/down"; start
 rm "$tmp/down"
 start; [[ -z $(calls) ]] && ok "unchanged and running, it is left running, with its runs" || fail "unchanged: $(calls)"
 rm -rf "$STAGE0_HOME/started"; start
-[[ -z $(calls) ]] && ok "a running unit an earlier kit started is adopted, with its runs" || fail "adopt: $(calls)"
-start; [[ -z $(calls) ]] && ok "and then left running" || fail "adopted: $(calls)"
+[[ $(calls) == "restart worker.service;" ]] && ok "a running unit with no record of what it runs restarts (ONS-123)" || fail "no record: $(calls)"
+start; [[ -z $(calls) ]] && ok "and is then left running" || fail "after no record: $(calls)"
 echo a2 > "$tmp/src/sub/x.go"; start
 [[ $(calls) == "restart worker.service;" ]] && ok "a changed source file restarts it" || fail "source: $(calls)"
 echo c2 > "$tmp/conf"; start
@@ -52,8 +54,15 @@ echo worker.service > "$tmp/down"; start
 rm "$tmp/down"
 echo c3 > "$tmp/conf"; echo worker.service > "$tmp/broken"; start
 (( rc != 0 )) && [[ $(calls) == "restart worker.service;" ]] && ok "a failed restart fails" || fail "broken: exit $rc, $(calls)"
+[[ $(units_unsettled) == worker.service ]] && ok "and its restart is unsettled" || fail "unsettled after broken: '$(units_unsettled)'"
 rm "$tmp/broken"; start
 [[ $(calls) == "restart worker.service;" ]] && ok "and is tried again on the next run, though it runs" || fail "after broken: $(calls)"
+[[ -z $(units_unsettled) ]] && ok "and is settled once it restarted" || fail "unsettled after restart: '$(units_unsettled)'"
+echo c4 > "$tmp/conf"; echo worker.service > "$tmp/down"; echo worker.service > "$tmp/dies"; start
+(( rc != 0 )) && [[ $(units_unsettled) == worker.service ]] && ok "a unit that is not running after its restart fails, unsettled" \
+  || fail "dies: exit $rc, unsettled '$(units_unsettled)'"
+rm "$tmp/dies"; start
+(( rc == 0 )) && [[ -z $(units_unsettled) ]] && ok "and settles once it runs after a restart" || fail "after dies: exit $rc, '$(units_unsettled)'"
 echo edge.service > "$tmp/down"; rm -f "$tmp/calls"; restart_changed edge.service "$tmp/conf" 2> /dev/null
 [[ $(calls) == "restart edge.service;" ]] && ok "each unit keeps its own record" || fail "other unit: $(calls)"
 rm "$tmp/down"

@@ -41,6 +41,9 @@ var stage0Values = map[string]string{
 	"STAGE0_NOTIFY_ENTRY": "",
 	// The remote kind's flow URLs: Pomerium's public URL (control-plane/).
 	"STAGE0_CP_PUBLIC_URL": "https://p1.example.org:8443",
+	// merge_and_prove.hosts as deploy-state.sh renders it on p1 with one
+	// worker host, taichi (stage0_deploy_test.go).
+	"STAGE0_DEPLOY_HOSTS": "    p1: /srv/stage0/deploy-state.json\n    taichi: /srv/stage0/hosts/taichi/deploy-state.json",
 
 	"STAGE0_AO_REPO_PROJECT":      "ortusnova/agentic-orchestration",
 	"STAGE0_HOMELAB_REPO_PROJECT": "ortusnova/homelab",

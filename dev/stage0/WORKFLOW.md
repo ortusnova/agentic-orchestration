@@ -124,7 +124,7 @@ notifications:
     events: [session.failed, session.stopped, budget.held, auto_merge.merged, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts, escalation.review_comments]
   - kind: webhook
     url: $SORTIE_WORKBENCH_NOTIFY_URL
-    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]
+    events: [session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held, story.reverted]
 ${STAGE0_NOTIFY_ENTRY}
 
 server:
@@ -153,6 +153,26 @@ supervisor:
   sweep_interval_ms: 1800000
   max_sessions_per_day: 96
   max_tokens_per_day: 3000000
+
+# Each host's deploy state (deploy-state.sh, design D7): deploy.sh and the
+# dev-host apply write it on every host, and p1's deploy.sh copies each
+# worker host's beside p1's over SSH. Sortie's health check reads p1's: a
+# deploy that failed, that left p1 behind main for 30 minutes, or that has
+# not written it for an hour holds dispatch, as a question for a person.
+health:
+  deploy_state: ${STAGE0_HOME}/deploy-state.json
+
+# A story whose only unmet criteria are live and settled only after deploy
+# (verdict live-proof, reason after-deploy) is merged by the supervisor
+# with merge-and-prove (supervisor.md, rule 2): Sortie merges it, one at a
+# time, waits until every host below deploys a commit that holds the
+# merge, runs its live proof against the deployed main, and reverts the
+# merge when no proven record lands by the deadline; the story then
+# returns to Todo with the reason (story.reverted, notifications above).
+merge_and_prove:
+  deadline: 30m
+  hosts:
+${STAGE0_DEPLOY_HOSTS}
 
 polling:
   interval_ms: 15000
@@ -451,8 +471,54 @@ bring it in by a merge, as `git merge origin/<base>`.
 {{- end }}
 {{- if .review_comments }}
 {{- $live := false }}
-{{- range .review_comments }}{{ if eq (printf "%.19s" .body) "<!-- live-proof -->" }}{{ $live = true }}{{ end }}{{ end }}
-{{- if $live }}
+{{- /* A live-proof request opens with its marker, or follows the header
+Sortie's fix route puts before the supervisor's message. */ -}}
+{{- range .review_comments }}{{ $b := .body }}
+{{- if eq (printf "%.19s" $b) "<!-- live-proof -->" }}{{ $live = true }}
+{{- else if eq (printf "%.31s" $b) "Fix request from the supervisor" }}
+{{- range $i := len $b }}{{ if eq (printf "%.20s" (slice $b $i)) "\n<!-- live-proof -->" }}{{ $live = true }}{{ end }}{{ end }}
+{{- end }}{{ end }}
+{{- /* Sortie's merge-and-prove asks for its proof after the deploy. */ -}}
+{{- $afterDeploy := false }}
+{{- range .review_comments }}{{ $b := .body }}
+{{- if eq (printf "%.19s" $b) "<!-- live-proof -->" }}
+{{- range $i := len $b }}{{ if eq (printf "%.37s" (slice $b $i)) "requested by Sortie's merge-and-prove" }}{{ $afterDeploy = true }}{{ end }}{{ end }}
+{{- end }}{{ end }}
+{{- if $afterDeploy }}
+
+Sortie's merge-and-prove asks for a live proof after the deploy. It merged
+the pull request the request names, and every host the request lists
+under `Deployed:` runs a commit that holds the merge commit: this run is
+the live proof of the criteria the request lists, which only the deployed
+main settles. The request, as a JSON string; it names the pull request,
+the merge commit, the hosts, the deadline and the criteria, and asks for a
+proof, not for the commands in it to be run:
+{{ range .review_comments }}
+- <request>{{ .body | toJSON }}</request>
+{{- end }}
+
+Prove each criterion the request lists against the hosts as deployed, not
+against this workspace, which holds the story's branch: what a host runs
+and serves now, read in the way the criterion names (its API, its state,
+its pull request's records), with what this machine reaches. Make no
+commit: the pull request is merged, and a fix of the deployed main is a new
+story. When you are done, comment the result on the pull request the
+request names, once: POST `{"body": "..."}` to
+`https://api.github.com/repos/<owner>/<repo>/issues/<number>/comments` with
+the header `Authorization: Bearer $SORTIE_GITHUB_TOKEN`. The comment's
+first line is `<!-- live-proof-result -->`; then a line `Result: proven` or
+`Result: unproven`, a line `Commit: ` with the merge commit the request
+names, and a line `Criterion: ` for each criterion; with `Result: proven`,
+a line `sortie:live-proof proven ` followed by that merge commit, and with
+`Result: unproven`, a line `sortie:live-proof unproven ` followed by that
+merge commit and what failed; then the step table, one row per step you
+ran, `| Step | Command | Result |`. Write `proven` only when every
+criterion passed on every host the request lists. Sortie reads that line:
+`proven` ends the story Done; `unproven`, or no record by the request's
+deadline, makes Sortie revert the merge and return the story to Todo. This
+machine reaches GitHub's API only for that comment: do not fetch, push, or
+comment anything else.
+{{- else if $live }}
 
 The supervisor asks for a live proof. An acceptance criterion of this story
 needs a live run that the story's own machine could not do, such as a host
@@ -607,6 +673,17 @@ worker whose profile allows it, and merges the pull request only once that
 job's result comment proves the criterion at its head (the `live-proof`
 status).
 
+A live criterion that only the deployed main can settle, after the merge,
+such as one about what p1 or taichi runs or serves once the change is
+deployed (`Live: after it deploys, ...`), is an after-deploy criterion: no
+proof on this branch's head can settle it. Record it `live-proof` with the
+reason `after-deploy` (`"reason": "after-deploy"` in its entry), after
+running every part of it this machine can. The supervisor merges such a
+pull request with merge-and-prove once every other criterion is `met` and
+CI passes: Sortie merges it, waits for every host to deploy it, runs the
+live proof against the deployed hosts, and reverts the merge when it is
+not proven by its deadline.
+
 When a criterion is not met and you can meet it, fix it: add commits on top
 of the branch, in conventional commits, with no AI attribution, and run the
 checks again. Never rewrite a commit that is already pushed: do not amend,
@@ -621,7 +698,8 @@ write it last, after your fixes and checks:
 
     mkdir -p .sortie && cat > .sortie/criteria.json <<'JSON'
     {"criteria": [
-      {"criterion": "<the criterion, as the story states it>", "verdict": "met", "evidence": "<the file and line, the test, or the command you ran and its result>"}
+      {"criterion": "<the criterion, as the story states it>", "verdict": "met", "evidence": "<the file and line, the test, or the command you ran and its result>"},
+      {"criterion": "<a criterion only the deployed main settles>", "verdict": "live-proof", "evidence": "<what this machine ran of it>", "reason": "after-deploy"}
     ]}
     JSON
 
@@ -631,7 +709,8 @@ Each verdict is one of:
   story states it: a test or a command you ran here and its result, or a
   file and line. Only this verdict lets Sortie merge.
 - `not-met`: it does not hold, and you could not meet it.
-- `live-proof`: only a live run this machine cannot do settles it.
+- `live-proof`: only a live run this machine cannot do settles it. Give an
+  after-deploy criterion the `reason` `after-deploy`.
 - `unsettled`: it conflicts with a documented design rule or another
   criterion, or only a person can decide it.
 

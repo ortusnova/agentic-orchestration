@@ -122,7 +122,7 @@ func TestStage0_TheSupervisorPromptStatesItsRules(t *testing.T) {
 		"never edit a started story":       {"never edit a started story", "A story that has started keeps its title, description and acceptance criteria"},
 		"no UI merge before approval":      {"Never merge a UI story before the operator approves it.", "`sortie-review:ui`"},
 		"ask a person, once per thing":     {"A credential, a token or its scope, a key, a spec or story approval, an operator decision, and any action whose effect you cannot check go to a person", "Ask one question per decision", "never ask what you can find out yourself"},
-		"the question's parts":             {"POST /api/v1/supervisor/questions", "`action`: the exact action", "`where`: where to take it", "`stories`: every story it holds", "`checked`: what you already checked"},
+		"the question's parts":             {"POST /api/v1/supervisor/questions", "`kind`: `credential`, `key`, `approval`, `decision`, `host_action` or `live_proof`", "`action`: the exact action", "`where`: where to take it", "`stories`: every story it holds", "`checked`: what you already checked"},
 		"evidence with every action":       {"Record your evidence with every action.", "an `evidence` member that says what you read and where"},
 		"the supervisor token":             {"Authorization: Bearer $SORTIE_SUPERVISOR_TOKEN", "Supervisor token (send as `Authorization: Bearer <token>`): sup-token"},
 		"a merged story that stays parked": {"POST /api/v1/<identifier>/merge-record", "POST /api/v1/<identifier>/unpark"},
@@ -172,9 +172,10 @@ func kitSays(prompt string, phrases ...string) bool {
 }
 
 // Scenario "A merged story stays parked": ONS-7 is parked and the forge
-// shows its pull request merged. At the sweep the supervisor, told by the
-// kit's prompt, records the merge and releases the park; the story ends and
-// ONS-9, which it blocked, is dispatched.
+// shows its pull request merged. At the next session, which the park's
+// change of the state digest starts (on whatever trigger comes first), the
+// supervisor, told by the kit's prompt, records the merge and releases the
+// park; the story ends and ONS-9, which it blocked, is dispatched.
 func TestStage0_AMergedStoryStaysParked(t *testing.T) {
 	h := newStage0SupHarness(t, func(cfg *config.ServiceConfig) {
 		cfg.Tracker.TerminalStates = []string{"Done"}
@@ -201,7 +202,7 @@ func TestStage0_AMergedStoryStaysParked(t *testing.T) {
 	var once sync.Once
 	results := make(chan []SupervisorResult, 1)
 	h.sup.setTurn(func(ctx context.Context, prompt string, _ func(domain.AgentEvent)) (domain.TurnResult, error) {
-		if strings.Contains(prompt, "- sweep") && strings.Contains(prompt, `"reason": "agent_blocked"`) &&
+		if strings.Contains(prompt, `"reason": "agent_blocked"`) &&
 			kitSays(prompt, "whose pull request the forge shows merged", "/merge-record", "/unpark") {
 			once.Do(func() {
 				sup := h.o.Supervisor()
@@ -412,6 +413,7 @@ func TestStage0_TheSupervisorNeverTakesAStorysSlot(t *testing.T) {
 func TestStage0_ATokenScope(t *testing.T) {
 	h := newStage0SupHarness(t, nil)
 	question := SupervisorQuestion{
+		Kind:    "credential",
 		Action:  `Give the GitHub token Sortie pushes with ($STAGE0_HOME/github-token) the "workflow" scope`,
 		Where:   "GitHub, Settings, Developer settings, Personal access tokens",
 		Stories: []string{"ONS-49", "ONS-50"},
@@ -420,7 +422,7 @@ func TestStage0_ATokenScope(t *testing.T) {
 	}
 	asked := make(chan []SupervisorQuestionResult, 1)
 	h.sup.setTurn(func(ctx context.Context, prompt string, _ func(domain.AgentEvent)) (domain.TurnResult, error) {
-		if !kitSays(prompt, "a token or its scope", "Ask one question per decision", "/api/v1/supervisor/questions") {
+		if !kitSays(prompt, "a token or its scope", "Ask one question per decision", "/api/v1/supervisor/questions", "`kind`: `credential`") {
 			return domain.TurnResult{}, errors.New("the kit's prompt does not say to ask")
 		}
 		sup := h.o.Supervisor()

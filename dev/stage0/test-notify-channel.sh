@@ -32,6 +32,7 @@ entry=$(notify_entry webhook)
 entry=$(notify_entry telegram -1001234567890)
 [[ $entry == *'bot_token: $SORTIE_NOTIFY_SECRET'* && $entry == *'chat_id: "-1001234567890"'* ]] && ok "telegram names the bot token and the chat" || fail "telegram entry: $entry"
 [[ $NOTIFY_EVENTS == *session.stopped* && $NOTIFY_EVENTS == *session.escalated* ]] && ok "a park and an escalation reach the channel" || fail "events: $NOTIFY_EVENTS"
+[[ $NOTIFY_EVENTS == *story.reverted* ]] && ok "a story merge-and-prove reverted reaches the channel" || fail "events: $NOTIFY_EVENTS"
 [[ -z $(notify_entry '') ]] && ok "no kind, no channel" || fail "an entry with no kind"
 notify_entry telegram 2>/dev/null && fail "telegram without a chat was accepted" || ok "telegram needs a chat"
 notify_entry 'telegram' 'x; rm' 2>/dev/null && fail "a chat that is not an id was accepted" || ok "a chat is an id or @channel"
@@ -74,10 +75,10 @@ workbench=$(grep -A2 -- '- kind: webhook' <<< "$section")
 [[ $workbench == *'url: $SORTIE_WORKBENCH_NOTIFY_URL'* && $workbench == *"events: $WORKBENCH_EVENTS"* ]] \
   && ok "$wf sends the workbench its notifications" || fail "$wf's workbench entry: $workbench"
 for e in session.stopped session.failed session.escalated budget.held escalation.ci_failure escalation.review_comments \
-  escalation.bot_review escalation.merge_conflicts escalation.auto_merge escalation.merge_completion; do
+  escalation.bot_review escalation.merge_conflicts escalation.auto_merge escalation.merge_completion story.reverted; do
   [[ $WORKBENCH_EVENTS == *"$e"[],]* ]] || fail "the workbench does not get $e: $WORKBENCH_EVENTS"
 done
-ok "the workbench gets session.stopped, session.failed, session.escalated, every escalation and budget.held"
+ok "the workbench gets session.stopped, session.failed, session.escalated, every escalation, budget.held and story.reverted"
 
 # The host's token: minted by stage0.sh, mode 0600, in the URL Sortie posts to.
 STAGE0_SORTIE_NAME=p1

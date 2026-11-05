@@ -9,10 +9,14 @@
 #   restart_changed UNIT PATH...  restart UNIT unless it runs and every PATH
 #                                 (a file, or a directory: all its files) is
 #                                 as when it last started
+#   units_unsettled               each unit whose restart began and did not
+#                                 end with the unit running
 #
-# $STAGE0_HOME/started/UNIT.sum records one digest of the PATHs each start.
-# A running unit with no record yet was started by an earlier kit, which
-# restarted it at every stage0.sh: it is adopted as it runs.
+# $STAGE0_HOME/started/UNIT.sum records one digest of the PATHs each start,
+# once the unit runs after it. A running unit with no record is restarted:
+# what it runs is not known, as for an egress gate an earlier kit left
+# running on its own configuration (ONS-123). A deploy is applied only once
+# units_unsettled names none (deploy.sh).
 
 # inputs_sum PATH...: one digest of the PATHs' names and contents; a
 # missing PATH counts as missing.
@@ -41,15 +45,19 @@ restart_changed() {
       echo "$unit runs what it would run now: left running, with its runs" >&2
       return 0
     fi
-    # An earlier kit restarted these units at every stage0.sh and kept no
-    # record: what runs is what that stage0.sh built, so it is adopted as is.
-    if [[ ! -e $rec ]]; then
-      echo "$sum" > "$rec"
-      echo "$unit runs, started by an earlier kit: left running, with its runs (restart it by hand to be sure)" >&2
-      return 0
-    fi
+    [[ -e $rec ]] || echo "$unit runs with no record of what it runs: restarting it" >&2
   fi
   echo restarting > "$rec"
-  systemctl --user restart "$unit" || return 1
+  systemctl --user restart "$unit" || { echo "$unit did not restart" >&2; return 1; }
+  systemctl --user is-active -q "$unit" || { echo "$unit is not running after its restart" >&2; return 1; }
   echo "$sum" > "$rec"
+  echo "$unit restarted: what it runs changed" >&2
+}
+
+units_unsettled() {
+  local rec
+  for rec in "$STAGE0_HOME"/started/*.sum; do
+    [[ -e $rec && $(cat "$rec") == restarting ]] && basename "$rec" .sum
+  done
+  return 0
 }

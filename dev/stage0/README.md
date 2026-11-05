@@ -19,7 +19,7 @@ dev/stage0/stage0.sh --update-sortie  # also move the Sortie checkout to origin/
 STAGE0_PROFILE=worker dev/stage0/stage0.sh   # on a worker host: the worker daemon only
 dev/stage0/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 dev/stage0/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
-dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain
+dev/stage0/test-deploy.sh             # check what each kind of merge does to the live kit, with no drain, and the deploy state each host writes
 dev/stage0/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
 dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
@@ -316,14 +316,15 @@ sessions and 3,000,000 tokens a UTC day.
   merged change to it reaches the next session once the deploy has run
   `stage0.sh`. It states the rules: check the forge before believing a
   claim; merge only what passed its review and CI and whose live criteria
-  are proven; never rewrite a pushed commit or edit a started story; never
+  are proven, and a story whose only unmet criteria are after-deploy ones
+  only through merge-and-prove ([below](#each-hosts-deploy-state)); never rewrite a pushed commit or edit a started story; never
   merge a UI story before the operator approves it; ask a person for
   credentials, keys, approvals and decisions, one question per decision;
   record evidence with every action.
 - **Its token** is `supervisor-token`, which `stage0.sh` mints once.
   Sortie accepts it only on the supervisor's routes (answer, release,
-  grant sessions, record a merge, start a fix run, draft, merge, file an
-  issue, request a live proof, hold, ask a person); every other control
+  grant sessions, record a merge, start a fix run, draft, merge,
+  merge-and-prove, file an issue, request a live proof, hold, ask a person); every other control
   route answers it `403`, and a request without `evidence` is refused.
 - **What it did.** `dev/stage0/supervisor.sh status` prints its status,
   its budget, its running or last session, the questions it raised that
@@ -373,7 +374,8 @@ machine could not run it as its `evidence`. Every minute
   merged.
 - **The job.** The pass asks Sortie for a fix run of the story
   (`POST /api/v1/<identifier>/fix`, with the control token). The message
-  opens with `<!-- live-proof -->` and holds the pull request, the branch
+  opens with `<!-- live-proof -->` (after the header Sortie puts before a
+  fix request, which the fix prompt passes over) and holds the pull request, the branch
   and the criterion. While the story's own run still goes, Sortie refuses
   the fix run, and the pass asks again a minute later. The fix run runs on
   the story's branch, in the story's repository, on a worker whose profile
@@ -508,11 +510,15 @@ within the minute, the 2 go on, and the 9 are dispatched as slots free.
 
 nono, the egress gate, Pomerium and the worker daemon carry the runs (their egress, their
 stream, their machines), so `stage0.sh` restarts each only when what it runs
-changed, or when it is not running (`unit-restart.sh`; the digest each
-started with is in `$STAGE0_HOME/started/`): nono for its binary, scripts,
-profile, egress CA, pass, `github-token`, `stage0.env` or unit (the
-live-proof nono also for `egress-live-proof.json` and `live-proofs/`); the egress
-gate for its source, its script, `stage0.env`, the control token or unit;
+changed, when it is not running, or when it runs with no record of what it
+runs, as a unit an earlier kit left running on its own configuration
+(ONS-123) (`unit-restart.sh`; the digest each started with is in
+`$STAGE0_HOME/started/`, written once the unit runs after its restart):
+nono for its binary, scripts, profile, egress CA, pass, `github-token`,
+`stage0.env` or unit (the live-proof nono also for `egress-live-proof.json`
+and `live-proofs/`); the egress gate for its source and `control-plane/go.mod`,
+its script, `stage0.env`, the control token, nono's pass, the previews'
+review key or unit;
 Pomerium for its image, its configuration (a new worker list), its
 certificate, its script or unit; the worker daemon for its binary,
 `worker.json` or unit (`worker-build.sh` builds it with `-trimpath
@@ -539,6 +545,58 @@ it up.
   homelab's `make dev-host` in `STAGE0_HOMELAB_SRC`; elsewhere, name it:
   `dev/stage0/dev-host-apply.sh <command>`. It holds stage0.sh's lock
   throughout, so no deploy runs in between.
+
+### Each host's deploy state
+
+`deploy.sh` and `dev-host-apply.sh` write the host's deploy state to
+`$STAGE0_HOME/deploy-state.json` (`deploy-state.sh`, design D7), the file
+Sortie's `internal/deploystate` reads: `status`, `commit` (the kit's commit
+that runs), `main` (the newest `origin/main` seen), `behind_since` (when
+`commit` first fell behind `main`, `null` while it is `main`), `error` and
+`updated_at`.
+
+- `deploying` while a deploy or an apply runs.
+- `succeeded`, Sortie's word for applied, only once the new commit runs and
+  every unit whose configuration changed has restarted and runs: a restart
+  that began and did not end with the unit running
+  (`$STAGE0_HOME/started/<unit>.sum` still says `restarting`) fails the
+  deploy, the egress gate's included (ONS-123).
+- `failed`, with its error: what failed, at which commit, and the last
+  error line of `stage0.sh`. The host runs the previous commit, so the
+  state is behind `main` until another merge applies.
+
+Each minute's tick writes it again, so a commit left behind shows: Sortie's
+health check reads p1's file (`health.deploy_state` in `WORKFLOW.md`) and
+holds dispatch, as a question for a person, while the last deploy failed,
+while p1 has been behind `main` for 30 minutes, or once the file is an hour
+old. On p1, `deploy.sh` then copies each worker host's file to
+`$STAGE0_HOME/hosts/<name>/deploy-state.json`, over the SSH that
+`worker-host.sh add` uses (`ssh -o BatchMode=yes <host> cat
+.local/share/ortus-nova/stage0/deploy-state.json`; the destination is in
+`$STAGE0_HOME/deploy-hosts/<name>`, written by `worker-host.sh add`, or the
+worker's name for a worker host listed before). A host it cannot reach keeps
+its last copy, and the journal says so. `WORKFLOW.md` names p1's file and
+each copy in `merge_and_prove.hosts`, so Sortie's merge-and-prove waits on
+every host: a story whose only unmet criteria are after-deploy live
+criteria (the review records them `live-proof` with the reason
+`after-deploy`) is merged by the supervisor with
+`POST /api/v1/<identifier>/merge-and-prove`, never with `merge`
+(`supervisor.md`, rule 2); Sortie merges one at a time, waits until every
+host's deploy state names a commit that holds the merge, runs its live
+proof against the deployed hosts (the workflow's fix prompt has an
+after-deploy part for its job: no commit, and the result recorded as
+`sortie:live-proof proven <merge commit>` or `sortie:live-proof unproven
+<merge commit>`), and reverts the merge when no proven
+record lands within `merge_and_prove.deadline` (30 minutes); the story then
+returns to Todo with the reason, and `story.reverted` reaches the workbench
+and the operator's channel. `GET /api/v1/state` serves the story in flight
+and the queue as `merge_and_prove`, with the commit each host deployed.
+
+`test-deploy.sh` checks what each kind of deploy writes (applied, failed,
+behind, a unit whose configuration changed, the apply) and p1's copy from a
+stubbed worker host; `test-review-gate.sh` checks the files with Sortie's
+own `deploystate`, `WORKFLOW.md`'s hosts with Sortie's loader, and a kit
+story through Sortie's merge-and-prove, proven in time and reverted.
 
 An earlier kit paused Sortie's dispatch while a change waited, and recorded
 it in `$STAGE0_HOME/dispatch.paused`; `deploy.sh` resumes such a pause once
@@ -685,6 +743,10 @@ Pomerium's URL (`control-plane-url`). It restarts Pomerium onto the new
 list; Sortie is not restarted. Then, on the host, `STAGE0_PROFILE=worker
 dev/stage0/stage0.sh` points its daemon at Pomerium with the certificate.
 Adding the same name again gives it a new certificate and drops the old one.
+`add` also records HOST in `$STAGE0_HOME/deploy-hosts/<name>`: p1's deploy
+copies the host's deploy state over that SSH every minute, and the next
+`stage0.sh` names it in the workflow's `merge_and_prove.hosts`
+([Each host's deploy state](#each-hosts-deploy-state)); `remove` drops both.
 p1's own worker gets its certificate from `stage0.sh`, in
 `$STAGE0_HOME/control-plane/workers/p1`.
 

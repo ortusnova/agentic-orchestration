@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015 # each check is "test && echo ok || fail", and echo always succeeds
 # Checks deploy.sh and dev-host-apply.sh against a throwaway kit repository
 # and Sortie checkout, with uv, npm, npx and systemctl stubbed and Sortie
 # stubbed behind curl: what each kind of merge does to the live kit, that a
@@ -15,9 +16,17 @@ g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
 failed=0
 
 mkdir -p "$tmp/bin" "$STAGE0_HOME"
-for tool in uv npm systemctl; do printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$tool" "$tmp" > "$tmp/bin/$tool"; done
+for tool in uv npm; do printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$tool" "$tmp" > "$tmp/bin/$tool"; done
 # shellcheck disable=SC2016 # expanded by the stub, not here
 printf '#!/bin/sh\necho "npx $*" >> "%s/calls"\n[ -z "$FAIL_BUILD" ]\n' "$tmp" > "$tmp/bin/npx"
+# systemctl: every call but is-active is logged; a restart of the unit
+# FAIL_RESTART names fails.
+cat > "$tmp/bin/systemctl" <<EOF
+#!/bin/sh
+[ "\$2" = is-active ] && exit 0
+echo "systemctl \$*" >> "$tmp/calls"
+[ "\$2" != restart ] || [ -z "\$FAIL_RESTART" ] || [ "\$3" != "\$FAIL_RESTART" ]
+EOF
 # A stubbed Sortie, as curl: its state is files in $SORTIE_STUB (running,
 # queued and max, counts; paused while dispatch is paused, as an earlier kit
 # could leave it). Like Sortie, it dispatches queued stories into free slots
@@ -91,22 +100,28 @@ restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
     "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile" \
-    "$tmp/failed-once"
+    "$tmp/failed-once" "$STAGE0_HOME/started" "$STAGE0_HOME/deploy-state.json"
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
   mkdir -p "$tmp/up/dev/stage0" "$tmp/up/workbench/frontend/node_modules" "$tmp/up/docs" "$tmp/up/worker-daemon" "$tmp/up/control-plane"
   # Like the real one, it restarts Sortie on p1, and --update-sortie moves
   # the Sortie checkout to plan-bench.
+  # A gate.conf in the kit is an egress gate's configuration: stage0.sh
+  # restarts the gate when it changed (unit-restart.sh), failing when the
+  # restart does, unless IGNORE_RESTART.
   cat > "$tmp/up/dev/stage0/stage0.sh" <<EOF
-#!/bin/sh
+#!/usr/bin/env bash
 printf stage0.sh >> "$tmp/calls"; for a; do printf " %s" "\$a" >> "$tmp/calls"; done; echo >> "$tmp/calls"
 echo "\$STAGE0_PROFILE" > "$tmp/profile"
 . "\$STAGE0_HOME/stage0.env"
 [ "\$1" != --update-sortie ] || git -C "\$STAGE0_SORTIE_SRC" checkout -q --detach origin/plan-bench
-[ -z "\$FAIL_STAGE0" ] || exit 1
+[ -z "\$FAIL_STAGE0" ] || { echo "stage0.sh: the pack did not build" >&2; exit 1; }
 if [ -n "\$FAIL_STAGE0_ONCE" ] && [ ! -e "$tmp/failed-once" ]; then : > "$tmp/failed-once"; exit 1; fi
 [ "\$STAGE0_PROFILE" = worker ] || echo restart >> "\$SORTIE_STUB/restarts"
+. "$KIT/unit-restart.sh"
+d=\$(cd "\$(dirname "\$0")" && pwd)
+if [ -e "\$d/gate.conf" ]; then restart_changed ortus-stage0-egress-gate.service "\$d/gate.conf" || [ -n "\$IGNORE_RESTART" ] || exit 1; fi
 EOF
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
@@ -120,7 +135,7 @@ EOF
   g clone -q --branch plan-bench "$tmp/sremote" "$tmp/sortie"
   g -C "$tmp/sortie" checkout -q --detach
 }
-merge() { echo "$RANDOM" >> "$tmp/up/$1"; g -C "$tmp/up" commit -qam "$1"; g -C "$tmp/up" push -q origin main; }
+merge() { echo "$RANDOM" >> "$tmp/up/$1"; g -C "$tmp/up" add "$1"; g -C "$tmp/up" commit -qm "$1"; g -C "$tmp/up" push -q origin main; }
 smerge() { echo "$RANDOM" >> "$tmp/sup/go"; g -C "$tmp/sup" commit -qam sortie; g -C "$tmp/sup" push -q origin HEAD:plan-bench; }
 sortie_at() { [[ $(g -C "$tmp/sortie" rev-parse HEAD) == $(g -C "$tmp/sremote" rev-parse "$1") ]]; }
 at() { [[ $(g -C "$STAGE0_LIVE_KIT" rev-parse HEAD) == $(g -C "$tmp/remote" rev-parse "$1") ]]; }
@@ -250,6 +265,110 @@ if [[ ! -e $STAGE0_HOME/deploy-sortie.failed ]] && grep -q 'running ' "$tmp/err"
 else echo "FAIL: a worker host's deploy: $(cat "$tmp/err")"; failed=1; fi
 cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
 
+# Each host's deploy state (deploy-state.sh, design D7), which Sortie's
+# health check and merge-and-prove read: what each deploy writes.
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
+sha() { g -C "$tmp/remote" rev-parse "$1"; }
+short() { sha "$1" | cut -c1-12; }
+field() { deploy_state_field "$STAGE0_HOME/deploy-state.json" "$1"; }
+# deployed NAME STATUS COMMIT MAIN BEHIND [ERROR]: the deploy state names
+# STATUS, the refs COMMIT and MAIN, behind_since set (behind) or null
+# (level), and an error that holds ERROR (none without it).
+deployed() {
+  local behind=level error
+  [[ -n $(field behind_since) ]] && behind=behind
+  error=$(field error)
+  if [[ $(field status) == "$2" && $(field commit) == "$(sha "$3")" && $(field main) == "$(sha "$4")" && $behind == "$5" \
+    && -n $(field updated_at) ]] && { [[ -z ${6:-} && -z $error ]] || [[ -n ${6:-} && $error == *"$6"* ]]; }; then
+    echo "ok: $1"
+  else echo "FAIL: $1: $(tr '\n' ' ' < "$STAGE0_HOME/deploy-state.json" 2> /dev/null), want $2 at $3, main $4, $5, error '${6:-}'"; failed=1; fi
+}
+setup; run; deployed "nothing merged: applied at main" succeeded main main level
+setup; merge dev/stage0/units; run; deployed "applied: a kit change that ran stage0.sh is applied at the new commit" succeeded main main level
+setup; merge docs/x; run; deployed "applied: a docs change too" succeeded main main level
+setup; merge workbench/app; run; deployed "applied: a workbench change once the workbench restarted" succeeded main main level
+setup; merge workbench/app; FAIL_RESTART=ortus-stage0-workbench.service run
+check "a workbench that does not restart puts the previous commit back" main~1 "uv sync -q;npx vite build --logLevel warn;systemctl --user restart ortus-stage0-workbench.service;"
+deployed "failed: and records it" failed main~1 main behind "the workbench's restart at $(short main)"
+setup; merge dev/stage0/units; FAIL_STAGE0=1 STAGE0_NOW=2026-11-05T10:00:00Z run
+deployed "failed: a failed stage0.sh is failed on the previous commit, with its error" failed main~1 main behind \
+  "stage0.sh at $(short main): stage0.sh: the pack did not build; stage0.sh on $(short main~1) failed too"
+since=$(field behind_since)
+[[ $since == 2026-11-05T10:00:00Z ]] && echo "ok: behind: since the failed deploy" || { echo "FAIL: behind_since '$since'"; failed=1; }
+STAGE0_NOW=2026-11-05T10:45:00Z run
+deployed "behind: the failed commit is not tried again, and stays failed and behind" failed main~1 main behind "the pack did not build"
+[[ $(field behind_since) == "$since" && $(field updated_at) == 2026-11-05T10:45:00Z ]] && echo "ok: behind: since it first fell behind, written again each tick" \
+  || { echo "FAIL: behind after a tick: $(tr '\n' ' ' < "$STAGE0_HOME/deploy-state.json")"; failed=1; }
+merge dev/stage0/units; run; deployed "applied: the next merge that applies is applied and level again" succeeded main main level
+setup; smerge; FAIL_STAGE0=1 run
+deployed "failed: a failed Sortie update is failed too" failed main main level "(Sortie $(g -C "$tmp/sremote" rev-parse plan-bench | cut -c1-12))"
+setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8; run; exec 8>&-
+[[ ! -e $STAGE0_HOME/deploy-state.json ]] && echo "ok: a deploy that waits for the lock writes nothing" || { echo "FAIL: written under a held lock"; failed=1; }
+# A deploy that stopped while deploying, as when the host went down.
+deploy_state_write deploying "$(sha main~1)" "$(sha main)"; sha main > "$STAGE0_HOME/deploy.failed"; run
+deployed "failed: a deploy that stopped while deploying is failed at the next tick" failed main~1 main behind "stopped before it finished"
+
+# A unit whose configuration changed (ONS-123: a deploy restarted nono,
+# Pomerium and the worker but not the egress gate): applied only once it
+# restarted.
+gate="systemctl --user restart ortus-stage0-egress-gate.service;"
+setup; merge dev/stage0/gate.conf; run
+check "a running egress gate with no record of what it runs restarts" main "stage0.sh;$gate"
+deployed "applied: once it restarted" succeeded main main level
+rm -f "$tmp/calls"; merge dev/stage0/units; run
+check "a kit change that leaves the gate's configuration as it is leaves it running" main "stage0.sh;"
+rm -f "$tmp/calls"; merge dev/stage0/gate.conf; run
+check "a change to the gate's configuration restarts it" main "stage0.sh;$gate"
+deployed "applied: a unit whose configuration changed, once it restarted" succeeded main main level
+rm -f "$tmp/calls"; merge dev/stage0/gate.conf; FAIL_RESTART=ortus-stage0-egress-gate.service run
+check "a gate that does not restart puts the previous commit back, whose stage0.sh restarts it again" main~1 "stage0.sh;${gate}stage0.sh;$gate"
+deployed "failed: and records which unit" failed main~1 main behind "ortus-stage0-egress-gate.service did not restart"
+setup; merge dev/stage0/gate.conf; run; rm -f "$tmp/calls"; merge dev/stage0/gate.conf
+FAIL_RESTART=ortus-stage0-egress-gate.service IGNORE_RESTART=1 run
+deployed "failed: a stage0.sh that passes while the gate's restart did not is not applied" failed main~1 main behind \
+  "stage0.sh's restart of ortus-stage0-egress-gate.service at $(short main)"
+merge dev/stage0/gate.conf; run
+deployed "applied: once the next merge restarts it" succeeded main main level
+
+# A worker host writes its own; p1 copies it over SSH, from a stubbed
+# worker host: ssh runs the command in taichi's home.
+taichi=$tmp/taichi/.local/share/ortus-nova/stage0
+mkdir -p "$taichi"
+cat > "$tmp/bin/ssh" <<STUB
+#!/bin/sh
+echo "\$*" >> "$tmp/ssh"
+while [ "\$1" = -o ]; do shift 2; done
+cd "$tmp/\$1" 2> /dev/null || exit 255
+shift
+exec "\$@"
+STUB
+chmod +x "$tmp/bin/ssh"
+cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
+printf 'STAGE0_PROFILE=worker\n' > "$STAGE0_HOME/stage0.env"
+setup; merge dev/stage0/units; run
+deployed "a worker host writes its deploy state too" succeeded main main level
+cp "$STAGE0_HOME/deploy-state.json" "$taichi/deploy-state.json"
+[[ ! -e $tmp/ssh ]] && echo "ok: and reads no other host's" || { echo "FAIL: a worker host ran ssh $(cat "$tmp/ssh")"; failed=1; }
+cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
+setup; deploy_host_add taichi taichi; run
+copy=$STAGE0_HOME/hosts/taichi/deploy-state.json
+if cmp -s "$copy" "$taichi/deploy-state.json" && grep -q 'BatchMode=yes' "$tmp/ssh"; then
+  echo "ok: p1 copies the worker host's deploy state over ssh at each tick"
+else echo "FAIL: p1's copy of taichi's: $(cat "$copy" 2> /dev/null), ssh: $(cat "$tmp/ssh" 2> /dev/null)"; failed=1; fi
+[[ $(deploy_hosts_yaml) == "    p1: $STAGE0_HOME/deploy-state.json"$'\n'"    taichi: $copy" ]] \
+  && echo "ok: and Sortie's workflow names both hosts' files (merge_and_prove.hosts)" || { echo "FAIL: hosts: $(deploy_hosts_yaml)"; failed=1; }
+# shellcheck disable=SC2016 # literal placeholders
+grep -qx '  deploy_state: ${STAGE0_HOME}/deploy-state.json' "$KIT/WORKFLOW.md" && grep -qx '${STAGE0_DEPLOY_HOSTS}' "$KIT/WORKFLOW.md" \
+  && echo "ok: the workflow reads p1's as health.deploy_state and every host's for merge-and-prove" || { echo "FAIL: WORKFLOW.md's deploy state"; failed=1; }
+mv "$tmp/taichi" "$tmp/taichi.away"; merge docs/x; run
+if cmp -s "$copy" "$tmp/taichi.away/.local/share/ortus-nova/stage0/deploy-state.json" && grep -q "could not read taichi's deploy state" "$tmp/err"; then
+  echo "ok: a worker host p1 cannot reach keeps its last copy, and deploy says so"
+else echo "FAIL: unreachable taichi: $(cat "$tmp/err")"; failed=1; fi
+deployed "and p1's own deploy is applied anyway" succeeded main main level
+mv "$tmp/taichi.away" "$tmp/taichi"
+deploy_host_remove taichi; rm -f "$tmp/ssh"
+
 # One run at a time: deploy.sh waits for a stage0.sh, and stage0.sh for it.
 setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8
 run; check "a kit change waits while a stage0.sh holds the lock" main~1 ""
@@ -261,8 +380,9 @@ run; check "and runs once the lock is free" main "stage0.sh;"
 
 # The dev-host apply after a smolvm bump applies at once too, whatever runs,
 # then runs stage0.sh so the pack and Sortie follow the new smolvm.
+setup; run
 mkdir -p "$tmp/dkit"
-cp "$KIT/dev-host-apply.sh" "$tmp/dkit/"
+cp "$KIT/dev-host-apply.sh" "$KIT/deploy-state.sh" "$KIT/unit-restart.sh" "$tmp/dkit/"
 # shellcheck disable=SC2016 # expanded by the stub, not here
 printf '#!/bin/sh\necho stage0.sh >> "%s/calls"\n[ -z "$FAIL_STAGE0" ]\n' "$tmp" > "$tmp/dkit/stage0.sh"
 chmod +x "$tmp/dkit/stage0.sh"
@@ -276,10 +396,17 @@ applied() { # applied NAME WANT_RC WANT_CALLS
 sortie 2 9 2; apply "${apply[@]}"
 applied "a smolvm bump on busy p1 applies at once, with its 2 runs going" 0 "apply: running 2, dispatching;stage0.sh;"
 never_drained "and pauses no dispatch nor waits for a run"
+deployed "the dev-host apply writes its deploy state: applied" succeeded main main level
 sortie 1 4 1; apply false
 applied "a failed apply stops before stage0.sh" 1 ""
 never_drained "and drains nothing"
+deployed "a failed apply is failed, with its error" failed main main level "the dev-host apply failed: false failed"
 sortie 0; FAIL_STAGE0=1 apply true; applied "a failed stage0.sh after the apply fails it" 1 "stage0.sh;"
+deployed "and is failed" failed main main level "stage0.sh failed after the apply"
+mkdir -p "$STAGE0_HOME/started"; echo restarting > "$STAGE0_HOME/started/ortus-stage0-egress-gate.service.sum"
+sortie 0; apply true; applied "an apply whose unit did not restart fails" 1 "stage0.sh;"
+deployed "and is failed, naming the unit" failed main main level "restart of ortus-stage0-egress-gate.service"
+rm -rf "$STAGE0_HOME/started"
 sortie 0; apply; applied "the control profile has no default apply" 1 ""
 # A worker host (taichi): the apply is make dev-host by default, and runs at
 # once while the worker daemon runs a job, the daemon left up.
