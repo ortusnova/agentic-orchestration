@@ -41,6 +41,8 @@ class PlanState:
         # The milestones and each change's tasks.md items, from the last valid read.
         self.planning: dict[str, Any] = {"milestones": [], "declared": False, "tasks": {}}
         self.errors: list[dict[str, Any]] = []
+        # The last read's warnings, logged each time they change.
+        self.warnings: list[str] = []
         self.version = 0
         self.validated_at = 0.0
         self._listeners: list[Callable[[], None]] = []
@@ -89,6 +91,11 @@ class PlanState:
             kw = {"schemas": planlib.Schemas.load(self.store, self.replaced_schemas)} if self.replaced_schemas else {}
             result = self._validate(self.store, approvals=approvals, frozen=frozen, **kw)
             errors = [e.to_dict() for e in result.errors]
+            warnings = [str(w) for w in getattr(result, "warnings", [])]
+            if warnings != self.warnings:
+                for w in warnings:
+                    log.warning("plan: %s", w)
+            self.warnings = warnings
             graph = result.graph
             if graph is not None:
                 self.stories = result.stories

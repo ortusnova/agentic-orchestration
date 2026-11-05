@@ -257,6 +257,8 @@ migrate_max_agents "$ENV_FILE"
 . "$KIT/unit-restart.sh"
 # shellcheck source=deploy-state.sh
 . "$KIT/deploy-state.sh"
+# shellcheck source=logs.sh
+. "$KIT/logs.sh"
 UNITS=${STAGE0_UNITS:-$HOME/.config/systemd/user}
 # The worker daemon's machines carry the runs: it restarts only when its
 # binary, its configuration or its unit changed (worker-build.sh).
@@ -341,6 +343,8 @@ if [[ $STAGE0_PROFILE == worker ]]; then
     systemctl --user disable -q --now ortus-stage0-deploy.timer 2>/dev/null || true
   fi
   systemctl --user enable -q ortus-stage0-worker.service
+  # Every stage-0 unit's journal, into rotated files (logs.sh).
+  logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ortus-stage0-logs"
   restart_worker
   sleep 2
   systemctl --user is-active -q ortus-stage0-worker.service || die "the worker daemon did not start: journalctl --user -u ortus-stage0-worker"
@@ -528,6 +532,8 @@ else
 fi
 systemctl --user enable -q ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-nono.service \
   ortus-stage0-nono-live-proof.service ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service
+# Every stage-0 unit's journal, into rotated files (logs.sh).
+logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ortus-stage0-logs"
 systemctl --user enable -q --now ortus-stage0-token.timer
 # The store follows its upstream from now on; no person pulls it.
 systemctl --user enable -q --now ortus-stage0-store.timer

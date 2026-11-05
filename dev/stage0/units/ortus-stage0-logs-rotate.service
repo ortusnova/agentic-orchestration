@@ -1,0 +1,6 @@
+[Unit]
+Description=Ortus Nova stage 0: rotate the stage-0 units' log files (logs-rotate.sh)
+
+[Service]
+Type=oneshot
+ExecStart=@KIT@/logs-rotate.sh
