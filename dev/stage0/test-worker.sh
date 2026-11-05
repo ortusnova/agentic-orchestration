@@ -35,8 +35,6 @@ calls() { [[ -f $tmp/calls ]] && tr '\n' ';' < "$tmp/calls"; true; }
 . "$KIT/worker-config.sh"
 # shellcheck source=homelab-inputs.sh
 . "$KIT/homelab-inputs.sh"
-# shellcheck source=live-proof-pack.sh
-. "$KIT/live-proof-pack.sh"
 STAGE0_PACK=$STAGE0_HOME/stage0.smolmachine
 echo cert > "$tmp/ca.crt"
 conf=$STAGE0_HOME/worker.json
@@ -94,45 +92,8 @@ sum=$(sha256sum < "$tmp/own.env"); migrate_max_agents "$tmp/own.env"
 [[ $(sha256sum < "$tmp/own.env") == "$sum" ]] && ok "migrating again changes nothing" || fail "a second migration changed $(cat "$tmp/own.env")"
 render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
 
-# Only a host that offers nested virtualization declares nested: /dev/kvm and
-# the KVM module's nested parameter on.
-host=$tmp/host
-mkdir -p "$host/dev" "$host/sys/module/kvm_intel/parameters" "$host/sys/module/kvm_amd/parameters"
-STAGE0_HOST_ROOT=$host host_nested && fail "a host without /dev/kvm offers nested" || ok "a host without /dev/kvm offers no nested"
-touch "$host/dev/kvm"
-echo N > "$host/sys/module/kvm_intel/parameters/nested"
-STAGE0_HOST_ROOT=$host host_nested && fail "kvm_intel nested=N offers nested" || ok "a host whose KVM module has nested off offers no nested"
-echo Y > "$host/sys/module/kvm_intel/parameters/nested"
-STAGE0_HOST_ROOT=$host host_nested && ok "kvm_intel nested=Y offers nested" || fail "kvm_intel nested=Y"
-rm "$host/sys/module/kvm_intel/parameters/nested"; echo 1 > "$host/sys/module/kvm_amd/parameters/nested"
-STAGE0_HOST_ROOT=$host host_nested && ok "kvm_amd nested=1 offers nested" || fail "kvm_amd nested=1"
-
-# p1's worker never declares nested, so the matcher never gives it a job of
-# the nested live-proof profile (WORKFLOW.md): stage0.sh renders it so.
-STAGE0_EGRESS_CA=$tmp/ca.crt
-STAGE0_WORKER_NESTED=false render_worker_config "$conf" p1 "$url" "$tmp/ca.crt" "${tls[@]}"
-grep -q '"nested": false' "$conf" && ! grep -q 'live-proof.smolmachine' "$conf" \
-  && ok "p1's worker declares no nested and has no live-proof pack" || fail "p1: $(cat "$conf")"
-grep -q '^STAGE0_WORKER_NESTED=false$' <(sed -n '/^build_pack$/,/^render_worker_config/p' "$KIT/stage0.sh") \
-  && ! sed -n '/^build_pack$/,/^render_worker_config/p' "$KIT/stage0.sh" | grep -q 'host_nested\|live_proof_pack\|homelab_inputs' \
-  && ok "stage0.sh's control profile (p1) sets no nested, whatever the host" || fail "stage0.sh's p1 part"
-
-# taichi, which offers nested: the live-proof pack as the workflow names it.
-STAGE0_LIVE_PROOF_PACK=$STAGE0_HOME/packs/live-proof-4567.smolmachine
-STAGE0_LIVE_PROOF_IMAGE_JSON=$(live_proof_image_json)
-STAGE0_WORKER_NESTED=true
-render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
-"$daemon" check -config "$conf" > "$tmp/out" 2>&1 && ok "the daemon accepts the live-proof image" || fail "check live-proof: $(cat "$tmp/out")"
-grep -q '"live-proof.smolmachine": "'"$STAGE0_LIVE_PROOF_PACK"'"' "$conf" && grep -q '"nested": true' "$conf" \
-  && ok "a worker that offers nested has the live-proof pack and declares nested" || fail "live-proof pack: $(cat "$conf")"
-grep -q 'image: live-proof.smolmachine' "$KIT/WORKFLOW.md" && ok "the workflow's nested profile names that image" || fail "WORKFLOW.md names no live-proof.smolmachine"
-[[ $(grep -c '"IS_SANDBOX": "1"' "$conf") == 2 && $(grep -c 'update-ca-certificates' "$conf") == 2 ]] \
-  && ok "the live-proof image trusts the egress CA and has IS_SANDBOX" || fail "live-proof image: $(cat "$conf")"
-if (unset STAGE0_LIVE_PROOF_PACK; render_worker_config "$conf.x" taichi "$url" "$tmp/ca.crt" "${tls[@]}") 2> /dev/null; then
-  fail "a worker declared nested without the live-proof pack"
-else ok "a worker does not declare nested without the live-proof pack"; fi
-
 # A worker with homelab's inputs: the homelab pack and what a homelab job needs.
+STAGE0_EGRESS_CA=$tmp/ca.crt
 mounts="{\"host\": \"$tmp/sources\", \"guest\": \"/home/builder/.cache/homelab-sources\", \"read_only\": true}"
 mounts+=", $(homelab_state_mounts "$tmp/recorder" "$tmp/open-issues")"
 STAGE0_HOMELAB_PACK=$STAGE0_HOME/packs/homelab-0123.smolmachine
@@ -140,8 +101,8 @@ STAGE0_HOMELAB_IMAGE_JSON=$(homelab_image_json /opt/krunfw "$mounts")
 render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
 "$daemon" check -config "$conf" > "$tmp/out" 2>&1 && ok "the daemon accepts the homelab image" || fail "check homelab: $(cat "$tmp/out")"
 grep -q '"homelab.smolmachine": "'"$STAGE0_HOMELAB_PACK"'"' "$conf" && grep -q '"nested": true' "$conf" \
-  && ok "a worker with homelab's inputs that offers nested has the homelab pack and declares nested" || fail "homelab pack: $(cat "$conf")"
-[[ $(grep -c '"IS_SANDBOX": "1"' "$conf") == 3 ]] && ok "the homelab image has IS_SANDBOX too" || fail "homelab IS_SANDBOX: $(cat "$conf")"
+  && ok "a worker with homelab's inputs has the homelab pack and declares nested" || fail "homelab pack: $(cat "$conf")"
+[[ $(grep -c '"IS_SANDBOX": "1"' "$conf") == 2 ]] && ok "the homelab image has IS_SANDBOX too" || fail "homelab IS_SANDBOX: $(cat "$conf")"
 grep -q '"user": "builder"' "$conf" && grep -q '"lib_dir": "/opt/krunfw"' "$conf" && grep -q '"per_job": true' "$conf" \
   && grep -q '"HOMELAB_VM_AGE_KEY": "'"$STAGE0_HOME"'/inputs/vm-age/keys.txt"' "$conf" \
   && ok "the homelab job gets builder, the guest kernel, the shared folders and the vm key" || fail "homelab image: $(cat "$conf")"
@@ -158,7 +119,7 @@ done
 sum=$(sha256sum < "$conf")
 render_worker_config "$conf" taichi "$url" "$tmp/ca.crt" "${tls[@]}"
 [[ $(sha256sum < "$conf") == "$sum" ]] && ok "rendering again changes nothing" || fail "a second render differs"
-unset STAGE0_HOMELAB_PACK STAGE0_HOMELAB_IMAGE_JSON STAGE0_LIVE_PROOF_PACK STAGE0_LIVE_PROOF_IMAGE_JSON STAGE0_WORKER_NESTED
+unset STAGE0_HOMELAB_PACK STAGE0_HOMELAB_IMAGE_JSON
 
 # Sortie's agent cap is a ceiling above the workers' run slots, not p1's own
 # slots: the matcher holds each worker to its slots (a fixed 3 for p1 and
