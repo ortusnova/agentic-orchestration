@@ -507,33 +507,62 @@ On macOS, a launchd agent with `ProgramArguments` `worker-daemon run
 `agent-platform/worker-daemon` against the fake control plane in
 `internal/fakecp`, which serves protocol 1 and the five flows on the
 wire as Sortie's data plane does, with machines from
-`internal/machine/fakemachine`. The smolvm end-to-end test,
-`TestSmolvmEndToEnd`, runs where `/dev/kvm` exists, smolvm is on `PATH`
-and `WORKER_DAEMON_E2E_PACK` names a pack with `sh`, `git` and `socat`;
-elsewhere it is skipped and says which of the three is missing:
+`internal/machine/fakemachine`. The smolvm end-to-end tests,
+`TestSmolvmEndToEnd` and `TestSmolvmEgressEndToEnd`, need `/dev/kvm`,
+smolvm on `PATH` and `WORKER_DAEMON_E2E_PACK` naming a pack with `sh`,
+`git` and `socat`; elsewhere they are skipped and say which of the three
+is missing, and with `WORKER_DAEMON_E2E_NO_SKIP=1` they fail instead.
 
-```sh
-WORKER_DAEMON_E2E_PACK=/path/base.smolmachine make -C worker-daemon test RUN=TestSmolvmEndToEnd
-```
+### Live proofs of the smolvm tests
+
+These two tests are proven through a live-proof request, never by hand:
+no one runs them in a session of their own on taichi or any other host
+(spec store `agent-platform/supervisor-autonomy`, "A live proof that
+needs nested KVM, smolvm or the host runs in-band"). A story whose
+criterion they settle is proven when the supervisor requests its live
+proof with the job profile `nested` (`POST /api/v1/<identifier>/live-proof`
+with `"profile": "nested"`; the stage-0 kit's `README.md`, "The nested
+profile"). Sortie places that job only on a worker that declares
+`nested`, taichi's, in the live-proof pack, which has smolvm, pasta,
+dnsmasq and Go, and the stage-0 pack, whose base layer has `sh`, `git`
+and `socat`, at `$LIVE_PROOF_BASE_PACK`. The job runs, from
+`worker-daemon/`, the commands `worker-daemon/live-proofs.json`
+declares, and only those, and comments their result on the pull request
+as its live-proof record, at its head:
+
+| Proof | Command, as declared |
+|---|---|
+| `TestSmolvmEndToEnd` | `go test -run '^TestSmolvmEndToEnd$' ./internal/daemon/` with `WORKER_DAEMON_E2E_PACK="$LIVE_PROOF_BASE_PACK"` |
+| `TestSmolvmEgressEndToEnd` | `internal/daemon/testdata/private-name-netns.sh private-name.e2e.test 10.255.0.1` with the same pack, `WORKER_DAEMON_E2E_ALLOWED=api.github.com` and `PRIVATE_LOCAL=1` |
+
+Both set `WORKER_DAEMON_E2E_NO_SKIP=1`, so a proof whose machine cannot
+run the test fails rather than passes skipped. The egress proof first
+builds the package outside the namespace, so `go test` in it needs no
+network, and gives the test resolver the job machine's own resolver as
+`$UPSTREAM`. A job machine reaches no host of the LAN, so the private
+name answers an address of the namespace's own (`PRIVATE_LOCAL=1`, below)
+and the listener is the test resolver's. `TestTheLiveProofsAreDeclared`
+checks the declaration: both tests, each alone, with the pack and
+`WORKER_DAEMON_E2E_NO_SKIP`, and the egress one through the test
+resolver with a private address that is not loopback. A change to what
+these proofs run is a change to `live-proofs.json`.
+
+### What the smolvm tests check
+
+`TestSmolvmEndToEnd` runs one job from offer to report in a real machine,
+against the fake control plane.
 
 `TestSmolvmEgressEndToEnd` runs one job whose `run.egress` declares
 `WORKER_DAEMON_E2E_ALLOWED` (default `ghcr.io`): the machine must reach
 it on port 443 and be refused `WORKER_DAEMON_E2E_DENIED` (default
 `pastebin.com`), and the refusal must be in `state_dir/refusals` after
-the machine is deleted. It also needs nested KVM and the network, and is
-skipped, saying why, without them. With `WORKER_DAEMON_E2E_NESTED_SCRIPT`,
-a shell script run in the machine that boots a VM nested in it (libvirt,
-as homelab's seed) and prints `nested allowed: reached` or `refused`, then
-`nested denied: …`, for `$ALLOWED` and `$DENIED`, the job requires
-`nested` and the nested VM must do the same; give homelab's pack as
-`WORKER_DAEMON_E2E_PACK`:
-
-```sh
-WORKER_DAEMON_E2E_PACK=/path/homelab.smolmachine WORKER_DAEMON_E2E_ALLOWED=deb.debian.org \
-  WORKER_DAEMON_E2E_NESTED_SCRIPT=$PWD/worker-daemon/internal/daemon/testdata/nested-egress.sh \
-  make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
-```
-
+the machine is deleted. It also needs the network. With
+`WORKER_DAEMON_E2E_NESTED_SCRIPT`, a shell script run in the machine
+that boots a VM nested in it (libvirt, as homelab's seed) and prints
+`nested allowed: reached` or `refused`, then `nested denied: …`, for
+`$ALLOWED` and `$DENIED`, the job requires `nested` and the nested VM
+must do the same; that needs nested KVM, without which the test is
+skipped, saying why, and homelab's pack as `WORKER_DAEMON_E2E_PACK`.
 `internal/daemon/testdata/nested-egress.sh` is that script for homelab's
 pack: it starts libvirt as the pack's `guest-start.sh` does, takes
 Debian's netboot kernel and initrd from `deb.debian.org` (so
@@ -551,23 +580,21 @@ address with a listener on `WORKER_DAEMON_E2E_PRIVATE_PORT` (default
 refused it by name and by address, with both refusals in
 `state_dir/refusals`, while `WORKER_DAEMON_E2E_ALLOWED` is still reached
 (design D15). The test resolves the name itself and fails if its answer
-is not a private address or nothing listens there. Give the name that
-answer without changing the host's DNS:
+is not a private address or nothing listens there. The test resolver
+gives the name that answer without changing the host's DNS:
 `internal/daemon/testdata/private-name-netns.sh NAME ADDR` runs the test
 in a network namespace of its own (`pasta --config-net --no-map-gw`)
 whose `/etc/resolv.conf` names dnsmasq on `127.0.0.1`, which answers
 `NAME` with `ADDR` and forwards the rest to `$UPSTREAM` (default
 `9.9.9.9`), and whose `/etc/nsswitch.conf` is `hosts: files dns`, so that
-systemd-resolved does not answer instead. The test runs in a nested user
-namespace as the caller's uid, since smolvm will not start a machine as
-pasta's root. It needs pasta, unshare and dnsmasq; the other variables
-pass through, and the machine is deleted by name after the run. On
-taichi, with p1's SSH port as the listener:
-
-```sh
-WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
-  worker-daemon/internal/daemon/testdata/private-name-netns.sh p1.test 192.168.1.165
-```
+systemd-resolved does not answer instead. With `PRIVATE_LOCAL=1`, `ADDR`
+is the namespace's own, on its loopback, and dnsmasq listens there too,
+so the listener is dnsmasq's port 53 and `WORKER_DAEMON_E2E_PRIVATE_PORT`
+is `53`; without it, `ADDR` is a host of the network with a listener. The
+test runs in a nested user namespace as the caller's uid, since smolvm
+will not start a machine as pasta's root. It needs pasta, unshare,
+dnsmasq and, with `PRIVATE_LOCAL`, ip; the other variables pass through,
+and the machine is deleted by name after the run.
 
 With `WORKER_DAEMON_E2E_PRIVATE_CIDR`, a private range, and
 `WORKER_DAEMON_E2E_PRIVATE_ADDR`, an address in it with a listener on
@@ -579,14 +606,10 @@ refusal, and none of the address in the range, in `state_dir/refusals`
 `WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR`, or else the answer of
 `WORKER_DAEMON_E2E_PRIVATE_NAME`; it needs a listener on the same port.
 The test fails if an address is not where it should be or nothing listens
-there. On taichi, with two LAN hosts' SSH ports as the listeners:
+there. The live proof does not declare a range, as a job machine reaches
+no LAN host to listen there.
 
-```sh
-WORKER_DAEMON_E2E_PACK=/path/base.smolmachine WORKER_DAEMON_E2E_PRIVATE_PORT=22 \
-  WORKER_DAEMON_E2E_PRIVATE_CIDR=192.168.1.164/30 WORKER_DAEMON_E2E_PRIVATE_ADDR=192.168.1.165 \
-  WORKER_DAEMON_E2E_PRIVATE_OUTSIDE_ADDR=<another LAN host> \
-  make -C worker-daemon test RUN=TestSmolvmEgressEndToEnd
-```
+### Over the wire
 
 Three end-to-end tests run the daemon against the real Sortie data plane:
 `TestOneAttemptOverTheWire`, `TestUnknownAmountOverTheWire` and

@@ -39,17 +39,7 @@ echo done
 // machine, against the fake control plane. It needs KVM, smolvm, and
 // a pack with sh, git and socat in WORKER_DAEMON_E2E_PACK.
 func TestSmolvmEndToEnd(t *testing.T) {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skip("skipped: this host has no /dev/kvm, so smolvm cannot start a machine here")
-	}
-	bin, err := exec.LookPath("smolvm")
-	if err != nil {
-		t.Skip("skipped: /dev/kvm exists but smolvm is not on PATH")
-	}
-	pack := os.Getenv("WORKER_DAEMON_E2E_PACK")
-	if pack == "" {
-		t.Skip("skipped: set WORKER_DAEMON_E2E_PACK to a .smolmachine pack with sh, git and socat (smol-builder's base layer has them)")
-	}
+	bin, pack := smolvmE2E(t)
 	s := defaults()
 	s.backend = &machine.Smolvm{Binary: bin}
 	s.pack = pack
@@ -124,14 +114,14 @@ echo done
 // made from the offer's run.egress reaches a declared host and is
 // refused an undeclared one, and so does a VM nested in it, through the
 // machine's interface; the refusals are in the state directory after
-// the machine is deleted. It needs KVM with nested guests, smolvm, a
-// pack with sh, git and socat in WORKER_DAEMON_E2E_PACK, and the
-// network. With WORKER_DAEMON_E2E_NESTED_SCRIPT, a shell script run in
-// the machine that boots a nested VM (libvirt, as homelab's seed) and
-// prints "nested allowed: reached" or "nested allowed: refused", then
-// the same for "nested denied", for the hosts in $ALLOWED and $DENIED,
-// it checks the nested VM too; its pack (homelab's) goes in
-// WORKER_DAEMON_E2E_PACK.
+// the machine is deleted. It needs KVM, smolvm, a pack with sh, git
+// and socat in WORKER_DAEMON_E2E_PACK, and the network. With
+// WORKER_DAEMON_E2E_NESTED_SCRIPT, a shell script run in the machine
+// that boots a nested VM (libvirt, as homelab's seed) and prints
+// "nested allowed: reached" or "nested allowed: refused", then the
+// same for "nested denied", for the hosts in $ALLOWED and $DENIED, it
+// checks the nested VM too, which needs KVM with nested guests; its
+// pack (homelab's) goes in WORKER_DAEMON_E2E_PACK.
 //
 // With WORKER_DAEMON_E2E_PRIVATE_NAME, a name whose answer is a private
 // address with a listener on WORKER_DAEMON_E2E_PRIVATE_PORT (443 by
@@ -152,24 +142,14 @@ echo done
 // address in the range, in the record (scenario: A declared private
 // range; design D16).
 func TestSmolvmEgressEndToEnd(t *testing.T) {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skip("skipped: this host has no /dev/kvm, so smolvm cannot start a machine here")
-	}
-	host, err := hostinfo.Host{}.Snapshot(t.TempDir())
-	if err != nil || !host.Nested {
-		t.Skipf("skipped: this host's KVM offers no nested guests (%v), so a VM cannot nest in the job machine", err)
-	}
-	bin, err := exec.LookPath("smolvm")
-	if err != nil {
-		t.Skip("skipped: /dev/kvm exists but smolvm is not on PATH")
-	}
-	pack := os.Getenv("WORKER_DAEMON_E2E_PACK")
-	if pack == "" {
-		t.Skip("skipped: set WORKER_DAEMON_E2E_PACK to a .smolmachine pack with sh, git and socat (smol-builder's base layer has them)")
-	}
+	bin, pack := smolvmE2E(t)
 	allowed, denied := envOr("WORKER_DAEMON_E2E_ALLOWED", "ghcr.io"), envOr("WORKER_DAEMON_E2E_DENIED", "pastebin.com")
 	var nested string
 	if f := os.Getenv("WORKER_DAEMON_E2E_NESTED_SCRIPT"); f != "" {
+		host, err := hostinfo.Host{}.Snapshot(t.TempDir())
+		if err != nil || !host.Nested {
+			skipE2E(t, fmt.Sprintf("this host's KVM offers no nested guests (%v), so a VM cannot nest in the job machine", err))
+		}
 		b, err := os.ReadFile(f) // #nosec G304 -- the tester names the file
 		if err != nil {
 			t.Fatal(err)
@@ -322,6 +302,37 @@ func declaredRange(t *testing.T, port, nameAddr string) (cidr, in, out string) {
 		_ = c.Close()
 	}
 	return cidr, in, out
+}
+
+// smolvmE2E is what a smolvm end-to-end run needs here: smolvm's binary
+// and the pack in WORKER_DAEMON_E2E_PACK. Without /dev/kvm, smolvm or
+// the pack the test is skipped, saying which is missing.
+func smolvmE2E(t *testing.T) (bin, pack string) {
+	t.Helper()
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		skipE2E(t, "this host has no /dev/kvm, so smolvm cannot start a machine here")
+	}
+	bin, err := exec.LookPath("smolvm")
+	if err != nil {
+		skipE2E(t, "/dev/kvm exists but smolvm is not on PATH")
+	}
+	pack = os.Getenv("WORKER_DAEMON_E2E_PACK")
+	if pack == "" {
+		skipE2E(t, "set WORKER_DAEMON_E2E_PACK to a .smolmachine pack with sh, git and socat (smol-builder's base layer has them)")
+	}
+	return bin, pack
+}
+
+// skipE2E skips an end-to-end test that cannot run here. With
+// WORKER_DAEMON_E2E_NO_SKIP set, as a live proof runs it
+// (live-proofs.json), it fails the test instead: a proof that did not
+// run proves nothing.
+func skipE2E(t *testing.T, why string) {
+	t.Helper()
+	if os.Getenv("WORKER_DAEMON_E2E_NO_SKIP") != "" {
+		t.Fatal("WORKER_DAEMON_E2E_NO_SKIP is set and the test cannot run here: " + why)
+	}
+	t.Skip("skipped: " + why)
 }
 
 // refusalsOf counts the egress events in a refusal record that name the

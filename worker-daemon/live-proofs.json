@@ -1,0 +1,15 @@
+{
+  "profile": "nested",
+  "proofs": [
+    {
+      "name": "TestSmolvmEndToEnd",
+      "proves": "one job from offer to report in a real smolvm machine, against the fake control plane",
+      "command": "WORKER_DAEMON_E2E_NO_SKIP=1 WORKER_DAEMON_E2E_PACK=\"$LIVE_PROOF_BASE_PACK\" go test -count=1 -v -timeout 30m -run '^TestSmolvmEndToEnd$' ./internal/daemon/"
+    },
+    {
+      "name": "TestSmolvmEgressEndToEnd",
+      "proves": "a smolvm machine reaches its declared host, is refused an undeclared one and a declared name that answers a private address, by name and by address, with the refusals recorded",
+      "command": "go test -count=1 -run '^$' ./internal/daemon/ && WORKER_DAEMON_E2E_NO_SKIP=1 WORKER_DAEMON_E2E_PACK=\"$LIVE_PROOF_BASE_PACK\" WORKER_DAEMON_E2E_ALLOWED=api.github.com PRIVATE_LOCAL=1 UPSTREAM=\"$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)\" internal/daemon/testdata/private-name-netns.sh private-name.e2e.test 10.255.0.1"
+    }
+  ]
+}
