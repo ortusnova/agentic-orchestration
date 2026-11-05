@@ -17,7 +17,7 @@ from typing import Any, Iterable
 import networkx as nx
 
 from .errors import PlanError
-from .store import CHANGES_DIR, MILESTONES_FILE, LoadedStore
+from .store import BREAKDOWN_FILE, CHANGES_DIR, MILESTONES_FILE, LoadedStore
 TASKS_FILE = "tasks.md"
 
 TASK_KINDS = ("agent", "metal", "operator")
@@ -30,6 +30,10 @@ STORIES_WITH = {"all", "agent"}
 _ITEM = re.compile(r"^\s*[-*]\s+\[([ xX])\]\s+(.*?)\s*$")
 _NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+")
 _TAG = re.compile(r"\s*\[(metal|operator)\]\s*$")
+_NAMED = re.compile(r"`([^`]*)`")
+_STORY_REF = re.compile(r"^([a-z0-9]+(-[a-z0-9]+)*/)?[a-z0-9]+(-[a-z0-9]+)*$")
+# The words an approval task may hold beside the stories it names.
+_APPROVAL_WORDS = {"approve", "and", "then", "both", "in", "the", "workbench"}
 
 IMPLICIT_ID = "project"
 
@@ -37,11 +41,41 @@ IMPLICIT_ID = "project"
 # Task kinds -----------------------------------------------------------------
 
 
+def approval_link(text: str, change: str) -> list[str]:
+    """The plan keys of the stories an operator task asks to approve, when
+    it asks for nothing else; empty when it is not an approval task.
+
+    It starts with "Approve" and names each story in backticks, by its id
+    in ``change`` or as ``change/id``, joined only by "and", "then", commas
+    and "in the workbench". A condition after "once" ("once `a` has
+    merged") says when, not what, so the stories it names are not linked.
+    A task that asks for any other step ("select it", "choose Confirm:
+    replaces") is not linked."""
+    text = text.strip().rstrip(".").strip()
+    if not re.match(r"Approve\s", text):
+        return []
+    when = re.search(r"\s+once\s+", text)
+    if when:
+        if re.search(r"[.;:](\s|$)", text[when.end():]):
+            return []
+        text = text[: when.start()]
+    names = _NAMED.findall(text)
+    if not names or not all(_STORY_REF.match(n) for n in names):
+        return []
+    rest = _NAMED.sub(" ", text)
+    if any(w.lower() not in _APPROVAL_WORDS for w in re.findall(r"[^\s,]+", rest)):
+        return []
+    keys = [n if "/" in n else f"{change}/{n}" for n in names]
+    return list(dict.fromkeys(keys))
+
+
 def parse_tasks(text: str, change: str = "") -> list[dict[str, Any]]:
     """Each checklist item of a tasks.md: its number, text, kind and whether it is ticked.
 
     An item whose line ends with ``[metal]`` is a metal task, with
-    ``[operator]`` an operator task, and any other an agent task."""
+    ``[operator]`` an operator task, and any other an agent task. An
+    operator task that only asks for stories to be approved lists their
+    plan keys in ``approves`` (see :func:`approval_link`)."""
     out = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         m = _ITEM.match(line)
@@ -64,8 +98,29 @@ def parse_tasks(text: str, change: str = "") -> list[dict[str, Any]]:
             "kind": kind,
             "done": m.group(1) != " ",
             "line": lineno,
+            "approves": approval_link(body, change) if kind == "operator" else [],
         })
     return out
+
+
+def check_approval_links(store: LoadedStore, tasks: dict[str, list[dict[str, Any]]]) -> list[PlanError]:
+    """An approval task names only stories the store holds. A story of a
+    change whose breakdown did not load is not checked: that breakdown's
+    own error says why."""
+    held = {f"{c}/{d['id']}" for c, bd in store.breakdowns.items() for d in bd.doc["deliverables"]}
+    errors: list[PlanError] = []
+    for change, items in tasks.items():
+        for t in items:
+            for key in t.get("approves") or []:
+                holder = key.split("/", 1)[0]
+                if key in held or (holder not in store.breakdowns
+                                   and (store.root / CHANGES_DIR / holder / BREAKDOWN_FILE).is_file()):
+                    continue
+                errors.append(PlanError(
+                    "approval_task_link",
+                    f"task {t['number'] or t['id']} asks to approve '{key}', which no breakdown holds",
+                    file=str(CHANGES_DIR / change / TASKS_FILE), change=change, members=(t["id"], key)))
+    return errors
 
 
 def read_tasks(root: Path, change: str) -> list[dict[str, Any]]:

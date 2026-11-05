@@ -220,6 +220,23 @@ describe("home: the focal points", () => {
     expect($$("[data-column='approve'] .item")).toHaveLength(8);
   });
 
+  it("shows an approval task its stories' approvals did as done by approval, not as an item", async () => {
+    const task = { id: "rde#2.1", change: "rde", number: "2.1", text: "Approve `sortie-reads-egress` in the workbench.", kind: "operator",
+      line: 8, approves: ["rde/sortie-reads-egress"] };
+    await render(doc(homeDoc({ done_by_approval: [task] })));
+    expect($$("[data-column='operator'] .item").map((e) => e.dataset.key)).toEqual(["p3#3.7"]);
+    const done = $("[data-column='operator'] [data-done-by-approval]")!;
+    expect(done.querySelector("p")!.textContent).toBe("1 task is done by approval, unticked in tasks.md:");
+    expect(text("[data-task='rde#2.1'] a")).toBe("Approve sortie-reads-egress in the workbench.");
+    expect(text("[data-task='rde#2.1'] .note")).toBe("rde · task 2.1");
+    expect(text("[data-task='rde#2.1'] .by")).toBe("done by approval");
+  });
+
+  it("shows no done-by-approval list when no approval task is done by approval", async () => {
+    await render(doc(homeDoc()));
+    expect($("[data-done-by-approval]")).toBeNull();
+  });
+
   it("shows each milestone's measures apart, and marks the next and the goal", async () => {
     await render(doc(homeDoc()));
     const row = (id: string) => [...$(`[data-milestone-row='${id}']`)!.querySelectorAll("td")]

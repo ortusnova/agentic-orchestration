@@ -95,6 +95,9 @@ export type Column = "approve" | "spec" | "operator";
 
 export interface TaskRef { id: string; change: string; number: string | null; text: string; kind: string; line: number }
 
+/** An unticked operator task that only asks for stories to be approved, done because each of them is. */
+export interface ApprovalTask extends TaskRef { approves: string[] }
+
 export interface NotReadyItem {
   kind: "story" | "change" | "task";
   key: string;
@@ -243,6 +246,8 @@ export interface HomeDoc {
   expired_holds?: ExpiredHold[];
   /** What the Sorties' notifications sent: every unread one, and every one of an open question. Absent from an older backend. */
   notifications?: HomeNotification[];
+  /** The approval tasks done by approval, unticked in tasks.md; absent from an older backend. */
+  done_by_approval?: ApprovalTask[];
   needs_person: { total: number; questions?: number; faults?: number; expired_holds?: number; unread?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;
   /** The workers as slot lanes, and what they say of the whole. Absent from an older backend. */

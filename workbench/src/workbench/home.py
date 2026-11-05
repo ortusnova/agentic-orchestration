@@ -55,6 +55,35 @@ def tracker_states(nodes: Iterable[dict[str, Any]], plan_states: dict[str, str] 
     return done, dropped
 
 
+# A story's plan statuses once it is approved, or later started or done.
+APPROVED_STATUSES = {"ready", "held", "released", "frozen", "building", "in_review", "click_proofs", "merging",
+                     "delivered"}
+
+
+def approved_keys(fields: dict[str, dict[str, Any]], done: set[str]) -> set[str]:
+    """The stories that are approved, started or done."""
+    return {k for k, f in fields.items() if f.get("plan_status") in APPROVED_STATUSES} | done
+
+
+def approval_tasks(tasks: dict[str, list[dict[str, Any]]], approved: set[str]
+                   ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Each change's tasks with every unticked approval task whose stories
+    are all approved marked done, ``done_by: "approval"``, and those tasks.
+    tasks.md is not edited: the task reads done for as long as its stories
+    stay approved."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    by_approval: list[dict[str, Any]] = []
+    for change, items in tasks.items():
+        out[change] = []
+        for t in items:
+            links = t.get("approves") or []
+            if not t["done"] and links and all(k in approved for k in links):
+                t = {**t, "done": True, "done_by": "approval"}
+                by_approval.append({**_task_ref(t), "approves": list(links)})
+            out[change].append(t)
+    return out, by_approval
+
+
 # Execution health (D5) ----------------------------------------------------------
 
 
@@ -658,9 +687,10 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
     }
     if graph is None:
         return {**base, "milestones": [], "goal": None, "next": None, "critical_path": None, "not_ready": [],
-                "needs_person": _needs([], questions, expired_holds, faults), "timeline": None}
+                "needs_person": _needs([], questions, expired_holds, faults), "timeline": None, "done_by_approval": []}
 
-    out = ms.progress(planning.get("milestones") or [], graph, planning.get("tasks") or {}, done, dropped, estimates)
+    tasks, by_approval = approval_tasks(planning.get("tasks") or {}, approved_keys(fields, done))
+    out = ms.progress(planning.get("milestones") or [], graph, tasks, done, dropped, estimates)
     # A milestone declared done was finished by hand: its stories are not
     # work still ahead of anything, whatever the tracker says.
     settled = done | {s for m in out["milestones"] if m.get("declared_done") for s in m["stories"]}
@@ -695,6 +725,7 @@ def build_home(*, graph: dict[str, Any] | None, nodes: list[dict[str, Any]], fie
         **base,
         "milestones": milestones, "goal": out["goal"], "next": out["next"], "critical_path": path,
         "not_ready": items, "needs_person": _needs(items, questions, expired_holds, faults), "timeline": line,
+        "done_by_approval": by_approval,
     }
 
 

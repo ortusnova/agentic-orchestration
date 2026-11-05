@@ -190,6 +190,20 @@ A project opens on its home; the **Graph** tab beside it opens the graph. Everyo
 - **Supervisor**: Sortie's supervisor, its status, **Pause** or **Resume**, and its recent actions (see [The supervisor](#the-supervisor)).
 - **Milestones**: each one's stories, agent tasks and person tasks, counted apart.
 
+#### An approval task
+
+An `[operator]` task that only asks for stories to be approved is linked to them, and is done once each of them is approved, with no edit to `tasks.md`. planlib links a task whose text starts with "Approve" and names each story in backticks, by its id in the task's change or as `change/id`, joined only by "and", "then", commas and "in the workbench":
+
+- `` Approve `sortie-reads-egress` in the workbench. [operator] `` links `<change>/sortie-reads-egress`;
+- `` Approve `merge-and-prove`, then `merge-and-prove-kit`. [operator] `` links both;
+- `` Approve `sandbox-follows-private-deny` once `homelab-egress-file` has merged. [operator] `` links `sandbox-follows-private-deny` only: what follows "once" says when, not what.
+
+A task that asks for any other step is not linked, and stays a task a person ticks: `` Approve `a`, select it, and choose **Confirm: replaces** `b` in the workbench. ``, or `Approve the four stories in the workbench.`, which names none.
+
+An unticked linked task counts as done once each of its stories is approved, or later started or done (its plan status is `ready`, `held`, `released`, `frozen`, a ui story's `building` to `merging`, or `delivered`, or its tracker issue is Done). Then **Needs a person** does not list it, its milestone counts it done, and the **Operator tasks** column lists it apart, struck through and marked "done by approval". The home document names these tasks in `done_by_approval`, each with the plan keys it `approves`. While any of its stories is not approved (draft, without a spec, to re-review), the task stays listed. Ticking it in `tasks.md` stays the record that lasts: a linked task left unticked reads open again if a story returns to draft.
+
+`planlib validate` reports a linked task that names a story no breakdown holds as `approval_task_link`, with the task and the plan key it names.
+
 ### Story status
 
 Each story shows its plan status on its node and in its details. The graph API names it in `plan_status`:
