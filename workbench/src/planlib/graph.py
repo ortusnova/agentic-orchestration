@@ -7,8 +7,9 @@ import re
 from typing import Any, Callable
 
 import networkx as nx
+import yaml
 
-from .approval import resolved, story_digest
+from .approval import post_deploy_check, resolved, story_digest
 from .checks import NamesFor, resolve_ref
 from .errors import PlanError
 from .requirements import RequirementsError, main_requirement_details, renamed_from, requirement_details
@@ -35,7 +36,8 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
     """Return the graph document, or the errors that prevent building it.
 
     ``stories``, when given, is filled with each story's digest, review
-    gate, the story it supersedes, and the pull requests that delivered it:
+    gate, the story it supersedes, the pull requests that delivered it, and
+    its post-deploy check:
     what the workbench needs beside the graph, which the graph schema does
     not carry.
 
@@ -140,6 +142,7 @@ def build_graph(store: LoadedStore, names_for: NamesFor, schemas: Schemas,
                 "review": d.get("review", "human"),
                 "supersedes": resolve_ref(change, d["supersedes"]) if d.get("supersedes") else None,
                 "delivered_by": list(d.get("delivered_by") or []),
+                "post_deploy_check": post_deploy_check(d),
             }
             parents.append({"child": key, "parent": change})
 
@@ -176,18 +179,33 @@ def _epic_body(store: LoadedStore, change: str) -> str:
 
 
 def _story_body(d: dict, requirement: Callable[[str], dict[str, Any] | None]) -> str:
-    """The issue description: the notes, the acceptance criteria, and the
-    full text of each covered requirement. The agent works from this alone,
-    without the store. Only the deliverable's fields count toward its
-    approval digest, so the spec text here never changes an approval."""
+    """The issue description: the notes, the acceptance criteria, the
+    post-deploy check, and the full text of each covered requirement. The
+    agent works from this alone, without the store. Only the deliverable's
+    fields count toward its approval digest, so the spec text here never
+    changes an approval."""
     parts = []
     if d.get("notes"):
         parts.append(d["notes"].strip())
     parts.append("## Acceptance criteria\n\n" + "\n".join(f"- {c}" for c in d["acceptance_criteria"]))
+    check = post_deploy_check(d)
+    if check:
+        parts.append(POST_DEPLOY_CHECK_HEADING + "\n\n" + post_deploy_check_block(check))
     if d["covers"]:
         parts.append("## Covers\n\n" + "\n".join(f"- `{c}`" for c in d["covers"]))
         parts.append("## Requirements\n\n" + "\n\n".join(_requirement_text(ref, requirement(ref)) for ref in d["covers"]))
     return "\n\n".join(parts)
+
+
+POST_DEPLOY_CHECK_HEADING = "## Post-deploy check"
+
+
+def post_deploy_check_block(check: dict) -> str:
+    """The post-deploy check as the issue carries it, for the kit to read:
+    one fenced YAML block holding check, args and hosts, in that order."""
+    text = yaml.safe_dump(check, sort_keys=False, default_flow_style=False, allow_unicode=True,
+                          width=1 << 20)
+    return f"```yaml\n{text}```"
 
 
 def _requirement_text(ref: str, req: dict[str, Any] | None) -> str:
