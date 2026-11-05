@@ -1,0 +1,15 @@
+[Unit]
+Description=Ortus Nova stage 0: copy the stage-0 units' journal into rotated log files (logs-follow.sh)
+
+[Service]
+Type=exec
+ExecStart=@KIT@/logs-follow.sh
+Restart=always
+RestartSec=5
+# A stop signals logs-follow.sh only: it stops journalctl, which saves its
+# cursor, and waits for awk to write every line it read.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
