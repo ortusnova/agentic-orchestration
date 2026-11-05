@@ -6,7 +6,8 @@
 #
 #   dev/stage0/worker-host.sh add HOST [NAME]  issue NAME a certificate and copy it to HOST;
 #                                              the worker is NAME (default: HOST without its
-#                                              user@ and domain)
+#                                              user@ and domain); p1 then copies HOST's
+#                                              deploy state over SSH (deploy-state.sh)
 #   dev/stage0/worker-host.sh remove NAME      revoke NAME's certificate: Pomerium refuses it on
 #                                              every route from then on
 #   dev/stage0/worker-host.sh list             each listed worker, its expiry and its routes
@@ -32,6 +33,8 @@ usage() { die "usage: $0 add HOST [NAME] | remove NAME | list | carry HOST"; }
 . "$STAGE0_HOME/stage0.env"
 # shellcheck source=front-config.sh
 . "$KIT/front-config.sh"
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
 
 # front_ready: stage0.sh has set up the CA and cpctl.
 front_ready() {
@@ -76,6 +79,9 @@ case $cmd in
     copy "$STAGE0_HOME/egress-ca/ca.crt" egress-ca.crt 644
     copy <(printf '%s\n' "$STAGE0_CP_PUBLIC_URL") control-plane-url 644
     rm -f "$dir/worker.key"
+    # p1 copies its deploy state over the same SSH (deploy-state.sh), for
+    # Sortie's merge-and-prove; the workflow names it from the next stage0.sh.
+    deploy_host_add "$name" "$host"
     apply
     echo "worker $name: $host holds its certificate (~/$STAGE0_WORKER_HOST_CONFIG); on $host, run STAGE0_PROFILE=worker dev/stage0/stage0.sh to dial $STAGE0_CP_PUBLIC_URL"
     ;;
@@ -88,6 +94,7 @@ case $cmd in
     cpctl worker revoke "$name" > /dev/null || die "no worker $name"
     # A token the stage-1 edge's add minted for its notifications.
     rm -f "$STAGE0_HOME/notify-tokens/$name.token"
+    deploy_host_remove "$name"
     apply
     echo "revoked worker $name: Pomerium refuses its certificate on every route"
     ;;

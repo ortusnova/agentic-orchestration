@@ -12,14 +12,27 @@
 #   dev/stage0/dev-host-apply.sh COMMAND...   any host: run COMMAND as the apply
 #
 # A failed apply, or a failed stage0.sh after it, exits non-zero. It holds
-# stage0.sh's lock throughout, so no deploy runs between.
+# stage0.sh's lock throughout, so no deploy runs between. Like deploy.sh, it
+# writes this host's deploy state (deploy-state.sh): deploying while it
+# runs, succeeded once stage0.sh ran and every unit whose configuration
+# changed has restarted, failed with its error otherwise.
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 export STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
+LIVE=${STAGE0_LIVE_KIT:-$STAGE0_HOME/kit}
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
+# shellcheck source=unit-restart.sh
+. "$KIT/unit-restart.sh"
 say() { echo "dev-host-apply: $*" >&2; }
 die() { say "$*"; exit 1; }
+# The commit the live kit runs, and its main, as deploy.sh last fetched it.
+commit() { git -C "$LIVE" rev-parse -q --verify HEAD 2> /dev/null || true; }
+main() { git -C "$LIVE" rev-parse -q --verify origin/main 2> /dev/null || commit; }
+# failed WHY: record the failed apply, and stop.
+failed() { deploy_state_write failed "$(commit)" "$(main)" "the dev-host apply failed: $1"; die "$1"; }
 
 apply=("$@")
 if (( ${#apply[@]} == 0 )); then
@@ -35,8 +48,16 @@ if ! flock -n 9; then
 fi
 export STAGE0_LOCKED=1
 
+deploy_state_write deploying "$(commit)" "$(main)"
 say "applying now, whatever runs: ${apply[*]}"
-"${apply[@]}" 9>&- || die "the apply failed: ${apply[*]}"
+"${apply[@]}" 9>&- || failed "${apply[*]} failed"
 say "running stage0.sh"
-"$KIT/stage0.sh" 9>&- || die "stage0.sh failed after the apply"
+log=$STAGE0_HOME/dev-host-apply.err
+rc=0
+"$KIT/stage0.sh" 9>&- 2> "$log" || rc=$?
+cat "$log" >&2
+(( rc == 0 )) || failed "stage0.sh failed after the apply: $(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -v '^[[:space:]]*$' | tail -n 1)"
+unsettled=$(units_unsettled | paste -sd, -)
+[[ -z $unsettled ]] || failed "stage0.sh's restart of $unsettled did not leave it running"
+deploy_state_write succeeded "$(commit)" "$(main)"
 say "applied"

@@ -256,3 +256,48 @@ func TestTheReviewOpensThePreviewThroughTheFront(t *testing.T) {
 		}
 	}
 }
+
+// agent-platform/supervisor-autonomy#A change provable only after deploy is
+// merged, proven, or reverted by Sortie: the supervisor's rule 2 merges a
+// story whose only unmet criteria are after-deploy live criteria with
+// merge-and-prove, never with merge, and the review marks such a criterion
+// live-proof with the reason after-deploy. Sortie's side of both, with the
+// kit's texts, is sortie-test/stage0_deploy_test.go.
+func TestAnAfterDeployStoryGoesThroughMergeAndProve(t *testing.T) {
+	raw, err := os.ReadFile("../supervisor.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor := strings.Join(strings.Fields(string(raw)), " ")
+	start := strings.Index(supervisor, "2. **Merge only what passed.**")
+	end := strings.Index(supervisor, "3. **Never rewrite a pushed commit")
+	if start < 0 || end < start {
+		t.Fatal("supervisor.md has no rule 2")
+	}
+	if want := "A pull request whose only unmet criteria are after-deploy live criteria is merged with merge-and-prove once its other criteria are met and CI passes, never with merge; Sortie proves or reverts it."; !strings.Contains(supervisor[start:end], want) {
+		t.Errorf("supervisor.md's rule 2 does not say %q", want)
+	}
+	if !strings.Contains(supervisor, "`POST /api/v1/<identifier>/merge-and-prove` instead, never with `merge`") {
+		t.Error("supervisor.md's actions do not name the merge-and-prove route")
+	}
+	b, err := os.ReadFile("../WORKFLOW.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	review := string(b)
+	start = strings.Index(review, `{{- else if eq .stage.current "review" -}}`)
+	end = strings.Index(review, "{{- else -}}")
+	if start < 0 || end < start {
+		t.Fatal("WORKFLOW.md has no review prompt")
+	}
+	review = strings.Join(strings.Fields(review[start:end]), " ")
+	for _, want := range []string{
+		"is an after-deploy criterion",
+		"Record it `live-proof` with the reason `after-deploy`",
+		`"verdict": "live-proof", "evidence": "<what this machine ran of it>", "reason": "after-deploy"`,
+	} {
+		if !strings.Contains(review, want) {
+			t.Errorf("the review prompt does not say %q", want)
+		}
+	}
+}

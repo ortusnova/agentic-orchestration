@@ -458,6 +458,19 @@ issue_local_worker "$STAGE0_WORKER_NAME" || die "could not issue p1's own worker
 carried=$(carry_edge_workers "$STAGE0_HOME/workers" "$KIT/worker-host.sh" add) \
   || die "could not give each worker host of the stage-1 edge its certificate; the edge stays until it can"
 for name in $carried; do say "Gave worker host $name its certificate: it dials Pomerium from its next stage0.sh"; done
+# Sortie's health check and merge-and-prove read each host's deploy state
+# (deploy-state.sh): p1's own, and a copy of each worker host's, which
+# deploy.sh fetches over SSH every minute. A worker host listed before
+# worker-host.sh add recorded its SSH destination is reached by its name.
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
+for name in $(front_workers); do
+  [[ $name == "$STAGE0_WORKER_NAME" || -s $STAGE0_HOME/deploy-hosts/$name ]] && continue
+  deploy_host_add "$name" "$name"
+  say "p1 reads worker host $name's deploy state over ssh $name ($STAGE0_HOME/deploy-hosts/$name names another destination)"
+done
+STAGE0_DEPLOY_HOSTS=$(deploy_hosts_yaml)
+export STAGE0_DEPLOY_HOSTS
 mkdir -p "$STAGE0_LIVE_PROOFS"
 
 build_pack
@@ -537,8 +550,12 @@ restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/e
   "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
 # The egress gate and Pomerium: their source or image, their configuration
 # and their units, not the binaries, which Go stamps with the kit's commit.
+# The gate's are everything it is built from and every file it is started
+# with (run-egress-gate.sh), so no deploy leaves it on an earlier
+# configuration (ONS-123).
 restart_changed ortus-stage0-egress-gate.service "$ROOT/control-plane/internal/egress" "$ROOT/control-plane/cmd/cp-egress" \
-  "$KIT/run-egress-gate.sh" "$KIT/front-config.sh" "$ENV_FILE" "$STAGE0_HOME/sortie-token" "$UNITS/ortus-stage0-egress-gate.service"
+  "$ROOT/control-plane/go.mod" "$KIT/run-egress-gate.sh" "$KIT/front-config.sh" "$ENV_FILE" \
+  "$STAGE0_HOME/sortie-token" "$STAGE0_HOME/nono-pass" "$STAGE0_PREVIEW_REVIEW_KEY" "$UNITS/ortus-stage0-egress-gate.service"
 restart_changed ortus-stage0-pomerium.service "$(pomerium_image)" "$STAGE0_CP_HOME/pomerium" "$STAGE0_CP_HOME/secrets/cp-pomerium-cert" \
   "$KIT/run-pomerium.sh" "$KIT/front-config.sh" "$UNITS/ortus-stage0-pomerium.service"
 restart_worker
