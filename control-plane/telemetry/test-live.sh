@@ -44,7 +44,7 @@ dump() {
     podman logs --tail 100 "$c" >&2 2>&1 || true
   done
 }
-# shellcheck disable=SC2317 # the EXIT trap runs it
+# shellcheck disable=SC2317,SC2329 # the EXIT trap runs it
 stop() {
   if [[ ${TELEMETRY_LIVE_KEEP:-} == 1 ]]; then
     say "the project keeps running: STAGE0_HOME=$STAGE0_HOME"
