@@ -10,7 +10,14 @@
 #
 #   private-name-netns.sh NAME ADDR [go test flags...]
 #
-# It needs pasta (passt), unshare (util-linux) and dnsmasq.
+# With PRIVATE_LOCAL=1, ADDR is no host of the network but the namespace's
+# own: the namespace takes ADDR on its loopback and the test resolver
+# listens there too, so the listener is dnsmasq's, on port 53, and
+# WORKER_DAEMON_E2E_PRIVATE_PORT is 53. A live proof in a job machine, which
+# reaches no private host, runs it so (worker-daemon/live-proofs.json).
+#
+# It needs pasta (passt), unshare (util-linux) and dnsmasq, and with
+# PRIVATE_LOCAL ip (iproute2).
 #
 # In pasta's user namespace the caller is root with setgroups denied, so:
 # dnsmasq runs with --no-daemon, which keeps its user and groups; the
@@ -31,12 +38,20 @@ echo "$ADDR $NAME" >"$W/hosts"
 echo "nameserver 127.0.0.1" >"$W/resolv.conf"
 echo "hosts: files dns" >"$W/nsswitch.conf"
 HOST_UID=$(id -u) HOST_GID=$(id -g)
-export W NAME PKG UPSTREAM="${UPSTREAM:-9.9.9.9}" HOST_UID HOST_GID
+LISTEN=127.0.0.1
+PRIVATE_LOCAL=${PRIVATE_LOCAL:-}
+if [ -n "$PRIVATE_LOCAL" ]; then
+  LISTEN=127.0.0.1,$ADDR
+  WORKER_DAEMON_E2E_PRIVATE_PORT=53
+  export WORKER_DAEMON_E2E_PRIVATE_PORT
+fi
+export W NAME ADDR PKG UPSTREAM="${UPSTREAM:-9.9.9.9}" HOST_UID HOST_GID LISTEN PRIVATE_LOCAL
 # shellcheck disable=SC2016 # the inner shell expands these
 pasta --config-net --no-map-gw -- unshare --mount sh -euc '
   mount --bind "$W/resolv.conf" /etc/resolv.conf
   mount --bind "$W/nsswitch.conf" /etc/nsswitch.conf
-  dnsmasq --no-daemon --listen-address=127.0.0.1 --bind-interfaces \
+  if [ -n "$PRIVATE_LOCAL" ]; then ip address add "$ADDR/32" dev lo; fi
+  dnsmasq --no-daemon --listen-address="$LISTEN" --bind-interfaces \
     --no-resolv --no-hosts --addn-hosts="$W/hosts" --local-ttl=1 --server="$UPSTREAM" \
     --log-facility="$W/dnsmasq.log" &
   dns=$!
