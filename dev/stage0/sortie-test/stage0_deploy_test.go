@@ -1,14 +1,10 @@
-// Each host's deploy state and merge-and-prove (agent-platform/
-// supervisor-autonomy#A change provable only after deploy is merged,
-// proven, or reverted by Sortie, design D7), checked against Sortie itself:
-// the file the kit's deploy-state.sh writes is the one Sortie's
-// internal/deploystate reads; the kit's workflow names p1's file as
-// health.deploy_state and p1's and taichi's as merge_and_prove.hosts; p1
-// copies taichi's over SSH (a stubbed worker host here); and a kit story
-// goes through Sortie's merge-and-prove on those files, proven in time or
-// reverted, with the revert reaching the operator's channel. The supervisor
-// merges such a story with merge-and-prove (supervisor.md, rule 2), and the
-// review marks its criterion live-proof with the reason after-deploy.
+// Each host's deploy state (agent-platform/supervisor-autonomy, design
+// D7), checked against Sortie itself: the file the kit's deploy-state.sh
+// writes is the one Sortie's internal/deploystate reads; the kit's workflow
+// names p1's file as health.deploy_state; p1 copies taichi's over SSH (a
+// stubbed worker host here). An after-deploy story is not merged (design
+// D19): the supervisor leaves its pull request open, and the review marks
+// its criterion live-proof with the reason after-deploy.
 // dev/stage0/test-review-gate.sh compiles this file into Sortie's
 // orchestrator package, beside stage0_review_test.go.
 
@@ -21,17 +17,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/deploystate"
-	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/notify/route"
 	"github.com/sortie-ai/sortie/internal/prompt"
-	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // kitHost is one host's STAGE0_HOME, where the kit's deploy-state.sh runs.
@@ -106,14 +98,12 @@ func (h kitHost) read() deploystate.State {
 }
 
 // loadKitWorkflow loads the kit's workflow as stage0.sh renders it on p1,
-// whose STAGE0_HOME is p1's, with merge_and_prove.hosts from the kit's
-// deploy_hosts_yaml and the operator's channel of that kind.
+// whose STAGE0_HOME is p1's, with the operator's channel of that kind.
 func loadKitWorkflow(t *testing.T, p1 kitHost, channel string) config.ServiceConfig {
 	t.Helper()
 	saved := map[string]string{}
 	for k, v := range map[string]string{
-		"STAGE0_HOME":         p1.home,
-		"STAGE0_DEPLOY_HOSTS": strings.TrimRight(p1.run(time.Time{}, "deploy_hosts_yaml"), "\n"),
+		"STAGE0_HOME": p1.home,
 	} {
 		saved[k] = stage0Values[k]
 		stage0Values[k] = v
@@ -187,9 +177,8 @@ func TestStage0_SortieReadsTheKitsDeployState(t *testing.T) {
 	}
 }
 
-// The workflow names p1's file as health.deploy_state and every host's,
-// taichi's copy on p1 included, as merge_and_prove.hosts; p1 copies
-// taichi's over SSH, so Sortie on p1 reads both hosts.
+// The workflow names p1's file as health.deploy_state, and p1 copies
+// taichi's over SSH.
 func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 	p1, taichi := newKitHosts(t)
 	cfg := loadKitWorkflow(t, p1, "")
@@ -197,13 +186,6 @@ func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 		t.Errorf("health.deploy_state = %q, want p1's %q", cfg.Health.DeployState, p1.file())
 	}
 	copyOnP1 := filepath.Join(p1.home, "hosts", "taichi", "deploy-state.json")
-	want := []config.DeployHost{{Name: "p1", DeployState: p1.file()}, {Name: "taichi", DeployState: copyOnP1}}
-	if got := cfg.DeployHosts("p1"); !slices.Equal(got, want) {
-		t.Errorf("merge_and_prove.hosts = %+v, want %+v", got, want)
-	}
-	if cfg.MergeAndProve.Deadline != 30*time.Minute {
-		t.Errorf("merge_and_prove.deadline = %s, want 30m", cfg.MergeAndProve.Deadline)
-	}
 
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	taichi.write(now, "succeeded", "beef002", "beef002", "")
@@ -222,8 +204,8 @@ func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 		t.Errorf("after a failed copy = %+v, %v, want the last copy", st, err)
 	}
 	p1.run(time.Time{}, "deploy_host_remove taichi")
-	if got := strings.TrimSpace(p1.run(time.Time{}, "deploy_hosts_yaml")); got != "p1: "+p1.file() {
-		t.Errorf("hosts after worker-host.sh remove = %q, want p1 only", got)
+	if _, err := os.Stat(copyOnP1); !os.IsNotExist(err) {
+		t.Errorf("taichi's copy after worker-host.sh remove: %v, want it gone", err)
 	}
 }
 
@@ -295,132 +277,9 @@ func TestStage0_EachHostsDeployStateListsItsRepositories(t *testing.T) {
 	}
 }
 
-// kitProve is Sortie's merge-and-prove fixture on the kit's workflow: its
-// hosts are p1's and taichi's files as the kit writes and copies them, and
-// its notifications the kit's, with the operator's channel (slack).
-type kitProve struct {
-	*proveFixture
-	p1, taichi kitHost
-	channel    map[string]*notifierSpy
-}
-
-func newKitProve(t *testing.T) *kitProve {
-	t.Helper()
-	f := newProveFixture(t)
-	p1, taichi := newKitHosts(t)
-	kit := loadKitWorkflow(t, p1, "slack")
-	cfg := f.o.workflowManager.Config()
-	cfg.MergeAndProve = kit.MergeAndProve
-	cfg.Health.DeployState = kit.Health.DeployState
-	f.o.workflowManager = &stubWorkflowManager{config: cfg}
-	spies := map[string]*notifierSpy{"slack": {}, "webhook": {}}
-	lookup := func(kind string) (registry.NotifierConstructor, error) {
-		spy := spies[kind]
-		return func(map[string]any) (domain.Notifier, error) { return spy, nil }, nil
-	}
-	var entries []config.NotificationBackend
-	for _, b := range kit.Notifications.Backends {
-		if b.Kind != "tracker_comment" {
-			entries = append(entries, b)
-		}
-	}
-	f.o.router = mustRouter(t, nil, lookup, route.Inputs{Entries: entries})
-	k := &kitProve{proveFixture: f, p1: p1, taichi: taichi, channel: spies}
-	k.deployBoth(f.t0, "old-main", false)
-	return k
-}
-
-// deployBoth has each host's kit write that it runs commit; p1 copies
-// taichi's when copied.
-func (k *kitProve) deployBoth(now time.Time, commit string, copied bool) {
-	k.p1.write(now, "succeeded", commit, commit, "")
-	k.taichi.write(now, "succeeded", commit, commit, "")
-	if copied {
-		k.p1.run(time.Time{}, "deploy_state_pull")
-	}
-}
-
-// Scenario "Proven in time", on the kit: a kit story merges through the
-// route, p1 and taichi deploy it, each writing its deploy state, p1
-// copying taichi's, and its live proof is proven 12 minutes later. The
-// story is Done, and the next queued story's merge starts.
-func TestStage0_AnAfterDeployStoryProvenInTime(t *testing.T) {
-	k := newKitProve(t)
-	k.p1.run(time.Time{}, "deploy_state_pull")
-	k.accept(t, "ONS-1")
-	k.accept(t, "ONS-2")
-	k.tick(t, k.t0)
-	if got := k.forge.mergedPulls(); !slices.Equal(got, []int{1}) {
-		t.Fatalf("merged = %v, want o/kit#1 only", got)
-	}
-
-	k.forge.holds("new-main")
-	k.deployBoth(k.t0.Add(2*time.Minute), "new-main", false)
-	k.tick(t, k.t0.Add(3*time.Minute))
-	if in := k.snapshot(t).InFlight; in.Phase != MergeAndProveDeploying || !strings.Contains(in.Waiting, "taichi deployed old-main") {
-		t.Fatalf("before p1 copies taichi's state = %+v, want deploying, waiting on taichi", in)
-	}
-	k.p1.run(time.Time{}, "deploy_state_pull")
-	deployed := k.t0.Add(4 * time.Minute)
-	k.tick(t, deployed)
-	in := k.snapshot(t).InFlight
-	if in.Phase != MergeAndProveProving || !slices.Equal(in.Deployed, []DeployedHost{{"p1", "new-main"}, {"taichi", "new-main"}}) {
-		t.Fatalf("once both hosts deployed = %+v, want proving on p1 and taichi at new-main", in)
-	}
-	onLoop(t, k.o, func() { k.o.state.RetryAttempts = map[string]*RetryEntry{} }) // the job ran
-
-	k.forge.comment(1, "c-1", "`"+LiveProofMarker+" "+mergeSHA(1)+"`")
-	k.tick(t, deployed.Add(12*time.Minute))
-	if got := k.stories.stateOf("id-1"); got != "Done" {
-		t.Errorf("ONS-1 = %q, want Done", got)
-	}
-	if got := k.forge.mergedPulls(); !slices.Equal(got, []int{1, 2}) {
-		t.Errorf("merged = %v, want ONS-2's merge started", got)
-	}
-}
-
-// Scenario "Not proven", on the kit: the deadline passes with no proven
-// record. Sortie merges a revert pull request, the story returns to Todo
-// with the reason, and the operator's channel receives the event.
-func TestStage0_AnAfterDeployStoryNotProvenIsReverted(t *testing.T) {
-	k := newKitProve(t)
-	k.accept(t, "ONS-1")
-	k.tick(t, k.t0)
-	k.forge.holds("new-main")
-	k.deployBoth(k.t0.Add(2*time.Minute), "new-main", true)
-	deployed := k.t0.Add(3 * time.Minute)
-	k.tick(t, deployed)
-	if in := k.snapshot(t).InFlight; in.Phase != MergeAndProveProving {
-		t.Fatalf("after the deploy = %+v, want proving", in)
-	}
-	k.tick(t, deployed.Add(30*time.Minute))
-	if in := k.snapshot(t).InFlight; in.Phase != MergeAndProveReverting {
-		t.Fatalf("at the deadline = %+v, want reverting", in)
-	}
-	k.forge.setCI(101, "success")
-	k.tick(t, deployed.Add(32*time.Minute))
-	if got := k.forge.mergedPulls(); !slices.Equal(got, []int{1, 101}) {
-		t.Fatalf("merged = %v, want the story, then its revert", got)
-	}
-	if got := k.stories.stateOf("id-1"); got != "Todo" {
-		t.Errorf("ONS-1 = %q, want Todo", got)
-	}
-	if c := k.stories.lastComment("id-1"); !strings.Contains(c, "no comment on o/kit#1 recorded the live proof proven") {
-		t.Errorf("ONS-1's comment = %q, want the unproven result as its reason", c)
-	}
-	for kind, spy := range k.channel {
-		sent := spy.notifications()
-		if !slices.ContainsFunc(sent, func(n domain.Notification) bool {
-			return n.Envelope.EventType == domain.EventStoryReverted && n.Envelope.Identifier == "ONS-1"
-		}) {
-			t.Errorf("the %s entry got %+v, want story.reverted for ONS-1", kind, sent)
-		}
-	}
-}
-
-// Rule 2 of the kit's supervisor prompt: an after-deploy story is merged
-// with merge-and-prove, never with merge.
-func TestStage0_TheSupervisorMergesAnAfterDeployStoryWithMergeAndProve(t *testing.T) {
+// Rule 2 of the kit's supervisor prompt: an after-deploy story is never
+// merged; its pull request stays open (design D19).
+func TestStage0_TheSupervisorLeavesAnAfterDeployStoryOpen(t *testing.T) {
 	tmpl, err := prompt.ParseSupervisor(stage0SupervisorPrompt(t), "supervisor.md")
 	if err != nil {
 		t.Fatal(err)
@@ -433,21 +292,21 @@ func TestStage0_TheSupervisorMergesAnAfterDeployStoryWithMergeAndProve(t *testin
 	got := oneLine(text)
 	rule2 := regexp.MustCompile(`2\. \*\*Merge only what passed\.\*\*.*?3\. \*\*`).FindString(got)
 	for _, want := range []string{
-		"A pull request whose only unmet criteria are after-deploy live criteria is merged with merge-and-prove once its other criteria are met and CI passes, never with merge; Sortie proves or reverts it.",
 		"`live-proof` with the reason `after-deploy`",
+		"Never merge a pull request with one: leave it open, take no action on it, and do not ask a person to prove it by hand.",
 	} {
 		if !strings.Contains(rule2, want) {
 			t.Errorf("rule 2 lacks %q: %s", want, rule2)
 		}
 	}
-	if !strings.Contains(got, "`POST /api/v1/<identifier>/merge-and-prove` instead, never with `merge`") {
-		t.Error("the actions do not name the merge-and-prove route")
+	if strings.Contains(got, "merge-and-prove") {
+		t.Error("the prompt still names merge-and-prove")
 	}
 }
 
 // The review prompt marks a criterion only the deployed main settles
 // live-proof with the reason after-deploy, and its example entry is one
-// Sortie takes for merge-and-prove.
+// Sortie reads as after-deploy.
 func TestStage0_TheReviewMarksAnAfterDeployCriterion(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(os.Getenv("STAGE0_KIT"), "WORKFLOW.md"))
 	if err != nil {
@@ -461,7 +320,7 @@ func TestStage0_TheReviewMarksAnAfterDeployCriterion(t *testing.T) {
 		"A live criterion that only the deployed main can settle, after the merge",
 		"is an after-deploy criterion",
 		"Record it `live-proof` with the reason `after-deploy` (`\"reason\": \"after-deploy\"` in its entry)",
-		"The supervisor merges such a pull request with merge-and-prove once every other criterion is `met` and CI passes",
+		"Sortie does not merge such a pull request: no route proves a change after deploy before it merges, so it stays open.",
 		"Give an after-deploy criterion the `reason` `after-deploy`.",
 	} {
 		if !strings.Contains(text, want) {
@@ -471,43 +330,8 @@ func TestStage0_TheReviewMarksAnAfterDeployCriterion(t *testing.T) {
 	example := regexp.MustCompile(`\{"criteria": \[.*?\]\}`).FindString(text)
 	example = strings.NewReplacer("<the file and line, the test, or the command you ran and its result>", "make test passed").Replace(example)
 	v := evaluateCriteria([]byte(example))
-	left, _, ok := v.afterDeployCriteria()
-	if v.Outcome != CriteriaOutcomeLiveProof || !ok || !strings.Contains(left, "a criterion only the deployed main settles") {
-		t.Errorf("the prompt's example %s: outcome %s, after deploy %q %v, want merge-and-prove's", example, v.Outcome, left, ok)
+	_, ok := v.afterDeployCriteria()
+	if v.Outcome != CriteriaOutcomeLiveProof || !ok || !strings.Contains(v.notMet(), "a criterion only the deployed main settles") {
+		t.Errorf("the prompt's example %s: outcome %s, after deploy %v, want after-deploy", example, v.Outcome, ok)
 	}
-}
-
-// The live-proof job merge-and-prove schedules after the deploy gets the
-// kit's after-deploy prompt: it proves the request's criteria against the
-// deployed hosts, commits nothing, and records its result at the merge
-// commit, the line Sortie's merge-and-prove reads, never at the branch's
-// head.
-func TestStage0_TheAfterDeployProofRecordsTheMergeCommit(t *testing.T) {
-	w := loadStage0Fix(t, "WORKFLOW.md")
-	merge := mergeSHA(41)
-	e := &MergeAndProveEntry{
-		Identifier: "ONS-41", PullRequest: pullRequestRef{Number: 41, Owner: "ortusnova", Repo: "agentic-orchestration", Branch: "sortie/ONS-41"},
-		MergeCommit: merge, Deployed: []DeployedHost{{"p1", merge}, {"taichi", merge}},
-		Deadline: time.Date(2026, 11, 5, 11, 0, 0, 0, time.UTC), Criteria: "- Live: GET /api/v1/state on p1 shows both hosts\n",
-	}
-	text := renderFix(t, w, map[string]any{reviewCommentsKey: buildReviewTemplateMap([]domain.ReviewComment{{
-		ID: "merge-and-prove-1", Reviewer: "sortie", Body: afterDeployProofRequest(e),
-	}})})
-	wantPrompt(t, w.name, text,
-		"Sortie's merge-and-prove asks for a live proof after the deploy.",
-		"Prove each criterion the request lists against the hosts as deployed, not against this workspace",
-		"Make no commit: the pull request is merged",
-		"a line `Commit: ` with the merge commit the request names",
-		"a line `sortie:live-proof proven ` followed by that merge commit",
-		"a line `sortie:live-proof unproven ` followed by that merge commit and what failed",
-		"Merge commit: "+merge, "p1 at "+merge+", taichi at "+merge)
-	for _, never := range []string{"`git rev-parse HEAD`", "The supervisor asks for a live proof.", "fix it with new commits on top of the branch"} {
-		if strings.Contains(text, never) {
-			t.Errorf("the after-deploy proof's prompt holds %q", never)
-		}
-	}
-	// A supervisor's live-proof request still gets the proof on the head.
-	wantPrompt(t, w.name, renderFix(t, w, map[string]any{reviewCommentsKey: buildReviewTemplateMap([]domain.ReviewComment{{
-		ID: "supervisor-1", Reviewer: "supervisor", Body: liveProofMessage("ONS-41"),
-	}})}), liveProofPromptRules...)
 }

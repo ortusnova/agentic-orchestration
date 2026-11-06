@@ -467,17 +467,16 @@ issue_local_worker "$STAGE0_WORKER_NAME" || die "could not issue p1's own worker
 carried=$(carry_edge_workers "$STAGE0_HOME/workers" "$KIT/worker-host.sh" add) \
   || die "could not give each worker host of the stage-1 edge its certificate; the edge stays until it can"
 for name in $carried; do say "Gave worker host $name its certificate: it dials Pomerium from its next stage0.sh"; done
-# Sortie's health check and merge-and-prove read each host's deploy state
-# (deploy-state.sh): p1's own, and a copy of each worker host's, which
-# deploy.sh fetches over SSH every minute. A worker host listed before
-# worker-host.sh add recorded its SSH destination is reached by its name.
+# Sortie's health check reads p1's deploy state (deploy-state.sh); deploy.sh
+# also fetches a copy of each worker host's over SSH every minute, which
+# nothing reads since merge-and-prove was removed (design D19). A worker
+# host listed before worker-host.sh add recorded its SSH destination is
+# reached by its name.
 for name in $(front_workers); do
   [[ $name == "$STAGE0_WORKER_NAME" || -s $STAGE0_HOME/deploy-hosts/$name ]] && continue
   deploy_host_add "$name" "$name"
   say "p1 reads worker host $name's deploy state over ssh $name ($STAGE0_HOME/deploy-hosts/$name names another destination)"
 done
-STAGE0_DEPLOY_HOSTS=$(deploy_hosts_yaml)
-export STAGE0_DEPLOY_HOSTS
 mkdir -p "$STAGE0_LIVE_PROOFS"
 
 build_pack

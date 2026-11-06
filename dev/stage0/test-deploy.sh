@@ -268,7 +268,7 @@ else echo "FAIL: a worker host's deploy: $(cat "$tmp/err")"; failed=1; fi
 cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
 
 # Each host's deploy state (deploy-state.sh, design D7), which Sortie's
-# health check and merge-and-prove read: what each deploy writes.
+# health check reads: what each deploy writes.
 # shellcheck source=deploy-state.sh
 . "$KIT/deploy-state.sh"
 sha() { g -C "$tmp/remote" rev-parse "$1"; }
@@ -403,11 +403,9 @@ if cmp -s "$copy" "$taichi/deploy-state.json" && grep -q 'BatchMode=yes' "$tmp/s
 else echo "FAIL: p1's copy of taichi's: $(cat "$copy" 2> /dev/null), ssh: $(cat "$tmp/ssh" 2> /dev/null)"; failed=1; fi
 lists "and p1's copy keeps taichi's repositories" "$taichi_repos" "$copy"
 lists "beside p1's own, which lists both" "$(kit_repo main),$(sortie_repo "$(ssha plan-bench)")"
-[[ $(deploy_hosts_yaml) == "    p1: $STAGE0_HOME/deploy-state.json"$'\n'"    taichi: $copy" ]] \
-  && echo "ok: and Sortie's workflow names both hosts' files (merge_and_prove.hosts)" || { echo "FAIL: hosts: $(deploy_hosts_yaml)"; failed=1; }
 # shellcheck disable=SC2016 # literal placeholders
-grep -qx '  deploy_state: ${STAGE0_HOME}/deploy-state.json' "$KIT/WORKFLOW.md" && grep -qx '${STAGE0_DEPLOY_HOSTS}' "$KIT/WORKFLOW.md" \
-  && echo "ok: the workflow reads p1's as health.deploy_state and every host's for merge-and-prove" || { echo "FAIL: WORKFLOW.md's deploy state"; failed=1; }
+grep -qx '  deploy_state: ${STAGE0_HOME}/deploy-state.json' "$KIT/WORKFLOW.md" && ! grep -q 'merge_and_prove' "$KIT/WORKFLOW.md" \
+  && echo "ok: the workflow reads p1's as health.deploy_state, and has no merge_and_prove" || { echo "FAIL: WORKFLOW.md's deploy state"; failed=1; }
 mv "$tmp/taichi" "$tmp/taichi.away"; merge docs/x; run
 if cmp -s "$copy" "$tmp/taichi.away/.local/share/ortus-nova/stage0/deploy-state.json" && grep -q "could not read taichi's deploy state" "$tmp/err"; then
   echo "ok: a worker host p1 cannot reach keeps its last copy, and deploy says so"

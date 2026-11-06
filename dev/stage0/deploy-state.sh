@@ -1,8 +1,7 @@
 # shellcheck shell=bash
 # Each host's deploy state (spec store agent-platform/supervisor-autonomy,
 # design D7): the file Sortie's internal/deploystate reads, which its
-# health check (health.deploy_state) and merge-and-prove
-# (merge_and_prove.hosts) read on p1. deploy.sh and dev-host-apply.sh write
+# health check (health.deploy_state) reads on p1. deploy.sh and dev-host-apply.sh write
 # it on every host, after every deploy and at each tick of the deploy timer;
 # on p1, deploy.sh also copies each worker host's beside it, over the SSH
 # that worker-host.sh add already uses. Sourced by deploy.sh,
@@ -139,17 +138,6 @@ deploy_state_refresh() {
     *) status=succeeded error='' ;;
   esac
   deploy_state_write "$status" "$1" "$2" "$error"
-}
-
-# deploy_hosts_yaml: merge_and_prove.hosts of the workflow, each host's
-# deploy state file on p1: p1's own, then a copy of each worker host's.
-deploy_hosts_yaml() {
-  local f
-  printf '    p1: %s\n' "$(deploy_state_file)"
-  for f in "$STAGE0_HOME"/deploy-hosts/*; do
-    [[ -s $f ]] || continue
-    printf '    %s: %s\n' "${f##*/}" "$STAGE0_HOME/hosts/${f##*/}/deploy-state.json"
-  done
 }
 
 # deploy_host_add NAME DEST: p1 copies worker host NAME's deploy state

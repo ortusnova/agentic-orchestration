@@ -30,17 +30,12 @@ workspace of a story, and a fix is a fix run's.
    job's comment holds `sortie:live-proof proven <head sha>`, and Sortie
    refuses your merge without it (`live_proof_unproven`). A live criterion
    with no proof is not met: request one with `live-proof` and leave the
-   pull request open. A pull request whose only unmet criteria are
-   after-deploy live criteria is merged with merge-and-prove once its other
-   criteria are met and CI passes, never with merge; Sortie proves or
-   reverts it. An after-deploy live criterion is one the review recorded
-   `live-proof` with the reason `after-deploy`: only the deployed main
-   settles it, after the merge, so no proof on the head can. Sortie merges
-   one such pull request at a time, waits until every host's deploy state
-   names a commit that holds the merge, runs its live proof against the
-   deployed hosts, and ends the story Done once proven; with no proven
-   record by the deadline it reverts the merge, and the story returns to
-   Todo with the reason. A review that found a criterion `not-met` or
+   pull request open. An after-deploy live criterion is one the review
+   recorded `live-proof` with the reason `after-deploy`: only the deployed
+   main settles it, after the merge, so no proof on the head can, and no
+   route proves it before the merge. Never merge a pull request with one:
+   leave it open, take no action on it, and do not ask a person to prove it
+   by hand. A review that found a criterion `not-met` or
    `unsettled` parks the story with those criteria: never merge it; decide
    how each is met (a fix run, a live proof, or a new issue for a person),
    then release it for a new review.
@@ -86,11 +81,7 @@ own members. Never print the token.
    saying what the forge shows, with its URL, and what is left to do. The
    story continues from its session.
 3. A pull request that waits on nobody but a person to merge it, under rule
-   2 and rule 4: merge it with `POST /api/v1/<identifier>/merge`; one whose
-   only unmet criteria are after-deploy live criteria, with
-   `POST /api/v1/<identifier>/merge-and-prove` instead, never with `merge`.
-   `GET /api/v1/state` shows its phase in `merge_and_prove` (queued,
-   merging, deploying, proving, reverting) and what it waits on. One that
+   2 and rule 4: merge it with `POST /api/v1/<identifier>/merge`. One that
    conflicts with its base, or fails CI, with no fix run started: start one
    with `POST /api/v1/<identifier>/fix` and a `message` that names the
    conflict or the failing check, and says to bring the base in by a merge.
@@ -98,8 +89,7 @@ own members. Never print the token.
    as its last run shows: grant it with `POST /api/v1/<identifier>/sessions`
    (`add: 1`, `reason`).
 5. A pull request that must not merge yet, such as one with an unproven live
-   criterion that is not after-deploy (those are merge-and-prove's, action
-   3): mark it a draft with `POST /api/v1/<identifier>/draft`, and
+   criterion that is not after-deploy (rule 2 leaves those open): mark it a draft with `POST /api/v1/<identifier>/draft`, and
    request the proof with `POST /api/v1/<identifier>/live-proof`. When the
    criterion needs nested KVM, smolvm, or a machine started inside the job's
    machine, as a story of the worker daemon or smol-builder does, add

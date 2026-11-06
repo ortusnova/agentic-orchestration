@@ -79,8 +79,7 @@ case $cmd in
     copy "$STAGE0_HOME/egress-ca/ca.crt" egress-ca.crt 644
     copy <(printf '%s\n' "$STAGE0_CP_PUBLIC_URL") control-plane-url 644
     rm -f "$dir/worker.key"
-    # p1 copies its deploy state over the same SSH (deploy-state.sh), for
-    # Sortie's merge-and-prove; the workflow names it from the next stage0.sh.
+    # p1 copies its deploy state over the same SSH (deploy-state.sh).
     deploy_host_add "$name" "$host"
     apply
     echo "worker $name: $host holds its certificate (~/$STAGE0_WORKER_HOST_CONFIG); on $host, run STAGE0_PROFILE=worker dev/stage0/stage0.sh to dial $STAGE0_CP_PUBLIC_URL"
