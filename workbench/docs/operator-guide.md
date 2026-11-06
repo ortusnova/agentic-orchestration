@@ -231,37 +231,6 @@ When a story's work was done by hand, or anywhere else, its deliverable names th
 
 The workbench looks up each one on GitHub with `WORKBENCH_GITHUB_TOKEN`, then again every `WORKBENCH_DELIVERY_RECHECK_SECONDS` until it is merged, and never again after: the registry keeps each merge. Once every one is merged, the story reads Done, with a link to each pull request and its merge commit, and the page updates on its own. Such a story offers no Approve, and no sync creates or releases it: Sortie never runs it, and it blocks nothing in the tracker. Naming the pull request does not change what an approval covers, so it is allowed on a started story too. A store whose breakdown schema predates `delivered_by` gets the current one when the workbench opens the project.
 
-### A story proven by a post-deploy check
-
-A story that changes the control plane can only be proven once it is deployed (design D15). Its deliverable declares the check the kit's deploy runs after it deploys the merge:
-
-```yaml
-- id: credential-revoked-restart-post-deploy
-  post_deploy_check:
-    check: credential-restart
-    args: [--unit, ortus-stage0-sortie]
-    hosts: [p1]
-```
-
-`check` is a kebab-case name, the check's file under `dev/stage0/checks/` in the kit (with or without its extension); `args` is the list of arguments it runs with, in order, possibly empty; `hosts` is a non-empty list of the hosts whose deploy runs it, and may be left out for `[p1]`. `planlib validate` refuses any other shape, and an unknown field in it. When the kit's checkout is beside the store (a sibling directory holding `dev/stage0/`, `agentic-orchestration` first, or the kit itself when the store is a directory of it), a check that is not a file under its `dev/stage0/checks/` is a warning (`unknown_check`): the plan stays valid, `planlib validate` prints it on stderr, and `--json` lists it under `warnings`. `--kit PATH` names the kit instead; `--kit ''` checks no names.
-
-The story's issue carries the check in a `## Post-deploy check` section after its acceptance criteria, as one fenced YAML block with `check`, `args` and `hosts`, in that order and with the default hosts filled in, for the kit to read:
-
-````markdown
-## Post-deploy check
-
-```yaml
-check: credential-restart
-args:
-- --unit
-- ortus-stage0-sortie
-hosts:
-- p1
-```
-````
-
-The check counts toward the story's approval: adding it, or changing its name, its arguments or its hosts, returns the story to draft, and a started story cannot change it. Writing `hosts: [p1]` where it was left out changes nothing. A store whose breakdown schema predates `post_deploy_check` gets the current one when the workbench opens the project; until then the store's own `planlib validate` refuses the field.
-
 ### Change a story after it starts
 
 A started story is frozen: the validator refuses an edit to it or its removal, and the graph's red panel says so. Change scope instead with one of these:

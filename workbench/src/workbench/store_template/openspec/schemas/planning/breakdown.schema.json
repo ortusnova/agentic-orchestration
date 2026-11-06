@@ -91,30 +91,6 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/pull_request" }
-        },
-        "post_deploy_check": {
-          "description": "The check that proves this story once it is deployed: once merge-and-prove sees every host run the merge, the kit's deploy on each host in hosts runs the check, a file under dev/stage0/checks/ in the kit, with args, against the deployed control plane, and its result is the story's live-proof record. The story's issue carries it in its Post-deploy check section.",
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["check", "args"],
-          "properties": {
-            "check": {
-              "description": "The check's name: its file under dev/stage0/checks/ in the kit.",
-              "$ref": "#/$defs/kebab"
-            },
-            "args": {
-              "description": "The arguments the check runs with, in order.",
-              "type": "array",
-              "items": { "type": "string" }
-            },
-            "hosts": {
-              "description": "The hosts whose deploy runs the check, by the names the kit gives them. Default [p1].",
-              "type": "array",
-              "minItems": 1,
-              "uniqueItems": true,
-              "items": { "type": "string", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" }
-            }
-          }
         }
       }
     }

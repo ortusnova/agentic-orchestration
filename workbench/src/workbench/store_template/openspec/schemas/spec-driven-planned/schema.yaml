@@ -234,11 +234,6 @@ artifacts:
         the pull requests that delivered it, each `owner/repo#number`. Once
         every one is merged, the workbench reads the story as done and no
         agent takes it.
-      - `post_deploy_check`: only for a story that changes the control plane
-        and is proven once deployed: `{check, args, hosts}`, where `check`
-        names a file under `dev/stage0/checks/` in the kit, `args` is the
-        list of its arguments, and `hosts` the hosts whose deploy runs it
-        (default `[p1]`). The story's issue carries it.
 
       Size deliverables so one agent session can finish one. Prefer parallel
       deliverables over a single chain when the work allows it.

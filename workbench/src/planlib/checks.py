@@ -6,7 +6,6 @@ Every problem is collected; no check stops the others.
 from __future__ import annotations
 
 from collections import Counter
-from pathlib import Path
 from typing import Callable
 
 import networkx as nx
@@ -16,10 +15,6 @@ from .requirements import RequirementsError, openspec_show, requirement_names
 from .store import CHANGES_DIR, PLAN_FILE, LoadedStore
 
 NamesFor = Callable[[str], dict[str, set[str]]]
-
-# Where the kit keeps the checks a story's post-deploy check names.
-KIT_CHECKS = Path("dev") / "stage0" / "checks"
-KIT_NAME = "agentic-orchestration"
 
 
 def resolve_ref(change: str, ref: str) -> str:
@@ -77,43 +72,6 @@ def check_frozen(store: LoadedStore, frozen: dict[str, str]) -> list[PlanError]:
             errors.append(PlanError("frozen", f"'{key}' has started and cannot change; add an amending story that depends on it, "
                                     "or a replacement that supersedes it", file=current[key][0].file, change=change, deliverable=did, members=(key,)))
     return errors
-
-
-def check_post_deploy(store: LoadedStore, kit: Path | None) -> list[PlanError]:
-    """Warnings: each post-deploy check that names no file under the kit's
-    dev/stage0/checks/. Without a kit nothing is checked."""
-    if kit is None:
-        return []
-    checks = Path(kit) / KIT_CHECKS
-    have = {p.name for p in checks.iterdir() if p.is_file()} if checks.is_dir() else set()
-    names = have | {n.split(".", 1)[0] for n in have}
-    out = []
-    for change, bd in sorted(store.breakdowns.items()):
-        for d in bd.doc["deliverables"]:
-            check = (d.get("post_deploy_check") or {}).get("check")
-            if check and check not in names:
-                out.append(PlanError("unknown_check", f"post_deploy_check names '{check}', which is not a file under "
-                                     f"{KIT_CHECKS}/ in the kit at {kit}", file=bd.file, change=change, deliverable=d["id"]))
-    return out
-
-
-def kit_beside(root: Path) -> Path | None:
-    """The kit's checkout beside the store, as stage-0 lays them out: a
-    directory next to the store's that holds dev/stage0/, the one named
-    agentic-orchestration first; or the kit's own checkout, when the store
-    is a directory of it."""
-    root = Path(root)
-    if (root.parent / KIT_CHECKS).parent.is_dir():
-        return root.parent
-    try:
-        siblings = sorted((p for p in root.parent.iterdir() if p.is_dir() and p != root),
-                          key=lambda p: (p.name != KIT_NAME, p.name))
-    except OSError:
-        return None
-    for p in siblings:
-        if (p / KIT_CHECKS).parent.is_dir():
-            return p
-    return None
 
 
 def _check_supersedes(store: LoadedStore) -> list[PlanError]:
