@@ -21,6 +21,8 @@ from typing import Iterator
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 TRACKER_KEY = re.compile(r"^[A-Z][A-Z0-9]{0,4}$")
 MAX_NAME = 80
+# Who saw a notification the workbench cleared, when no person saw it first.
+CLEARED_BY = "workbench"
 
 
 class RegistryError(Exception):
@@ -293,6 +295,36 @@ class Registry:
                 n += self._db.execute("UPDATE notifications SET seen_at = ?, seen_by = ? WHERE id = ?",
                                       (seen_at, seen_by, i)).rowcount
         return n
+
+    def clear_notifications(self, identifier: str, reason: str, at: float, received_before: float | None = None,
+                            events: tuple[str, ...] | None = None) -> int:
+        """Clear the story's notifications not cleared yet, received at or
+        before ``received_before`` (``at`` when None), and only those of
+        ``events`` when given: seen by the workbench, unless a person saw
+        them first, with the reason. How many there were."""
+        sql = ("UPDATE notifications SET cleared_at = ?, cleared_reason = ?, "
+               "seen_by = CASE WHEN seen_at IS NULL THEN ? ELSE seen_by END, seen_at = COALESCE(seen_at, ?) "
+               "WHERE identifier = ? AND cleared_at IS NULL AND received_at <= ?")
+        args: list = [at, reason, CLEARED_BY, at, identifier, at if received_before is None else received_before]
+        if events is not None:
+            sql += f" AND event_type IN ({','.join('?' * len(events))})"
+            args += list(events)
+        with self._lock:
+            return self._db.execute(sql, args).rowcount
+
+    def notification_stories(self) -> dict[str, str]:
+        """The state each story was last seen in, for its notifications."""
+        with self._lock:
+            rows = self._db.execute("SELECT identifier, condition FROM notification_stories").fetchall()
+        return {r["identifier"]: r["condition"] for r in rows}
+
+    def note_notification_stories(self, conditions: dict[str, str], at: float) -> None:
+        with self._lock:
+            for ident, cond in conditions.items():
+                self._db.execute(
+                    "INSERT INTO notification_stories (identifier, condition, observed_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT (identifier) DO UPDATE SET condition = excluded.condition, observed_at = excluded.observed_at",
+                    (ident, cond, at))
 
     def delete(self, slug: str) -> None:
         with self._lock:

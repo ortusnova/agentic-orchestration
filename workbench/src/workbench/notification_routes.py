@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .auth import Identity
-from .notifications import MAX_BODY, HostTokens, PayloadError, parse, project_notifications
+from .notifications import CLOSING_EVENTS, MAX_BODY, HostTokens, PayloadError, parse, project_notifications
 from .projects import ProjectManager
 from .registry import Registry
 
@@ -56,10 +56,15 @@ def notification_router(projects: ProjectManager, registry: Registry, tokens: Ho
             raise HTTPException(status_code=400, detail={"code": "invalid_notification", "message": str(exc)}) from None
         ident = (body.get("identifier") or "").strip()
         event = body.get("event_type") or ""
+        now = clock()
         row, new = await asyncio.to_thread(registry.record_notification, host, body["notification_id"], ident, event,
-                                           raw.decode(), clock())
+                                           raw.decode(), now)
         if new:
             log.info("notification from %s: %s %s", host, event or "agent.message", ident or "(no issue)")
+            if ident and event in CLOSING_EVENTS:
+                # The story left the state that raised its notifications: this one says so.
+                n = await asyncio.to_thread(registry.clear_notifications, ident, CLOSING_EVENTS[event], now)
+                log.info("cleared %d notifications of %s: %s", n, ident, CLOSING_EVENTS[event])
             # Shown within this refresh: the projects whose story it names publish now.
             for rt in list(projects.runtimes.values()):
                 if ident in _identifiers(rt):
