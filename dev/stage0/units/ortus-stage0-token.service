@@ -1,5 +1,5 @@
 [Unit]
-Description=Ortus Nova stage 0: restart Sortie and nono onto a fresh Claude token when idle
+Description=Ortus Nova stage 0: restart both nonos onto a valid Claude token when theirs is refused, or onto a fresher one when idle
 
 [Service]
 Type=oneshot
