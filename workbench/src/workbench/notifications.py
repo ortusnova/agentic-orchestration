@@ -12,13 +12,6 @@ a person", unread until a person has seen it. A notification of a question
 still open is unread again every four hours after it was sent, as the
 operator's channel is pushed again (workbench.alerts), until the question is
 answered or no longer open.
-
-"Needs a person" shows one entry per story: its latest notification, with
-the count of the earlier ones it stands for. A story's notifications are
-cleared, seen by the workbench with the reason, when the story leaves the
-state that raised them: its pull request merged, its park ended, it was
-cancelled, or Sortie said its question closed (``question.closed``). A
-notification the story gets after that shows again.
 """
 
 from __future__ import annotations
@@ -28,14 +21,12 @@ import json
 import logging
 import math
 import re
-import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .alerts import REPEAT_SECONDS
 from .config import SORTIE_NAME
-from .plan_overlay import is_delivered
 
 log = logging.getLogger(__name__)
 
@@ -53,16 +44,6 @@ _ESCALATION = ("kind", "rule", "url")
 _STAGE = ("source_rule", "target_rule", "chain_id", "reason")
 # A token in the path of the endpoint, as the access log would print it.
 _TOKEN_PATH = re.compile(r"^(/api/notifications/[^/?#]+/)[^/?#]+")
-# Why a story's notifications were cleared.
-MERGED, UNPARKED, CANCELLED, QUESTION_CLOSED = "merged", "unparked", "cancelled", "question_closed"
-# The events that say the story left the state that raised its
-# notifications: each clears them, itself included.
-CLOSING_EVENTS = {"question.closed": QUESTION_CLOSED, "auto_merge.merged": MERGED}
-# The events a park raises: before the workbench knew a story's state, a
-# story with no park clears only these, once older than PARK_SLACK.
-PARK_EVENTS = ("session.stopped", "session.escalated")
-# The state a story is in, for its notifications: none of these is "".
-_PARKED = "parked"
 
 
 class PayloadError(ValueError):
@@ -146,85 +127,17 @@ def _story(n: dict[str, Any]) -> dict[str, Any]:
             "title": n.get("title") or key, "url": (n.get("tracker") or {}).get("url")}
 
 
-def story_condition(node: dict[str, Any], plan_states: dict[str, str] | None, parked: set[str] | None) -> str | None:
-    """The state the story is in, for its notifications: merged, cancelled,
-    parked, or "" for none of them; None when it cannot be told, as when
-    ``parked`` is None because a Sortie's parks could not be read."""
-    t = node.get("tracker") or {}
-    state = (t.get("state") or "").lower()
-    cancel = ((plan_states or {}).get("cancel") or "").lower()
-    if cancel and state == cancel:
-        return CANCELLED
-    if node.get("plan_status") == "delivered" or is_delivered(t, plan_states):
-        return MERGED
-    if parked is None:
-        return None
-    return _PARKED if t.get("identifier") in parked else ""
-
-
-class Clearing:
-    """Clears a story's notifications when the story leaves the state that
-    raised them. The state each story was last seen in is kept in the
-    registry, so a restart misses no change."""
-
-    def __init__(self, store):
-        self.store = store
-        self._last: dict[str, str] | None = None
-        # The hub rebuilds from the event loop and from the store's watcher.
-        self._lock = threading.Lock()
-
-    def observe(self, nodes: list[dict[str, Any]], plan_states: dict[str, str] | None, parked: set[str] | None,
-                now: float) -> dict[str, str]:
-        """Clear what the stories' changes since the last look clear; the
-        reason for each story cleared, by identifier."""
-        with self._lock:
-            if self._last is None:
-                self._last = self.store.notification_stories()
-            cleared: dict[str, str] = {}
-            changed: dict[str, str] = {}
-            for n in nodes:
-                ident = (n.get("tracker") or {}).get("identifier")
-                if n.get("kind") != "story" or not ident:
-                    continue
-                cond = story_condition(n, plan_states, parked)
-                before = self._last.get(ident)
-                if cond is None or cond == before:
-                    continue
-                changed[ident] = cond
-                if cond in (MERGED, CANCELLED):
-                    reason, since, events = cond, now, None
-                elif before == _PARKED and cond == "":
-                    reason, since, events = UNPARKED, now, None
-                elif before is None and cond == "":
-                    # First seen with no park: what an earlier park raised.
-                    reason, since, events = UNPARKED, now - PARK_SLACK, PARK_EVENTS
-                else:
-                    continue
-                if self.store.clear_notifications(ident, reason, now, since, events):
-                    cleared[ident] = reason
-                    log.info("cleared the notifications of %s: %s", ident, reason)
-            if changed:
-                self.store.note_notification_stories(changed, now)
-                self._last.update(changed)
-            return cleared
-
-
 def project_notifications(rows: list[dict[str, Any]], nodes: list[dict[str, Any]], questions: dict[str, dict[str, Any]],
                           now: float, shown_only: bool = True) -> list[dict[str, Any]]:
     """The notifications that name a story of the project, each linked to
     that story and to its open question, unread ones first, then newest
-    first. ``shown_only`` keeps what "Needs a person" shows: of the
-    notifications not cleared, every unread one and every one of a question
-    still open, one entry per story, its latest, with ``earlier`` counting
-    the others and ``ids`` naming them all. Without it, every one kept."""
+    first. ``shown_only`` keeps those "Needs a person" shows: every unread
+    one, and every one of a question still open."""
     by_ident = {n["tracker"]["identifier"]: n for n in nodes if n.get("kind") == "story" and n.get("tracker")}
     out: list[dict[str, Any]] = []
     for row in rows:
         n = by_ident.get(row["identifier"])
         if n is None:
-            continue
-        cleared = row.get("cleared_at") is not None
-        if cleared and shown_only:
             continue
         try:
             p = json.loads(row["payload"])
@@ -233,7 +146,7 @@ def project_notifications(rows: list[dict[str, Any]], nodes: list[dict[str, Any]
         sent = _time(p.get("timestamp")) or row["received_at"]
         q = questions.get(row["identifier"])
         # Of this park, not of an earlier one of the same story.
-        of_question = not cleared and q is not None and (q.get("parked_at") is None or sent >= q["parked_at"] - PARK_SLACK)
+        of_question = q is not None and (q.get("parked_at") is None or sent >= q["parked_at"] - PARK_SLACK)
         esc = p.get("escalation") if isinstance(p.get("escalation"), dict) else None
         out.append({
             "id": row["id"], "host": row["host"], "notification_id": row["notification_id"],
@@ -246,7 +159,6 @@ def project_notifications(rows: list[dict[str, Any]], nodes: list[dict[str, Any]
             "story": _story(n),
             "question": {"identifier": row["identifier"], "sortie": q.get("sortie"), "parked_at": q.get("parked_at")} if of_question else None,
             "unread": row["seen_at"] is None, "again": False,
-            "cleared_at": row.get("cleared_at"), "cleared_reason": row.get("cleared_reason") or None,
         })
     # The newest notification of each open question is the one pushed again.
     newest: dict[str, dict[str, Any]] = {}
@@ -262,22 +174,6 @@ def project_notifications(rows: list[dict[str, Any]], nodes: list[dict[str, Any]
         if item["seen_at"] is not None and item["seen_at"] < due:
             item["unread"] = True
     if shown_only:
-        out = _by_story([i for i in out if i["unread"] or i["question"] is not None])
+        out = [i for i in out if i["unread"] or i["question"] is not None]
     out.sort(key=lambda i: (not i["unread"], -i["sent_at"], -i["id"]))
-    return out
-
-
-def _by_story(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """One entry per story: its latest notification, unread while any of
-    them is, and still open after four hours while any of them is."""
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for item in items:
-        groups.setdefault(item["identifier"], []).append(item)
-    out = []
-    for group in groups.values():
-        group.sort(key=lambda i: (i["sent_at"], i["id"]))
-        latest = group[-1]
-        out.append({**latest, "earlier": len(group) - 1, "ids": [i["id"] for i in group],
-                    "unread": any(i["unread"] for i in group), "again": any(i["again"] for i in group),
-                    "question": next((i["question"] for i in reversed(group) if i["question"] is not None), None)})
     return out
