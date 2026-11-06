@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# The no-op post-deploy check: proves that the kit's runner
+# (post-deploy-checks.sh) runs a story's declared check on this host and
+# that Sortie takes its result. It changes nothing on the host; it prints
+# what it ran against and exits 0.
+#
+#   noop [ARG...]    the arguments are printed, nothing else
+set -euo pipefail
+trap 'echo "noop: changed nothing, restored nothing"' EXIT
+echo "noop: host ${STAGE0_CHECK_HOST:-?}, story ${STAGE0_CHECK_STORY:-?}, merge commit ${STAGE0_CHECK_MERGE_COMMIT:-?}"
+echo "noop: kit at $(git -C "${STAGE0_KIT_ROOT:-.}" rev-parse HEAD 2> /dev/null || echo '?')"
+state=${STAGE0_HOME:-}/deploy-state.json
+if [[ -r $state ]]; then
+  echo "noop: deploy state $(tr -d '\n' < "$state" | tr -s ' ')"
+fi
+echo "noop: args ($#):" "$@"
+echo "noop: proven"

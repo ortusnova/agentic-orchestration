@@ -636,6 +636,93 @@ An earlier kit paused Sortie's dispatch while a change waited, and recorded
 it in `$STAGE0_HOME/dispatch.paused`; `deploy.sh` resumes such a pause once
 (`POST /api/v1/dispatch/resume`, with the control token) and forgets it.
 
+### Post-deploy checks
+
+A story that changes the control plane can only be proven once it is
+deployed (spec store `agent-platform/supervisor-autonomy`, "A control-plane
+change is proven by a check its deploy runs", design D15). Its deliverable
+declares a post-deploy check (`post_deploy_check: {check, args, hosts}`,
+workbench's operator guide, "A story proven by a post-deploy check"), and
+the kit's deploy on each named host runs it and posts its result to
+Sortie, which writes it on the pull request as the story's live-proof
+record and proves or reverts the story on it.
+
+**The checks.** `checks/<name>` (with or without an extension) holds the
+kit's checks. Each is an executable that:
+
+- takes the story's `args` as its arguments, in order;
+- runs against the host's deployed control plane (its working directory is
+  the live kit; it gets `STAGE0_HOME`, `STAGE0_PROFILE`, `STAGE0_KIT_ROOT`,
+  `STAGE0_SORTIE_URL`, and `STAGE0_CHECK_HOST`, `STAGE0_CHECK_STORY` and
+  `STAGE0_CHECK_MERGE_COMMIT` for what it proves; its stdin is empty);
+- prints its evidence, stdout and stderr alike, and exits 0 for proven,
+  anything else for failed;
+- restores what it changed on every exit path, with a `trap` on `EXIT`,
+  and stays within the runner's timeout: `STAGE0_CHECK_TIMEOUT` seconds
+  (900 by default), after which it gets a `SIGTERM`, then a `SIGKILL` 30
+  seconds later, and fails with exit 124 (137 when killed). A trap on
+  `EXIT` runs on the `SIGTERM` too.
+
+`checks/noop` is the no-op check: it changes nothing, prints the host, the
+story, the merge commit, the kit's commit, the host's deploy state and its
+arguments, and proves.
+
+**The runner.** `post-deploy-checks.sh` runs at the end of every
+`deploy.sh` tick, after a deploy and on its timer alike, under stage0.sh's
+lock; it never changes the deploy's result. It:
+
+1. reads `GET /api/v1/state` and takes each story of `merge_and_prove` in
+   phase `proving` whose `post_deploy_check` (`{"check", "args",
+   "hosts"}`) names this host (p1 on the control profile, else
+   `STAGE0_WORKER_NAME` or `hostname -s`);
+2. once this host runs a commit that holds the merge commit (the kit's
+   `HEAD`; on p1 also the Sortie that runs), runs the check once for that
+   merge commit, under the timeout; a check the kit does not hold fails
+   with exit 127;
+3. posts `POST /api/v1/<identifier>/post-deploy-check` with the control
+   token (`$STAGE0_HOME/sortie-token`) and the JSON `{"result": "proven"
+   | "failed", "merge_commit", "host", "exit_code", "output"}` (the last 200
+   lines of its output) with `check`, `args`, `started_at` and
+   `finished_at`.
+
+It keeps its records in `$STAGE0_HOME/post-deploy-checks/`: `<merge>.out`
+(the whole output), `<merge>.result` (a result Sortie has not taken yet),
+`<merge>.posted` (taken) and `<merge>.refused` (Sortie answered 409: another
+commit, story or host). A merge commit with any of these is never run
+again, so a second deploy of the same merge, or the next tick, re-runs
+nothing. When Sortie's state cannot be read nothing runs and nothing is
+posted, and the next tick tries again; when the post fails (Sortie down,
+or any answer but 2xx or 409) the result is kept and posted at the next
+tick, without a second run. No result is ever made up. The deploy log
+(`ortus-stage0-deploy.log`) shows each run, its result and its post.
+
+p1 reaches its Sortie on `STAGE0_SORTIE_PORT`. A worker host stores no
+credential, so it runs a check that names it only once its `stage0.env`
+names `STAGE0_SORTIE_URL` and the control token is in its
+`$STAGE0_HOME/sortie-token`; without them it runs none.
+
+**Add a check.**
+
+1. Write `dev/stage0/checks/<name>`, kebab-case, executable (`chmod +x`),
+   starting `set -euo pipefail`, with a `trap` that restores whatever it
+   changes, before it changes anything. Print what it observes; exit 0
+   only when it proved the criterion.
+2. Give it its own test in the kit, covering its restore on failure and on
+   timeout, and run `make -C dev/stage0 test lint` (`test-deploy.sh` checks
+   that each check is executable and sets a trap).
+3. Merge it before, or with, the story that names it: the runner runs the
+   check of the kit the host runs, after the merge.
+4. Declare it on the story in the spec store: `post_deploy_check: {check:
+   <name>, args: [...], hosts: [p1]}`.
+
+`test-deploy.sh` covers the runner against a stubbed Sortie: a check that
+proves, one that fails (its exit code and last 200 lines), one that times
+out (stopped, its trap run), a host the check does not name, a story not
+yet proving, a second deploy of the same merge commit, Sortie unreachable
+(nothing runs, then the next tick runs it), a post that fails (posted at
+the next tick, not re-run), a 409, a merge the host does not run yet, a
+check the kit does not hold, and a worker host.
+
 ## Credentials
 
 `run-sortie.sh` reads each credential at start and keeps it in memory. A

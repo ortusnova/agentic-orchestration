@@ -32,6 +32,9 @@
 #     failed with its error when anything above failed, and at each tick
 #     the commit that runs beside main, so a commit left behind shows. On
 #     p1 it then copies each worker host's deploy state beside it.
+#   - Last, at every tick, it runs the post-deploy check of a story that
+#     Sortie's merge-and-prove proves on this host, once per merge commit,
+#     and posts its result to Sortie (post-deploy-checks.sh, design D15).
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 STAGE0_HOME=${STAGE0_HOME:-$HOME/.local/share/ortus-nova/stage0}
@@ -71,9 +74,15 @@ exec 9> "$STAGE0_HOME/stage0.lock"
 flock -n 9 || { say "a stage0.sh runs; trying again in a minute"; exit 0; }
 export STAGE0_LOCKED=1
 rm -f "$STAGE0_HOME/deploy-workbench.at"
-# p1 copies each worker host's deploy state at every tick, whatever this
-# one did (deploy-state.sh).
-[[ $STAGE0_PROFILE == control ]] && trap deploy_state_pull EXIT
+# At every tick, whatever this one did: p1 copies each worker host's deploy
+# state (deploy-state.sh), then each host runs the post-deploy check of a
+# story Sortie proves and posts its result (post-deploy-checks.sh), still
+# under the lock. Neither changes the deploy's exit status.
+at_exit() {
+  if [[ $STAGE0_PROFILE == control ]]; then deploy_state_pull; fi
+  STAGE0_LIVE_KIT=$LIVE "$KIT/post-deploy-checks.sh" || true
+}
+trap at_exit EXIT
 
 git -C "$LIVE" fetch -q origin main || say "could not fetch origin main; checking the main fetched last"
 old=$(git -C "$LIVE" rev-parse HEAD)

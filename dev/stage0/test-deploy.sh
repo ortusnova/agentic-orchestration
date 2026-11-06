@@ -40,18 +40,37 @@ EOF
 # running.
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-s=$SORTIE_STUB method=GET url='' auth=''
+s=$SORTIE_STUB method=GET url='' auth='' fail='' out='' wfmt='' agent='' data=''
 while (( $# )); do
   case $1 in
     -X) method=$2; shift ;;
-    -H) if [[ $2 == @- ]]; then auth=$(cat); else auth=$2; fi; shift ;;
-    -*) ;;
+    -H) if [[ $2 == @- ]]; then auth=$(cat); elif [[ $2 == Authorization:* ]]; then auth=$2; fi; shift ;;
+    -o) out=$2; shift ;;
+    -w) wfmt=$2; shift ;;
+    -A) agent=$2; shift ;;
+    -m | --max-time | --connect-timeout) shift ;;
+    --data-binary | -d) data=$2; shift ;;
+    --*) ;;
+    -*) [[ $1 == *f* ]] && fail=1 ;;
     *) url=$1 ;;
   esac
   shift
 done
 path=/${url#http://*/}
-echo "$method $path" >> "$s/requests"
+# The post-deploy check runner's requests are marked: it reads Sortie's
+# state at every tick, which is no drain.
+echo "$method $path${agent:+ ($agent)}" >> "$s/requests"
+if [[ -e $s/down ]] || [[ -e $s/post-down && $path == */post-deploy-check ]]; then
+  [[ -n $wfmt ]] && printf 000
+  exit 7
+fi
+# respond CODE BODY: answer as curl does, with -f, -o and -w.
+respond() {
+  if [[ -n $fail && $1 -ge 400 ]]; then exit 22; fi
+  if [[ -n $out ]]; then printf '%s\n' "$2" > "$out"; else printf '%s\n' "$2"; fi
+  [[ -n $wfmt ]] && printf '%s' "$1"
+  exit 0
+}
 n() { cat "$s/$1" 2> /dev/null || echo 0; }
 dispatch() {
   local r q m; r=$(n running) q=$(n queued) m=$(n max)
@@ -66,13 +85,20 @@ case "$method $path" in
     fi
     dispatch
     paused=false; [[ -e $s/paused ]] && paused=true
-    printf '{"running": [%s], "dispatch_paused": %s}\n' "$(seq -s, 1 "$(n running)")" "$paused" ;;
+    mp=''; [[ -s $s/merge_and_prove ]] && mp=", \"merge_and_prove\": $(cat "$s/merge_and_prove")"
+    respond 200 "$(printf '{"running": [%s], "dispatch_paused": %s%s}' "$(seq -s, 1 "$(n running)")" "$paused" "$mp")" ;;
   "POST /api/v1/dispatch/pause"|"POST /api/v1/dispatch/resume")
     [[ $auth == "Authorization: Bearer control" ]] || exit 22
     echo "${path##*/}" >> "$s/log"
     if [[ $path == */pause ]]; then touch "$s/paused"; else rm -f "$s/paused"; dispatch; fi
     echo '{}' ;;
-  *) exit 22 ;;
+  POST\ /api/v1/*/post-deploy-check)
+    [[ $auth == "Authorization: Bearer control" ]] || respond 401 '{"error": "unauthorized"}'
+    [[ -e $s/refuse ]] && respond 409 '{"error": "stale_result"}'
+    id=${path#/api/v1/}; id=${id%%/*}
+    { printf '%s ' "$id"; cat "${data#@}"; echo; } >> "$s/posts"
+    respond 200 '{}' ;;
+  *) respond 404 '{"error": "not_found"}' ;;
 esac
 EOF
 chmod +x "$tmp/bin/"*
@@ -89,7 +115,7 @@ want() { # want NAME STUB_STATE
 }
 # never_drained NAME: deploy asked Sortie for no pause and no state, and Sortie never paused.
 never_drained() {
-  if [[ ! -s $SORTIE_STUB/log && ! -e $SORTIE_STUB/paused ]] && ! grep -q 'state\|pause' "$SORTIE_STUB/requests" 2> /dev/null; then echo "ok: $1"
+  if [[ ! -s $SORTIE_STUB/log && ! -e $SORTIE_STUB/paused ]] && ! grep -v ' (ortus-stage0-post-deploy-checks)$' "$SORTIE_STUB/requests" 2> /dev/null | grep -q 'state\|pause'; then echo "ok: $1"
   else echo "FAIL: $1: Sortie asked $(tr '\n' ';' < "$SORTIE_STUB/requests" 2> /dev/null)"; failed=1; fi
 }
 restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
@@ -415,6 +441,124 @@ else echo "FAIL: unreachable taichi: $(cat "$tmp/err")"; failed=1; fi
 deployed "and p1's own deploy is applied anyway" succeeded main main level
 mv "$tmp/taichi.away" "$tmp/taichi"
 deploy_host_remove taichi; rm -f "$tmp/ssh"
+
+# Post-deploy checks (post-deploy-checks.sh, design D15): at the end of
+# every tick, the host runs the check of a story Sortie proves on it, from
+# the kit it runs, once per merge commit, and posts its result to Sortie.
+# addcheck NAME BODY: merge an executable check into the kit's main; each
+# logs its run to ran.
+addcheck() {
+  mkdir -p "$tmp/up/dev/stage0/checks"
+  printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/ran"\n%s\n' "$1" "$tmp" "$2" > "$tmp/up/dev/stage0/checks/$1"
+  chmod +x "$tmp/up/dev/stage0/checks/$1"
+  g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm "check $1"; g -C "$tmp/up" push -q origin main
+}
+# proving ID MERGE CHECK HOSTS [ARGS]: Sortie's merge-and-prove proves
+# story ID's merge commit MERGE with the post-deploy check CHECK on HOSTS
+# and ARGS (JSON lists).
+proving() {
+  printf '{"in_flight": {"issue_identifier": "%s", "position": 0, "phase": "proving", "merge_commit": "%s", "post_deploy_check": {"check": "%s", "args": %s, "hosts": %s}}, "queue": []}\n' \
+    "$1" "$2" "$3" "${5:-[]}" "$4" > "$SORTIE_STUB/merge_and_prove"
+}
+pdc_setup() { setup; rm -rf "$STAGE0_HOME/post-deploy-checks" "$tmp/ran" "$tmp/restored"; }
+ran() { if [[ -s $tmp/ran ]]; then wc -l < "$tmp/ran"; else echo 0; fi; }
+posts() { if [[ -s $SORTIE_STUB/posts ]]; then wc -l < "$SORTIE_STUB/posts"; else echo 0; fi; }
+# post [JQ_OPTION...] FILTER: jq's FILTER of the last result posted, after its story's identifier.
+post() { tail -n 1 "$SORTIE_STUB/posts" | cut -d' ' -f2- | jq -r "$@"; }
+posted_id() { tail -n 1 "$SORTIE_STUB/posts" | cut -d' ' -f1; }
+# posted NAME RAN POSTS: the checks ran RAN times and Sortie took POSTS results.
+posted() {
+  if [[ $(ran) == "$2" && $(posts) == "$3" ]]; then echo "ok: $1"
+  else echo "FAIL: $1: ran $(ran), posted $(posts), want $2 and $3: $(cat "$tmp/err")"; failed=1; fi
+}
+# result NAME ID RESULT EXIT: the last result posted is RESULT, for story
+# ID, main's merge commit and p1, with exit code EXIT.
+result() {
+  if [[ $(posted_id) == "$2" && $(post .result) == "$3" && $(post .exit_code) == "$4" && $(post .merge_commit) == "$(sha main)" \
+    && $(post .host) == "${5:-p1}" ]]; then echo "ok: $1"
+  else echo "FAIL: $1: posted $(tail -n 1 "$SORTIE_STUB/posts" 2> /dev/null), want $3 for $2 at $(sha main), exit $4"; failed=1; fi
+}
+
+pdc_setup
+# shellcheck disable=SC2016 # the check expands its own arguments
+addcheck ok 'echo "evidence: $STAGE0_CHECK_HOST runs $STAGE0_CHECK_MERGE_COMMIT for $STAGE0_CHECK_STORY, with $#: $*"'
+proving ONS-7 "$(sha main)" ok '["p1"]' '["--unit", "a b"]'; run
+posted "a check that proves runs after the deploy of its merge, and its result is posted" 1 1
+result "and it is proven, for the merge commit and p1, exit 0" ONS-7 proven 0
+[[ $(post .output) == "evidence: p1 runs $(sha main) for ONS-7, with 2: --unit a b" && $(post -c .args) == '["--unit","a b"]' && $(post .check) == ok ]] \
+  && echo "ok: with the check's output and its arguments" || { echo "FAIL: proven output: $(post .output), args $(post -c .args)"; failed=1; }
+[[ -s $STAGE0_HOME/post-deploy-checks/$(sha main).posted ]] && echo "ok: and the host records that it posted" || { echo "FAIL: no posted record"; failed=1; }
+grep -q 'POST /api/v1/ONS-7/post-deploy-check (ortus-stage0-post-deploy-checks)' "$SORTIE_STUB/requests" \
+  && echo "ok: to the story's post-deploy-check route, with the control token" || { echo "FAIL: requests: $(cat "$SORTIE_STUB/requests")"; failed=1; }
+run; posted "a tick with the same merge commit in proving runs it no more" 1 1
+merge docs/x; run; posted "nor a second deploy while the same merge commit is proven" 1 1
+deployed "and the deploy is applied as before" succeeded main main level
+
+pdc_setup; addcheck bad 'seq 1 300; echo "bad: the unit did not restart" >&2; exit 3'; proving ONS-8 "$(sha main)" bad '["p1"]'; run
+posted "a check that fails is posted too" 1 1
+result "as failed, with its exit code" ONS-8 failed 3
+out=$(post .output)
+[[ $(wc -l <<< "$out") == 200 && $(head -n 1 <<< "$out") == 102 && $(tail -n 1 <<< "$out") == "bad: the unit did not restart" ]] \
+  && echo "ok: with the last 200 lines of its output" || { echo "FAIL: failed output: $(wc -l <<< "$out") lines, $(head -n 1 <<< "$out") .. $(tail -n 1 <<< "$out")"; failed=1; }
+run; posted "and is not run again" 1 1
+
+pdc_setup
+# shellcheck disable=SC2016 # the check expands its own variables
+addcheck slow 'trap "echo restored >> '"$tmp"'/restored" EXIT; echo "slow: token replaced"; sleep 60'
+proving ONS-9 "$(sha main)" slow '["p1"]'; start=$SECONDS; STAGE0_CHECK_TIMEOUT=1 run
+posted "a check that does not finish in time is stopped and posted" 1 1
+result "as failed, exit 124" ONS-9 failed 124
+(( SECONDS - start < 30 )) && echo "ok: within its timeout" || { echo "FAIL: the timed-out check took $((SECONDS - start))s"; failed=1; }
+[[ $(post .output) == *"slow: token replaced"*"slow did not finish within 1s"* ]] && echo "ok: with its output and the timeout" || { echo "FAIL: timeout output: $(post .output)"; failed=1; }
+[[ $(cat "$tmp/restored" 2> /dev/null) == restored ]] && echo "ok: and its trap restores what it changed" || { echo "FAIL: the stopped check restored nothing"; failed=1; }
+
+pdc_setup; addcheck ok 'echo fine'; proving ONS-10 "$(sha main)" ok '["taichi"]'; run
+posted "a check that does not name this host does not run here" 0 0
+[[ -z $(find "$STAGE0_HOME/post-deploy-checks" -type f ! -name sortie.state 2> /dev/null) ]] && echo "ok: and leaves no record" || { echo "FAIL: records: $(ls "$STAGE0_HOME/post-deploy-checks")"; failed=1; }
+printf '{"in_flight": {"issue_identifier": "ONS-10", "phase": "deploying", "merge_commit": null, "post_deploy_check": {"check": "ok", "args": [], "hosts": ["p1"]}}, "queue": []}\n' > "$SORTIE_STUB/merge_and_prove"
+run; posted "nor a story still deploying" 0 0
+
+pdc_setup; addcheck ok 'echo fine'; proving ONS-11 "$(sha main)" ok '["p1"]'; touch "$SORTIE_STUB/down"; run
+posted "Sortie unreachable: no check runs and no result is posted" 0 0
+grep -q "could not read Sortie's state" "$tmp/err" && echo "ok: and the deploy says so" || { echo "FAIL: unreachable: $(cat "$tmp/err")"; failed=1; }
+deployed "and the deploy is applied anyway" succeeded main main level
+rm "$SORTIE_STUB/down"; run
+posted "Sortie back: the next tick runs the check and posts it" 1 1
+result "proven" ONS-11 proven 0
+pdc_setup; addcheck ok 'echo fine'; proving ONS-12 "$(sha main)" ok '["p1"]'; touch "$SORTIE_STUB/post-down"; run
+posted "Sortie gone between the check and its post: the result is kept" 1 0
+grep -q 'posting it again at the next tick' "$tmp/err" && echo "ok: and the deploy says so" || { echo "FAIL: post-down: $(cat "$tmp/err")"; failed=1; }
+rm "$SORTIE_STUB/post-down"; run
+posted "and posted at the next tick, without a second run" 1 1
+result "proven" ONS-12 proven 0
+pdc_setup; addcheck ok 'echo fine'; proving ONS-13 "$(sha main)" ok '["p1"]'; touch "$SORTIE_STUB/refuse"; run
+posted "a result Sortie refuses (409) is not posted again" 1 0
+run; [[ $(grep -c '^POST .*/post-deploy-check ' "$SORTIE_STUB/requests") == 1 && $(ran) == 1 ]] && echo "ok: nor run again" || { echo "FAIL: refused: $(cat "$SORTIE_STUB/requests")"; failed=1; }
+
+pdc_setup; addcheck ok 'echo fine'; run; merge dev/stage0/units; proving ONS-14 "$(sha main)" ok '["p1"]'; FAIL_STAGE0=1 run
+posted "a merge this host does not run yet (its deploy failed) waits" 0 0
+grep -q "p1 does not run $(short main) yet" "$tmp/err" && echo "ok: and the deploy says so" || { echo "FAIL: not deployed: $(cat "$tmp/err")"; failed=1; }
+pdc_setup; proving ONS-15 "$(sha main)" absent '["p1"]'; run
+posted "a check the kit does not hold is posted" 0 1
+result "as failed, exit 127" ONS-15 failed 127
+
+# A worker host runs a check that names it, on the Sortie its stage0.env names.
+cp "$STAGE0_HOME/stage0.env" "$tmp/control.env"
+printf 'STAGE0_PROFILE=worker\nSTAGE0_WORKER_NAME=taichi\nSTAGE0_SORTIE_URL=http://127.0.0.1:1\n' > "$STAGE0_HOME/stage0.env"
+pdc_setup
+# shellcheck disable=SC2016 # the check expands its own variables
+addcheck ok 'echo "on $STAGE0_CHECK_HOST"'; proving ONS-16 "$(sha main)" ok '["p1", "taichi"]'; run
+posted "a worker host runs the check that names it" 1 1
+result "and posts it as itself" ONS-16 proven 0 taichi
+cp "$tmp/control.env" "$STAGE0_HOME/stage0.env"
+
+# The kit's own checks: each is an executable with a trap.
+for c in "$KIT"/checks/*; do
+  [[ -x $c ]] && grep -q '^trap ' "$c" && echo "ok: checks/${c##*/} is an executable with a trap" || { echo "FAIL: checks/${c##*/} is not executable or sets no trap"; failed=1; }
+done
+out=$(STAGE0_CHECK_HOST=p1 STAGE0_CHECK_STORY=ONS-1 STAGE0_CHECK_MERGE_COMMIT=abc STAGE0_KIT_ROOT=$KIT/../.. "$KIT/checks/noop" a b 2>&1) \
+  && [[ $out == *"host p1, story ONS-1, merge commit abc"*"args (2): a b"*"noop: proven"* ]] \
+  && echo "ok: checks/noop proves, and prints what it ran against" || { echo "FAIL: noop: $out"; failed=1; }
 
 # One run at a time: deploy.sh waits for a stage0.sh, and stage0.sh for it.
 setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8
