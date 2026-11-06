@@ -1,0 +1,170 @@
+# The OpenTelemetry Collector of the telemetry store: the store's only
+# ingest address (README.md). The collector Helm chart's `config` value
+# would hold this file; the settings it reads from the environment are the
+# keys of telemetry.env that README.md maps to the chart's values.
+#
+# - OTLP over gRPC (4317) and HTTP (4318), only with the ingest token
+#   (the podman secret ortus-telemetry-collector-ingest-token) as a Bearer
+#   token. compose.yaml publishes both on 127.0.0.1 only; on the internal
+#   network they are collector:4317 and collector:4318.
+# - Each span that carries sortie.dispatch.id and sortie.attempt gets
+#   langfuse.session.id = <sortie.dispatch.id>/<sortie.attempt>, and each that
+#   carries sortie.issue.identifier gets langfuse.trace.metadata.issue.
+# - Every well-known token shape becomes [redacted]: in span names, status
+#   messages, attributes and events, in log bodies and attributes, and in
+#   every resource and data point attribute (the same patterns throughout;
+#   test-config.sh checks that they are).
+# - Traces go to Langfuse's OTLP endpoint with the project's key pair and
+#   x-langfuse-ingestion-version; Langfuse takes nothing but traces over
+#   OTLP, so log records and metrics go to the file store, one file per UTC
+#   day, rotated by size, and pruned to TELEMETRY_RETENTION_DAYS
+#   (telemetry.sh retention).
+#
+# The patterns, one RE2 alternation:
+#   GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_, github_pat_), sk- keys
+#   (Anthropic, OpenAI, Langfuse), GitLab (glpat-), Slack (xox?-), AWS
+#   access key IDs, Google API keys, JWTs and PEM private keys; then
+#   Bearer and Basic credentials; then a run of exactly 43 base64url
+#   characters on its own, the shape of a Sortie job token (32 random bytes,
+#   unpadded base64url), which is the job's egress token.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  bearertokenauth/ingest:
+    scheme: Bearer
+    filename: /run/secrets/ortus-telemetry-collector-ingest-token
+  basicauth/langfuse:
+    client_auth:
+      username: ${env:LANGFUSE_PUBLIC_KEY}
+      password: ${env:LANGFUSE_SECRET_KEY}
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        auth:
+          authenticator: bearertokenauth/ingest
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth/ingest
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+
+  transform/session:
+    error_mode: ignore
+    trace_statements:
+      - statements:
+          - set(span.attributes["langfuse.session.id"], Concat([span.attributes["sortie.dispatch.id"], span.attributes["sortie.attempt"]], "/")) where span.attributes["sortie.dispatch.id"] != nil and span.attributes["sortie.dispatch.id"] != "" and span.attributes["sortie.attempt"] != nil and span.attributes["sortie.attempt"] != ""
+          - set(span.attributes["langfuse.trace.metadata.issue"], span.attributes["sortie.issue.identifier"]) where span.attributes["sortie.issue.identifier"] != nil and span.attributes["sortie.issue.identifier"] != ""
+
+  transform/mask-traces:
+    error_mode: ignore
+    trace_statements:
+      - statements:
+          - replace_pattern(span.name, "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_pattern(span.name, "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_pattern(span.name, "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+          - replace_pattern(span.status.message, "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_pattern(span.status.message, "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_pattern(span.status.message, "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+          - replace_all_patterns(span.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(span.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(span.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+          - replace_all_patterns(resource.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+      - statements:
+          - replace_pattern(spanevent.name, "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(spanevent.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(spanevent.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(spanevent.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+
+  transform/mask-logs:
+    error_mode: ignore
+    log_statements:
+      - statements:
+          - replace_pattern(log.body, "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]") where IsString(log.body)
+          - replace_pattern(log.body, "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]") where IsString(log.body)
+          - replace_pattern(log.body, "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}") where IsString(log.body)
+          - replace_all_patterns(log.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(log.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(log.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+          - replace_all_patterns(resource.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+
+  transform/mask-metrics:
+    error_mode: ignore
+    metric_statements:
+      - statements:
+          - replace_all_patterns(resource.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(resource.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+      - statements:
+          - replace_all_patterns(datapoint.attributes, "value", "\\b(gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{22,255}|sk-[A-Za-z0-9_-]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abeposr]-[A-Za-z0-9-]{10,}|A[KS]IA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})|-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----", "[redacted]")
+          - replace_all_patterns(datapoint.attributes, "value", "(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{16,}", "$$1 [redacted]")
+          - replace_all_patterns(datapoint.attributes, "value", "(^|[^A-Za-z0-9_-])[A-Za-z0-9_-]{43}([^A-Za-z0-9_-]|$$)", "$${1}[redacted]$${2}")
+
+  # The file store's file of the day (file/logs, file/metrics: group_by).
+  transform/day:
+    error_mode: ignore
+    log_statements:
+      - statements:
+          - set(resource.attributes["fileexporter.path_segment"], FormatTime(Now(), "%Y-%m-%d"))
+    metric_statements:
+      - statements:
+          - set(resource.attributes["fileexporter.path_segment"], FormatTime(Now(), "%Y-%m-%d"))
+
+  batch: {}
+
+exporters:
+  otlp_http/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    auth:
+      authenticator: basicauth/langfuse
+    headers:
+      x-langfuse-ingestion-version: "${env:LANGFUSE_INGESTION_VERSION}"
+  file/logs:
+    path: /var/lib/otelcol/file-store/logs/*.jsonl
+    group_by:
+      enabled: true
+      max_open_files: 4
+    rotation:
+      max_megabytes: ${env:FILE_STORE_MAX_MEGABYTES}
+      max_days: ${env:TELEMETRY_RETENTION_DAYS}
+      max_backups: 0
+  file/metrics:
+    path: /var/lib/otelcol/file-store/metrics/*.jsonl
+    group_by:
+      enabled: true
+      max_open_files: 4
+    rotation:
+      max_megabytes: ${env:FILE_STORE_MAX_MEGABYTES}
+      max_days: ${env:TELEMETRY_RETENTION_DAYS}
+      max_backups: 0
+
+service:
+  extensions: [health_check, bearertokenauth/ingest, basicauth/langfuse]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/session, transform/mask-traces, batch]
+      exporters: [otlp_http/langfuse]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/mask-logs, transform/day, batch]
+      exporters: [file/logs]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/mask-metrics, transform/day, batch]
+      exporters: [file/metrics]

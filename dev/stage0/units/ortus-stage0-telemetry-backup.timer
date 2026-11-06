@@ -1,0 +1,10 @@
+[Unit]
+Description=Ortus Nova stage 0: back up the telemetry store, nightly
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

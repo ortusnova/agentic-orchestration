@@ -164,3 +164,28 @@ jobs:
         run: make -C control-plane images
       - name: Start the project and run the scenarios
         run: make -C control-plane live-test
+
+  # The telemetry store's compose project (control-plane/telemetry), under
+  # rootless podman as the runner's unprivileged user: a span through the
+  # collector into Langfuse, masked, then a backup, the volumes removed, a
+  # restore, and the span read again.
+  telemetry:
+    name: Telemetry store (compose project, backup, restore)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install podman and podman-compose
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q podman pipx
+          pipx install podman-compose==1.6.0
+          podman --version
+          podman-compose --version
+          podman info --format 'rootless: {{.Host.Security.Rootless}}'
+      - name: Check every image is pinned by digest
+        run: make -C control-plane/telemetry pins
+      - name: Start the project, send, back up, restore
+        run: make -C control-plane/telemetry live-test

@@ -512,7 +512,9 @@ units=(ortus-stage0-sortie.service ortus-stage0-workbench.service ortus-stage0-t
   ortus-stage0-store.service ortus-stage0-store.timer
   ortus-stage0-preview@.service ortus-stage0-previews.service ortus-stage0-previews.timer
   ortus-stage0-nono.service ortus-stage0-nono-live-proof.service ortus-stage0-live-proofs.service ortus-stage0-live-proofs.timer
-  ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service)
+  ortus-stage0-egress-gate.service ortus-stage0-pomerium.service ortus-stage0-worker.service
+  ortus-stage0-telemetry.service ortus-stage0-telemetry-backup.service ortus-stage0-telemetry-backup.timer
+  ortus-stage0-telemetry-retention.service ortus-stage0-telemetry-retention.timer)
 # The live kit follows origin/main on its own; a kit run from a checkout
 # (STAGE0_KIT_FROM_CHECKOUT=1) stays where it is.
 deploy=''
@@ -576,4 +578,23 @@ curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" ||
 for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-egress-gate ortus-stage0-pomerium ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
-say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, Pomerium $STAGE0_CP_PUBLIC_URL for $(front_workers | wc -l) worker(s), p1's own and each worker host's (dev/stage0/worker-host.sh list)"
+# The telemetry store (README.md, "Telemetry"): Langfuse and its collector,
+# the compose project ortus-telemetry, restarted only when what it runs
+# changed; backed up nightly and pruned to its retention daily. Without
+# podman-compose 1.5 it does not run, and the rest of the kit does.
+TELEMETRY=$ROOT/control-plane/telemetry
+if why=$("$KIT/run-telemetry.sh" check-tools 2>&1); then
+  "$KIT/run-telemetry.sh" init
+  systemctl --user enable -q ortus-stage0-telemetry.service
+  restart_changed ortus-stage0-telemetry.service "$TELEMETRY/compose.yaml" "$TELEMETRY/otelcol.yaml" \
+    "$TELEMETRY/clickhouse-backups.xml" "$TELEMETRY/telemetry.sh" "$KIT/run-telemetry.sh" \
+    "$STAGE0_HOME/telemetry/telemetry.env" "$STAGE0_HOME/telemetry/secrets" "$UNITS/ortus-stage0-telemetry.service" \
+    || die "the telemetry store did not start: journalctl --user -u ortus-stage0-telemetry"
+  systemctl --user enable -q --now ortus-stage0-telemetry-backup.timer ortus-stage0-telemetry-retention.timer
+  # The first backup now, not on the first night.
+  [[ -n $(find "$STAGE0_HOME/telemetry-backups" -mindepth 1 -maxdepth 1 -type d -name '*Z' 2> /dev/null) ]] \
+    || systemctl --user start --no-block ortus-stage0-telemetry-backup.service
+else
+  say "The telemetry store does not run: $why. Then run stage0.sh again"
+fi
+say "Ready: workbench http://127.0.0.1:$STAGE0_WORKBENCH_PORT (password in $STAGE0_HOME/workbench-password), Sortie 127.0.0.1:$STAGE0_SORTIE_PORT, Huly $STAGE0_HULY_URL/workbench/$STAGE0_HULY_WORKSPACE/tracker, Langfuse http://127.0.0.1:$(sed -n 's/^LANGFUSE_WEB_SERVICE_PORT=//p' "$STAGE0_HOME/telemetry/telemetry.env" 2> /dev/null || true), Pomerium $STAGE0_CP_PUBLIC_URL for $(front_workers | wc -l) worker(s), p1's own and each worker host's (dev/stage0/worker-host.sh list)"

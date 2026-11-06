@@ -33,6 +33,8 @@ dev/stage0/test-review-gate.sh        # check the review gate, the fix runs and 
 dev/stage0/test-notify-channel.sh     # check the operator's channel, with stubs
 dev/stage0/test-preview.sh            # check the deploy, move and removal of a ui story's preview against a throwaway repository
 dev/stage0/test-supervisor.sh         # check the supervisor's token, prompt, pause and status, with stubs
+dev/stage0/test-telemetry.sh          # check the telemetry store's units, timers and run-telemetry.sh, with stubs
+dev/stage0/run-telemetry.sh health    # the telemetry store's services, up or down (also backup, restore [DIR], retention)
 dev/stage0/supervisor.sh status       # the supervisor's status, budget, open questions and recent actions with their evidence
 dev/stage0/supervisor.sh pause [WHY]  # pause the supervisor, until resume, across restarts
 dev/stage0/supervisor.sh resume       # resume it; a session starts at once for what waited
@@ -59,7 +61,8 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `sta
 | Spec store | `STAGE0_STORE`; `ortus-stage0-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
 | Control plane's front | units `ortus-stage0-pomerium`, `ortus-stage0-egress-gate`, `ortus-stage0-nono` and `ortus-stage0-nono-live-proof`; see [Worker hosts](#worker-hosts-p1) |
 | Supervisor | one agent session at a time beside the stories, run by Sortie on p1 with the host's opencode: prompt `supervisor.md`, installed as `$STAGE0_HOME/sortie/supervisor.md`, token `supervisor-token`; see [The supervisor](#the-supervisor) |
-| Logs | `~/.local/state/ortus-nova/logs/<unit>.log` on each host, one file per `ortus-stage0-*` unit (`ortus-stage0-sortie.log`, `ortus-stage0-worker.log`, `ortus-stage0-preview@<identifier>.log`, ...), rotated daily into `<unit>.log.<UTC date>.gz` and kept 30 days; see [Logs](#logs). Evidence and agents read these files, Sortie's state and the deploy state, never `journalctl` |
+| Telemetry | Langfuse and its OpenTelemetry Collector, the compose project `ortus-telemetry` (unit `ortus-stage0-telemetry`, `run-telemetry.sh`): Langfuse at `http://127.0.0.1:3000`, the collector at `127.0.0.1:4317` and `127.0.0.1:4318`; backed up nightly into `$STAGE0_HOME/telemetry-backups` and pruned daily; see [Telemetry](#telemetry) |
+| Logs | `~/.local/state/ortus-nova/logs/<unit>.log` on each host, one file per `ortus-stage0-*` unit (`ortus-stage0-sortie.log`, `ortus-stage0-worker.log`, `ortus-stage0-preview@<identifier>.log`, `ortus-stage0-telemetry.log`, `ortus-stage0-telemetry-backup.log`, `ortus-stage0-telemetry-retention.log`, ...), rotated daily into `<unit>.log.<UTC date>.gz` and kept 30 days; see [Logs](#logs). Evidence and agents read these files, Sortie's state and the deploy state, never `journalctl` |
 
 ## How a story runs
 
@@ -622,6 +625,40 @@ An earlier kit paused Sortie's dispatch while a change waited, and recorded
 it in `$STAGE0_HOME/dispatch.paused`; `deploy.sh` resumes such a pause once
 (`POST /api/v1/dispatch/resume`, with the control token) and forgets it.
 
+## Telemetry
+
+On p1 the kit runs the telemetry store, `control-plane/telemetry` (its
+README has the whole of it: settings, secrets, access by SSH tunnel,
+masking, backups, restore and retention), under the operator's rootless
+podman, through `run-telemetry.sh`, which runs `telemetry.sh` with
+`TELEMETRY_HOME=$STAGE0_HOME/telemetry`, the backups in
+`$STAGE0_HOME/telemetry-backups`, and the PATH `stage0.sh` last ran with:
+
+- **The store.** `ortus-stage0-telemetry` starts the project (`up`) and
+  stops it (`down`). `stage0.sh` writes its settings and secrets once
+  (`init`: `$STAGE0_HOME/telemetry/telemetry.env` and `secrets/`), and
+  restarts it only when what it runs changed (`unit-restart.sh`): its
+  compose file, the collector's configuration, ClickHouse's backup disk,
+  `telemetry.sh`, `run-telemetry.sh`, `telemetry.env`, the secrets or the
+  unit. Langfuse is at `http://127.0.0.1:3000`
+  (`ssh -N -L 3000:127.0.0.1:3000 p1`); its user is
+  `LANGFUSE_INIT_USER_EMAIL` with the password in
+  `$STAGE0_HOME/telemetry/secrets/langfuse-init-user-password`. Every span
+  goes to the collector, `127.0.0.1:4318` or `127.0.0.1:4317`, with the
+  ingest token in `$STAGE0_HOME/telemetry/secrets/collector-ingest-token`.
+- **The backups.** `ortus-stage0-telemetry-backup.timer` backs it up every
+  night at 02:30 into `$STAGE0_HOME/telemetry-backups/<UTC time>/`, keeping
+  seven; `stage0.sh` takes the first backup at once.
+  `dev/stage0/run-telemetry.sh restore` restores the newest.
+- **The retention.** `ortus-stage0-telemetry-retention.timer` deletes, every
+  day at 04:00, the traces older than `TELEMETRY_RETENTION_DAYS` (90, in
+  `telemetry.env`) through Langfuse's public API, and prunes the file store
+  to the same age.
+
+The store needs podman-compose 1.5 or later (`pipx install
+podman-compose`). Without it `stage0.sh` says so, leaves the store out and
+runs the rest of the kit.
+
 ## Credentials
 
 `run-sortie.sh` reads each credential at start and keeps it in memory. A
@@ -1029,9 +1066,11 @@ the next `stage0.sh`, which the deploy timer runs, installs them again.
 
 ```sh
 systemctl --user disable --now ortus-stage0-sortie ortus-stage0-workbench ortus-stage0-pomerium ortus-stage0-egress-gate \
-  ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-worker ortus-stage0-logs ortus-stage0-logs-rotate.timer
+  ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-worker ortus-stage0-logs ortus-stage0-logs-rotate.timer \
+  ortus-stage0-telemetry ortus-stage0-telemetry-backup.timer ortus-stage0-telemetry-retention.timer
+podman volume rm ortus-telemetry_postgres-data ortus-telemetry_clickhouse-data ortus-telemetry_redis-data ortus-telemetry_minio-data
 smolvm machine ls   # delete each wd-* machine: smolvm machine delete --name <name>
 rm ~/.config/systemd/user/ortus-stage0-*.{service,timer} && systemctl --user daemon-reload
-rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces and the pack
+rm -rf ~/.local/share/ortus-nova/stage0   # state, tokens, workspaces, the pack, and the telemetry store's settings and backups
 rm -rf ~/.local/state/ortus-nova/logs     # the log files
 ```

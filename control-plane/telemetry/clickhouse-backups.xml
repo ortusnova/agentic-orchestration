@@ -1,0 +1,17 @@
+<!-- The disk BACKUP and RESTORE use (telemetry.sh backup, restore): a
+     directory on ClickHouse's own volume, from which telemetry.sh copies
+     each backup out to the backup directory and back in to restore it. -->
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <backups>
+                <type>local</type>
+                <path>/var/lib/clickhouse/backups/</path>
+            </backups>
+        </disks>
+    </storage_configuration>
+    <backups>
+        <allowed_disk>backups</allowed_disk>
+        <allowed_path>/var/lib/clickhouse/backups/</allowed_path>
+    </backups>
+</clickhouse>

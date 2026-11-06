@@ -1,0 +1,8 @@
+[Unit]
+Description=Ortus Nova stage 0: delete the telemetry older than TELEMETRY_RETENTION_DAYS
+After=ortus-stage0-telemetry.service
+
+[Service]
+Type=oneshot
+Environment=STAGE0_HOME=@STAGE0_HOME@
+ExecStart=@KIT@/run-telemetry.sh retention

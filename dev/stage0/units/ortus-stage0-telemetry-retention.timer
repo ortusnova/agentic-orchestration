@@ -1,0 +1,10 @@
+[Unit]
+Description=Ortus Nova stage 0: delete the telemetry older than its retention, daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
