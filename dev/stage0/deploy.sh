@@ -11,7 +11,11 @@
 #     Sortie re-adopts each run whose lease a worker still holds and follows
 #     it to its end. nono, the egress gate, Pomerium and the worker daemon
 #     carry the runs, so stage0.sh restarts each only when what it runs changed
-#     (unit-restart.sh). A worker host (STAGE0_PROFILE=worker) builds no
+#     (unit-restart.sh). A change that removes hosts from nono's profile
+#     restarts Sortie on the workflow that offers them first; nono keeps
+#     the full list until Sortie's state API shows that workflow's
+#     revision and no running job holds an earlier offer, which each tick
+#     checks while it waits (nono-rollout.sh). A worker host (STAGE0_PROFILE=worker) builds no
 #     Sortie, follows no plan-bench merge and asks no Sortie anything,
 #     whatever Sortie settings its stage0.env kept from before it became a
 #     worker.
@@ -40,6 +44,8 @@ LIVE=${STAGE0_LIVE_KIT:-$STAGE0_HOME/kit}
 . "$KIT/deploy-state.sh"
 # shellcheck source=unit-restart.sh
 . "$KIT/unit-restart.sh"
+# shellcheck source=nono-rollout.sh
+. "$KIT/nono-rollout.sh"
 # shellcheck source=/dev/null
 . "$STAGE0_HOME/stage0.env"
 # stage0.sh runs the profile deploy decided on.
@@ -97,6 +103,12 @@ fi
 if [[ $old == "$new" && $sortie_old == "$sortie_new" ]]; then
   resume_left_pause
   deploy_state_refresh "$old" "$main"
+  # A narrowing of nono that waits for the jobs with earlier offers
+  # (nono-rollout.sh) applies at the first tick after they end.
+  if [[ $STAGE0_PROFILE == control ]] && ! nono_narrow "$STAGE0_HOME/sortie/WORKFLOW.md" restart; then
+    deploy_state_write failed "$old" "$main" "nono did not restart onto the kit's profile at ${old:0:12}"
+    exit 1
+  fi
   exit 0
 fi
 deploy_state_write deploying "$old" "$main"
@@ -114,7 +126,7 @@ log=$STAGE0_HOME/deploy-stage0.err
 # container stage0.sh starts must not hold this run open.
 stage0_run() {
   local rc=0
-  "$LIVE/dev/stage0/stage0.sh" "$@" 2> "$log" || rc=$?
+  STAGE0_KIT_FROM=$old "$LIVE/dev/stage0/stage0.sh" "$@" 2> "$log" || rc=$?
   cat "$log" >&2
   return "$rc"
 }

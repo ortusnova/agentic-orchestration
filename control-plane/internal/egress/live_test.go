@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"net"
@@ -19,7 +20,7 @@ import (
 // TestLiveNono runs the nono scenarios against the real thing: the pinned
 // nono with the control plane's egress profile (../../nono) and the real
 // credentials, through the gate, with a fake Sortie for introspection. It
-// reaches api.anthropic.com and mcp.firecrawl.dev, so it runs only from
+// reaches api.anthropic.com and api.github.com, so it runs only from
 // dev/stage0/test-egress-live.sh on p1, which sets CP_EGRESS_LIVE_NONO to
 // the nono binary and the CP_EGRESS_* credentials as run-nono.sh does.
 func TestLiveNono(t *testing.T) {
@@ -27,7 +28,7 @@ func TestLiveNono(t *testing.T) {
 	if bin == "" {
 		t.Skip("CP_EGRESS_LIVE_NONO is unset; dev/stage0/test-egress-live.sh runs this on p1")
 	}
-	for _, v := range []string{"CP_EGRESS_ANTHROPIC", "CP_EGRESS_GITHUB", "CP_EGRESS_GITHUB_BASIC"} {
+	for _, v := range []string{"CP_EGRESS_ANTHROPIC", "CP_EGRESS_GITHUB"} {
 		if os.Getenv(v) == "" {
 			t.Fatalf("%s is unset", v)
 		}
@@ -83,36 +84,48 @@ func TestLiveNono(t *testing.T) {
 		}
 	})
 
-	// opencode's websearch (dev/stage0/pack/opencode.json) calls
-	// Firecrawl's keyless MCP; nono tunnels it without a credential.
-	t.Run("Web search", func(t *testing.T) {
-		call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"firecrawl_search","arguments":{"query":"smolvm","limit":2}}}`
-		req, _ := http.NewRequest(http.MethodPost, "https://mcp.firecrawl.dev/v2/mcp", strings.NewReader(call))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		agent := h.agent(h.sortie.mint("ONS-7", Flow))
-		agent.Transport.(*http.Transport).TLSClientConfig.RootCAs = nil // Firecrawl's own certificate: nono does not intercept it
-		resp, err := agent.Do(req)
+	// The github_api credential (dev/stage0/WORKFLOW.md): nono puts the
+	// forge token in place of its placeholder, so GitHub counts the request
+	// against the token's rate limit, not an anonymous caller's 60.
+	t.Run("A credential host", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/rate_limit", nil)
+		req.Header.Set("Authorization", "Bearer sortie-credential-github_api")
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := h.agent(h.sortie.mint("ONS-7", Flow)).Do(req)
 		if err != nil {
 			t.Fatalf("%v\nnono:\n%s", err, out.String())
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `\"web\":[{\"url\"`) {
-			t.Fatalf("mcp.firecrawl.dev answered %d: %.500s\nnono:\n%s", resp.StatusCode, body, out.String())
+		var rate struct {
+			Resources struct {
+				Core struct {
+					Limit int `json:"limit"`
+				} `json:"core"`
+			} `json:"resources"`
+		}
+		if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &rate) != nil || rate.Resources.Core.Limit <= 60 {
+			t.Fatalf("api.github.com answered %d: %.500s\nnono:\n%s", resp.StatusCode, body, out.String())
 		}
 	})
 
-	t.Run("A host not allowed", func(t *testing.T) {
-		status := h.connect("pastebin.com:443", "Bearer "+h.sortie.mint("ONS-7", Flow))
-		if status == http.StatusOK {
-			t.Fatal("nono let the job reach pastebin.com")
-		}
-		want := `msg="egress refused" worker=p1 job=ONS-7 attempt=1 host=pastebin.com:443 status=` + strconv.Itoa(status)
-		if !strings.Contains(h.log.String(), want) {
-			t.Fatalf("the refusal is not logged with its job and attempt; want %s in:\n%s", want, h.log)
-		}
-	})
+	// nono allows only the credential hosts. A harness host, such as
+	// registry.npmjs.org or Firecrawl's search (dev/stage0/WORKFLOW.md,
+	// environment.remote.egress), is the worker's to allow directly, so
+	// through the egress flow it is refused like any other host, and the
+	// gate records the refusal with its worker, job and attempt.
+	for _, host := range []string{"registry.npmjs.org", "mcp.firecrawl.dev", "pastebin.com"} {
+		t.Run("Another host "+host, func(t *testing.T) {
+			status := h.connect(host+":443", "Bearer "+h.sortie.mint("ONS-7", Flow))
+			if status == http.StatusOK {
+				t.Fatalf("nono let the job reach %s through the egress flow", host)
+			}
+			want := `msg="egress refused" worker=p1 job=ONS-7 attempt=1 host=` + host + `:443 status=` + strconv.Itoa(status)
+			if !strings.Contains(h.log.String(), want) {
+				t.Fatalf("the refusal is not logged with its job and attempt; want %s in:\n%s", want, h.log)
+			}
+		})
+	}
 }
 
 // files writes the CA's certificate and key, as nono's --proxy-ca-cert

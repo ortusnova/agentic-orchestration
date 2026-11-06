@@ -25,6 +25,8 @@ cat > "$tmp/bin/systemctl" <<EOF
 #!/bin/sh
 [ "\$2" = is-active ] && exit 0
 echo "systemctl \$*" >> "$tmp/calls"
+# Sortie's restart: the stubbed Sortie started at SORTIE_RESTART_AT.
+[ "\$2 \$3" != "restart ortus-stage0-sortie.service" ] || [ -z "\$SORTIE_RESTART_AT" ] || echo "\$SORTIE_RESTART_AT" > "\$SORTIE_STUB/started_at"
 [ "\$2" != restart ] || [ -z "\$FAIL_RESTART" ] || [ "\$3" != "\$FAIL_RESTART" ]
 EOF
 # A stubbed Sortie, as curl: its state is files in $SORTIE_STUB (running,
@@ -37,7 +39,11 @@ EOF
 # queue as retries, logged to retries, and dispatches them like any story.
 # stage0.sh's stub logs each restart of Sortie to restarts; as Sortie
 # re-adopts the runs its workers hold, a restart leaves the running runs
-# running.
+# running. The state names when Sortie started (started_at, which a
+# restart sets to SORTIE_RESTART_AT) and, with a jobs file of
+# "IDENTIFIER STARTED_AT" lines, each running job and when it started;
+# it has polled since it started unless unpolled; with down, Sortie does
+# not answer.
 cat > "$tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 s=$SORTIE_STUB method=GET url='' auth=''
@@ -64,9 +70,17 @@ case "$method $path" in
       echo $(( $(n running) - $(n lost) )) > "$s/running"; echo $(( $(n queued) + $(n lost) )) > "$s/queued"
       echo "$(n lost)" >> "$s/retries"; rm -f "$s/lost"
     fi
+    [[ ! -e $s/down ]] || exit 7
     dispatch
     paused=false; [[ -e $s/paused ]] && paused=true
-    printf '{"running": [%s], "dispatch_paused": %s}\n' "$(seq -s, 1 "$(n running)")" "$paused" ;;
+    running=$(seq -s, 1 "$(n running)")
+    if [[ -e $s/jobs ]]; then
+      running=$(awk '{ printf "%s{\"issue_identifier\": \"%s\", \"started_at\": \"%s\"}", (NR > 1 ? ", " : ""), $1, $2 }' "$s/jobs")
+    fi
+    started=$(cat "$s/started_at" 2> /dev/null || echo 2026-11-05T09:00:00Z) polled=null
+    [[ -e $s/unpolled ]] || polled="\"$started\""
+    printf '{"started_at": "%s", "running": [%s], "dispatch_paused": %s, "health": {"poll": {"checked_at": %s}}}\n' \
+      "$started" "$running" "$paused" "$polled" ;;
   "POST /api/v1/dispatch/pause"|"POST /api/v1/dispatch/resume")
     [[ $auth == "Authorization: Bearer control" ]] || exit 22
     echo "${path##*/}" >> "$s/log"
@@ -100,7 +114,8 @@ restarts() { # restarts NAME N: stage0.sh restarted Sortie N times
 setup() {
   rm -rf "$tmp/remote" "$tmp/up" "$STAGE0_LIVE_KIT" "$tmp/calls" "$STAGE0_HOME/deploy.failed" "$STAGE0_HOME/deploy-workbench.at" \
     "$tmp/sremote" "$tmp/sup" "$tmp/sortie" "$STAGE0_HOME/deploy-sortie.failed" "$STAGE0_HOME/dispatch.paused" "$tmp/profile" \
-    "$tmp/failed-once" "$STAGE0_HOME/started" "$STAGE0_HOME/deploy-state.json" "$STAGE0_HOME/sortie.commit"
+    "$tmp/failed-once" "$STAGE0_HOME/started" "$STAGE0_HOME/deploy-state.json" "$STAGE0_HOME/sortie.commit" \
+    "$STAGE0_HOME/nono" "$STAGE0_HOME/sortie"
   sortie 0
   g init -q --bare "$tmp/remote"
   g clone -q "$tmp/remote" "$tmp/up" 2> /dev/null
@@ -124,6 +139,21 @@ if [ "\$STAGE0_PROFILE" = worker ]; then deploy_sortie_retired; else deploy_sort
 . "$KIT/unit-restart.sh"
 d=\$(cd "\$(dirname "\$0")" && pwd)
 if [ -e "\$d/gate.conf" ]; then restart_changed ortus-stage0-egress-gate.service "\$d/gate.conf" || [ -n "\$IGNORE_RESTART" ] || exit 1; fi
+# A kit with nono's profile rolls it out as the real stage0.sh does
+# (nono-rollout.sh): the profile staged, Sortie restarted on the rendered
+# workflow (rendered at WORKFLOW_AT), the restart recorded, nono narrowed
+# if it may be, and both nonos restarted when what they run changed.
+if [ "\$STAGE0_PROFILE" != worker ] && [ -e "\$d/../../control-plane/nono/egress-profile.json" ]; then
+  . "$KIT/nono-rollout.sh"
+  root=\$(cd "\$d/../.." && pwd) wf=\$STAGE0_HOME/sortie/WORKFLOW.md
+  mkdir -p "\$STAGE0_HOME/sortie"; cp "\$d/WORKFLOW.md" "\$wf"; touch -d "\${WORKFLOW_AT:-2026-11-05T09:59:58Z}" "\$wf"
+  nono_profile_stage "\$root/control-plane/nono/egress-profile.json" "\$root" "\${STAGE0_KIT_FROM:-}" || exit 1
+  systemctl --user restart ortus-stage0-sortie.service
+  nono_rollout_mark "\$wf"
+  nono_narrow "\$wf"
+  nono_restart ortus-stage0-nono.service "\$(nono_profile)" || exit 1
+  nono_restart ortus-stage0-nono-live-proof.service "\$(nono_profile)" || exit 1
+fi
 EOF
   chmod +x "$tmp/up/dev/stage0/stage0.sh"
   echo 1 > "$tmp/up/workbench/app"; echo 1 > "$tmp/up/docs/x"; echo 1 > "$tmp/up/dev/stage0/units"; echo 1 > "$tmp/up/worker-daemon/x"
@@ -413,6 +443,111 @@ else echo "FAIL: unreachable taichi: $(cat "$tmp/err")"; failed=1; fi
 deployed "and p1's own deploy is applied anyway" succeeded main main level
 mv "$tmp/taichi.away" "$tmp/taichi"
 deploy_host_remove taichi; rm -f "$tmp/ssh"
+
+# A rollout that moves hosts from nono to the offer's policy (spec store
+# agent-platform/supervisor-autonomy, "A rollout narrows egress only after
+# the offers carry the new hosts"; nono-rollout.sh): the kit before allows
+# the harness hosts in nono's profile, the merge takes them out and offers
+# them in WORKFLOW.md. Sortie restarts on that workflow first; nono keeps
+# the full list until the state API shows a Sortie started on it, polled
+# since, and no running job started before it.
+harness=(models.opencode.ai registry.npmjs.org codeload.github.com '*.githubusercontent.com')
+nono_up="systemctl --user restart ortus-stage0-nono.service;systemctl --user restart ortus-stage0-nono-live-proof.service;"
+sortie_up="systemctl --user restart ortus-stage0-sortie.service;"
+force=$STAGE0_HOME/nono/egress-profile.json
+# rollout_setup: the kit before, live and run once, so nono runs its profile.
+rollout_setup() {
+  setup
+  mkdir -p "$tmp/up/control-plane/nono"
+  python3 - "$KIT/../../control-plane/nono/egress-profile.json" "${harness[@]}" > "$tmp/up/control-plane/nono/egress-profile.json" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+p["network"]["allow_domain"] += sys.argv[2:]
+print(json.dumps(p, indent=2))
+PY
+  echo "egress: none" > "$tmp/up/dev/stage0/WORKFLOW.md"
+  g -C "$tmp/up" add -A; g -C "$tmp/up" commit -qm before; g -C "$tmp/up" push -q origin main
+  g -C "$STAGE0_LIVE_KIT" pull -q
+  STAGE0_KIT_FROM='' SORTIE_RESTART_AT=2026-11-05T09:00:00Z WORKFLOW_AT=2026-11-05T08:59:00Z "$tmp/live/dev/stage0/stage0.sh" 2> /dev/null
+  rm -f "$tmp/calls" "$SORTIE_STUB/requests"
+}
+# rollout_merge: the merge that cuts nono to the credential hosts.
+rollout_merge() {
+  cp "$KIT/../../control-plane/nono/egress-profile.json" "$tmp/up/control-plane/nono/egress-profile.json"
+  printf 'egress:\n%s\n' "$(printf '  - %s\n' "${harness[@]}")" > "$tmp/up/dev/stage0/WORKFLOW.md"
+  g -C "$tmp/up" commit -qam narrow; g -C "$tmp/up" push -q origin main
+}
+# allows NAME HOSTS...: the profile in force allows exactly HOSTS.
+allows() {
+  local got want
+  got=$(python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["network"]["allow_domain"])))' "$force")
+  want=$(printf '%s\n' "${@:2}" | LC_ALL=C sort | paste -sd' ')
+  got=$(tr ' ' '\n' <<< "$got" | LC_ALL=C sort | paste -sd' ')
+  if [[ $got == "$want" ]]; then echo "ok: $1"; else echo "FAIL: $1: nono allows '$got', want '$want'"; failed=1; fi
+}
+credential_hosts=(api.anthropic.com api.github.com)
+full=("${credential_hosts[@]}" "${harness[@]}")
+tick() { rm -f "$tmp/calls"; run; }
+export SORTIE_RESTART_AT=2026-11-05T10:00:00Z
+
+# The ONS-122 case: dispatched 4 s before Sortie restarted on the workflow
+# that offers the harness hosts, so its offer has none of them.
+rollout_setup; allows "rollout: before the merge nono runs the full list" "${full[@]}"
+echo "ONS-122 2026-11-05T09:59:56Z" > "$SORTIE_STUB/jobs"
+rollout_merge; run
+check "rollout: the merge restarts Sortie on the new workflow, and leaves nono as it is" main "stage0.sh;$sortie_up"
+allows "rollout: nono keeps the harness hosts while ONS-122, dispatched 4 s before the restart, runs" "${full[@]}"
+grep -q 'ONS-122, started 2026-11-05T09:59:56Z holds an offer from before' "$tmp/err" \
+  && echo "ok: rollout: and says which job it waits for" || { echo "FAIL: rollout: $(cat "$tmp/err")"; failed=1; }
+deployed "rollout: the deploy is applied while nono waits" succeeded main main level
+echo "ONS-122 2026-11-05T09:59:56Z" > "$SORTIE_STUB/jobs"; echo "ONS-140 2026-11-05T10:00:30Z" >> "$SORTIE_STUB/jobs"
+tick; check "rollout: a tick while ONS-122 runs, beside a job dispatched after the restart, restarts nothing" main ""
+allows "rollout: and nono keeps the full list" "${full[@]}"
+echo "ONS-140 2026-11-05T10:00:30Z" > "$SORTIE_STUB/jobs"
+tick; check "rollout: the first tick after ONS-122 ends restarts both nonos" main "$nono_up"
+allows "rollout: onto the credential hosts alone" "${credential_hosts[@]}"
+if cmp -s "$force" "$tmp/up/control-plane/nono/egress-profile.json" && [[ ! -e $STAGE0_HOME/nono/egress-profile.next.json ]]; then
+  echo "ok: rollout: the kit's profile is in force and nothing waits"
+else echo "FAIL: rollout: the profile in force is not the kit's"; failed=1; fi
+rm -f "$SORTIE_STUB/requests"; tick; check "rollout: the next tick restarts nothing" main ""
+[[ ! -s $SORTIE_STUB/requests ]] && echo "ok: rollout: and asks Sortie nothing" || { echo "FAIL: rollout: asked $(cat "$SORTIE_STUB/requests")"; failed=1; }
+rm -f "$tmp/calls"; "$tmp/live/dev/stage0/stage0.sh" 2> /dev/null
+check "rollout: a second stage0.sh changes nothing of nono" main "stage0.sh;$sortie_up"
+allows "rollout: and nono still serves the credential hosts alone" "${credential_hosts[@]}"
+
+# No job running at the restart: nono narrows in the same deploy, after
+# Sortie's restart.
+rollout_setup; rollout_merge; run
+check "rollout: with no job running, Sortie restarts first, then both nonos" main "stage0.sh;$sortie_up$nono_up"
+allows "rollout: onto the credential hosts" "${credential_hosts[@]}"
+
+# Sortie that has not restarted on the workflow: one started before it was
+# rendered, one that does not answer, one that has not polled since its
+# start and so may not have re-adopted its runs yet.
+rollout_setup; rollout_merge; SORTIE_RESTART_AT=2026-11-05T09:30:00Z run
+allows "rollout: a Sortie started before the workflow was rendered keeps nono's full list" "${full[@]}"
+tick; allows "rollout: at each tick" "${full[@]}"
+rollout_setup; touch "$SORTIE_STUB/down"; rollout_merge; run
+allows "rollout: a Sortie that does not answer keeps nono's full list" "${full[@]}"
+rm "$SORTIE_STUB/down"; tick; check "rollout: and once it answers, with no job, nono narrows" main "$nono_up"
+allows "rollout: to the credential hosts" "${credential_hosts[@]}"
+rollout_setup; touch "$SORTIE_STUB/unpolled"; rollout_merge; run
+allows "rollout: a Sortie that has not polled since its start keeps nono's full list" "${full[@]}"
+grep -q 'has not polled since it started' "$tmp/err" && echo "ok: rollout: and says so" || { echo "FAIL: rollout unpolled: $(cat "$tmp/err")"; failed=1; }
+rm "$SORTIE_STUB/unpolled"; tick; allows "rollout: until it has" "${credential_hosts[@]}"
+
+# A change that only adds hosts to nono is in force at once.
+rollout_setup; python3 - "$tmp/up/control-plane/nono/egress-profile.json" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1])); p["network"]["allow_domain"].append("example.org")
+json.dump(p, open(sys.argv[1], "w"), indent=2)
+PY
+g -C "$tmp/up" commit -qam add; g -C "$tmp/up" push -q origin main
+echo "ONS-122 2026-11-05T09:59:56Z" > "$SORTIE_STUB/jobs"; run
+allows "rollout: a change that adds a host is in force at once, whatever runs" "${full[@]}" example.org
+check "rollout: and restarts nono with it" main "stage0.sh;$sortie_up$nono_up"
+rm -f "$SORTIE_STUB/jobs"
+unset SORTIE_RESTART_AT
 
 # One run at a time: deploy.sh waits for a stage0.sh, and stage0.sh for it.
 setup; merge dev/stage0/units; exec 8> "$STAGE0_HOME/stage0.lock"; flock 8

@@ -232,10 +232,14 @@ dispatch:
 # plane's CA (control-plane/, design D18); the stage-1 edge and its tunnels
 # are gone. Pomerium names the worker to Sortie from its certificate. The
 # flows are its routes; egress is the egress gate behind its egress route,
-# then nono on p1, which holds the credentials and allows only the hosts
-# control-plane/nono/egress-profile.json lists, for every repository.
-# The remote kind takes no allow_hosts and no pass_env: the hosts are nono's,
-# and IS_SANDBOX is in each worker image's env (worker-config.sh). The hooks
+# then nono on p1, which holds the credentials and allows only their hosts
+# (control-plane/nono/egress-profile.json). Every other host is in the
+# offer's policy, which the worker's machine reaches directly: the harness's
+# hosts, declared once below (egress), and the repository's own, from its
+# .sortie/egress.yaml on its base branch, which Sortie reads; the kit reads
+# no repository's checkout for them and keeps no repository's hosts.
+# The remote kind takes no allow_hosts and no pass_env: IS_SANDBOX is in
+# each worker image's env (worker-config.sh). The hooks
 # are gone too (above). acp-broker on p1 carries each session, so the
 # workbench can watch and steer it.
 environment:
@@ -261,6 +265,20 @@ environment:
       # its result on the pull request and opens issues with it (README.md
       # "Live proofs"). Git over HTTPS gets no placeholder: Sortie pushes.
       - {name: github_api, env: SORTIE_GITHUB_TOKEN, hosts: [api.github.com]}
+    # The hosts the agent harness reaches in every job, whatever its
+    # repository, measured from nono's records while it allowed them: the
+    # worker allows each directly, and its machine's refusals are in
+    # smolvm's events (the worker daemon's state_dir/refusals). A host only
+    # one repository's jobs need belongs in that repository's
+    # .sortie/egress.yaml, never here.
+    egress:
+      version: 1
+      hosts:
+        - {host: models.opencode.ai, reason: "opencode reads its model catalogue at start"}
+        - {host: registry.npmjs.org, reason: "opencode installs its plugins and claude-agent-acp's packages from npm"}
+        - {host: codeload.github.com, reason: "opencode and npm fetch packages GitHub serves as tarballs"}
+        - {host: "*.githubusercontent.com", reason: "opencode and npm download release assets and raw files from GitHub"}
+        - {host: mcp.firecrawl.dev, reason: "opencode's websearch calls Firecrawl's keyless MCP (pack/opencode.json)"}
     # A story runs in the repository its plan node names (the Huly label
     # sortie-repository:<name>), else in sortie. Every one is dispatched here:
     # no other Sortie polls the project.

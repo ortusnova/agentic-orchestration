@@ -78,6 +78,12 @@ fi
 LIVE=$STAGE0_HOME/kit
 if [[ ${STAGE0_KIT_FROM_CHECKOUT:-} != 1 && $ROOT != "$LIVE" ]]; then
   git -C "$ROOT" fetch -q origin main
+  # The kit's commit that ran before this one, for nono's rollout
+  # (nono-rollout.sh); deploy.sh names it itself.
+  if [[ -z ${STAGE0_KIT_FROM:-} && -e $LIVE ]]; then
+    STAGE0_KIT_FROM=$(git -C "$LIVE" rev-parse HEAD 2> /dev/null || true)
+    export STAGE0_KIT_FROM
+  fi
   if [[ -e $LIVE ]]; then
     git -C "$LIVE" checkout -q --detach origin/main
   else
@@ -547,17 +553,26 @@ systemctl --user enable -q --now ortus-stage0-live-proofs.timer
 # runs, so each restarts only when what it runs changed (unit-restart.sh): a
 # kit change that leaves them as they are cuts no run's egress, stream or
 # machine.
+# nono runs the profile in force (nono-rollout.sh): a kit profile that
+# removes hosts waits, and nono keeps the full list, until Sortie runs the
+# workflow that offers them and no running job holds an earlier offer.
+# shellcheck source=nono-rollout.sh
+. "$KIT/nono-rollout.sh"
+nono_profile_stage "$ROOT/control-plane/nono/egress-profile.json" "$ROOT" "${STAGE0_KIT_FROM:-}" \
+  || die "could not put nono's profile in force ($STAGE0_HOME/nono)"
 systemctl --user restart ortus-stage0-sortie.service
 # The deploy state lists ortusnova/sortie at the commit of the Sortie that
 # runs now (deploy-state.sh).
 deploy_sortie_ran "$sortie_built"
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
+nono_rollout_mark "$STAGE0_HOME/sortie/WORKFLOW.md"
+nono_narrow "$STAGE0_HOME/sortie/WORKFLOW.md"
 nono_inputs=("$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" "$KIT/anthropic-token.py"
-  "$ROOT/control-plane/nono/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
-restart_changed ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stage0-nono.service"
+  "$(nono_profile)" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
+nono_restart ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stage0-nono.service"
 # The live-proof nono also runs stage0-live-proofs (its source, not its
 # binary, which Go stamps with the kit's commit) on egress-live-proof.json.
-restart_changed ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/egress-live-proof.json" \
+nono_restart ortus-stage0-nono-live-proof.service "${nono_inputs[@]}" "$KIT/egress-live-proof.json" \
   "$KIT/live-proofs" "$UNITS/ortus-stage0-nono-live-proof.service"
 # The egress gate and Pomerium: their source or image, their configuration
 # and their units, not the binaries, which Go stamps with the kit's commit.
