@@ -26,7 +26,7 @@
 #   - It runs under stage0.sh's lock: while a stage0.sh runs, it does
 #     nothing and tries again a minute later.
 #   - It writes this host's deploy state (deploy-state.sh), which Sortie's
-#     health check and merge-and-prove read: deploying while it runs,
+#     health check reads: deploying while it runs,
 #     succeeded once the new commit runs and every unit whose configuration
 #     changed has restarted (unit-restart.sh: the egress gate too, ONS-123),
 #     failed with its error when anything above failed, and at each tick

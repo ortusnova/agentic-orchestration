@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .errors import PlanLoadError
-from .validate import BESIDE, validate
+from .validate import validate
 
 EXIT_OK, EXIT_INVALID, EXIT_UNUSABLE = 0, 1, 2
 
@@ -22,29 +22,20 @@ def main(argv: list[str] | None = None) -> int:
     ):
         p = sub.add_parser(name, help=help_text)
         p.add_argument("--store", default=".", help="spec store root (default: current directory)")
-        p.add_argument("--kit", default=BESIDE,
-                       help="the kit's checkout, whose dev/stage0/checks/ post-deploy checks name "
-                            "(default: the one beside the store, if any)")
         p.add_argument("--json", action="store_true", help="print errors as JSON")
         if name == "graph":
             p.add_argument("-o", "--output", help="write the graph to this file instead of stdout")
     args = parser.parse_args(argv)
 
     try:
-        result = validate(Path(args.store), kit=args.kit)
+        result = validate(Path(args.store))
     except PlanLoadError as exc:
         print(f"planlib: {exc}", file=sys.stderr)
         return EXIT_UNUSABLE
 
-    warnings = [w.to_dict() for w in result.warnings]
-    if not args.json or args.command == "graph":
-        for w in result.warnings:
-            print(f"warning: {w}", file=sys.stderr)
-
     if result.errors:
         if args.json:
-            json.dump({"ok": False, "errors": [e.to_dict() for e in result.errors], "warnings": warnings},
-                      sys.stdout, indent=2)
+            json.dump({"ok": False, "errors": [e.to_dict() for e in result.errors]}, sys.stdout, indent=2)
             print()
         else:
             for e in result.errors:
@@ -58,10 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         summary = f"plan is valid: {epics} epic(s), {len(nodes) - epics} story(ies)"
         if result.milestones_declared:
             summary += f", {len(result.milestones)} milestone(s)"
-        if result.warnings:
-            summary += f", {len(result.warnings)} warning(s)"
         if args.json:
-            json.dump({"ok": True, "errors": [], "warnings": warnings, "summary": summary}, sys.stdout)
+            json.dump({"ok": True, "errors": [], "summary": summary}, sys.stdout)
             print()
         else:
             print(summary)

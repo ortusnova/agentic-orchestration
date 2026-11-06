@@ -302,7 +302,7 @@ func TestStage0_TheWorkbenchIsTheDefaultDestination(t *testing.T) {
 	want := []domain.EventType{domain.EventSessionStopped, domain.EventSessionFailed, domain.EventSessionEscalated,
 		domain.EventEscalationCIFailure, domain.EventEscalationReviewComments, domain.EventEscalationBotReview,
 		domain.EventEscalationMergeConflicts, domain.EventEscalationAutoMerge, domain.EventEscalationMergeCompletion,
-		domain.EventBudgetHeld, domain.EventStoryReverted}
+		domain.EventBudgetHeld}
 	for _, name := range stage0Workflows {
 		for _, kind := range []string{"", "slack", "webhook"} {
 			cfg := loadStage0(t, name)

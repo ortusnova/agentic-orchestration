@@ -324,15 +324,15 @@ sessions and 3,000,000 tokens a UTC day.
   merged change to it reaches the next session once the deploy has run
   `stage0.sh`. It states the rules: check the forge before believing a
   claim; merge only what passed its review and CI and whose live criteria
-  are proven, and a story whose only unmet criteria are after-deploy ones
-  only through merge-and-prove ([below](#each-hosts-deploy-state)); never rewrite a pushed commit or edit a started story; never
+  are proven, and never a story with an after-deploy live criterion, whose
+  pull request stays open (design D19); never rewrite a pushed commit or edit a started story; never
   merge a UI story before the operator approves it; ask a person for
   credentials, keys, approvals and decisions, one question per decision;
   record evidence with every action.
 - **Its token** is `supervisor-token`, which `stage0.sh` mints once.
   Sortie accepts it only on the supervisor's routes (answer, release,
   grant sessions, record a merge, start a fix run, draft, merge,
-  merge-and-prove, file an issue, request a live proof, hold, ask a person); every other control
+  file an issue, request a live proof, hold, ask a person); every other control
   route answers it `403`, and a request without `evidence` is refused.
 - **What it did.** `dev/stage0/supervisor.sh status` prints its status,
   its budget, its running or last session, the questions it raised that
@@ -564,9 +564,7 @@ that runs), `main` (the newest `origin/main` seen), `behind_since` (when
 `repositories` and `updated_at`.
 
 `repositories` lists every repository the host deploys (design D13), keyed
-by `owner/repo`, each `{"branch", "commit"}`, so merge-and-prove can wait on
-the hosts that deploy a pull request's repository and compare its merge
-commit there:
+by `owner/repo`, each `{"branch", "commit"}`:
 
 ```json
 "repositories": {
@@ -586,8 +584,8 @@ commit there:
   kit, whatever Sortie checkout its `stage0.env` still names; its
   `stage0.sh` drops the record a retired Sortie left.
 
-Sortie ignores `repositories` until its merge-and-prove reads it per
-repository; p1's copy of each worker host's file keeps it.
+Sortie does not read `repositories`; p1's copy of each worker host's file
+keeps it.
 
 - `deploying` while a deploy or an apply runs.
 - `succeeded`, Sortie's word for applied, only once the new commit runs and
@@ -609,28 +607,16 @@ old. On p1, `deploy.sh` then copies each worker host's file to
 .local/share/ortus-nova/stage0/deploy-state.json`; the destination is in
 `$STAGE0_HOME/deploy-hosts/<name>`, written by `worker-host.sh add`, or the
 worker's name for a worker host listed before). A host it cannot reach keeps
-its last copy, and the journal says so. `WORKFLOW.md` names p1's file and
-each copy in `merge_and_prove.hosts`, so Sortie's merge-and-prove waits on
-every host: a story whose only unmet criteria are after-deploy live
-criteria (the review records them `live-proof` with the reason
-`after-deploy`) is merged by the supervisor with
-`POST /api/v1/<identifier>/merge-and-prove`, never with `merge`
-(`supervisor.md`, rule 2); Sortie merges one at a time, waits until every
-host's deploy state names a commit that holds the merge, runs its live
-proof against the deployed hosts (the workflow's fix prompt has an
-after-deploy part for its job: no commit, and the result recorded as
-`sortie:live-proof proven <merge commit>` or `sortie:live-proof unproven
-<merge commit>`), and reverts the merge when no proven
-record lands within `merge_and_prove.deadline` (30 minutes); the story then
-returns to Todo with the reason, and `story.reverted` reaches the workbench
-and the operator's channel. `GET /api/v1/state` serves the story in flight
-and the queue as `merge_and_prove`, with the commit each host deployed.
+its last copy, and the journal says so. Nothing reads the copies since
+merge-and-prove was removed (design D19): a story whose only unmet
+criteria are after-deploy live criteria (the review records them
+`live-proof` with the reason `after-deploy`) is not merged, and its pull
+request stays open (`supervisor.md`, rule 2).
 
 `test-deploy.sh` checks what each kind of deploy writes (applied, failed,
 behind, a unit whose configuration changed, the apply) and p1's copy from a
 stubbed worker host; `test-review-gate.sh` checks the files with Sortie's
-own `deploystate`, `WORKFLOW.md`'s hosts with Sortie's loader, and a kit
-story through Sortie's merge-and-prove, proven in time and reverted.
+own `deploystate`, and `WORKFLOW.md`'s deploy state with Sortie's loader.
 
 An earlier kit paused Sortie's dispatch while a change waited, and recorded
 it in `$STAGE0_HOME/dispatch.paused`; `deploy.sh` resumes such a pause once
@@ -778,8 +764,7 @@ list; Sortie is not restarted. Then, on the host, `STAGE0_PROFILE=worker
 dev/stage0/stage0.sh` points its daemon at Pomerium with the certificate.
 Adding the same name again gives it a new certificate and drops the old one.
 `add` also records HOST in `$STAGE0_HOME/deploy-hosts/<name>`: p1's deploy
-copies the host's deploy state over that SSH every minute, and the next
-`stage0.sh` names it in the workflow's `merge_and_prove.hosts`
+copies the host's deploy state over that SSH every minute
 ([Each host's deploy state](#each-hosts-deploy-state)); `remove` drops both.
 p1's own worker gets its certificate from `stage0.sh`, in
 `$STAGE0_HOME/control-plane/workers/p1`.

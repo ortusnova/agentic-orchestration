@@ -27,15 +27,14 @@
 # What Sortie sends there: a run that stopped for a person (an agent's park,
 # a review that cannot settle a criterion), a question its broker escalates,
 # and the holds, merge failures, and pull requests still failing or
-# conflicting after their fix runs, that need a person; and a story Sortie
-# reverted after merge-and-prove found it unproven (story.reverted).
-NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts, story.reverted]'
+# conflicting after their fix runs, that need a person.
+NOTIFY_EVENTS='[session.stopped, session.escalated, budget.held, escalation.auto_merge, escalation.ci_failure, escalation.merge_conflicts]'
 
 # What Sortie sends the workbench (WORKFLOW.md lists the same): a run that
 # stopped for a person or failed, a question its broker escalates, every
-# escalation, a budget hold, and a story Sortie reverted.
+# escalation, and a budget hold.
 # shellcheck disable=SC2034 # the kit's tests check WORKFLOW.md against it
-WORKBENCH_EVENTS='[session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held, story.reverted]'
+WORKBENCH_EVENTS='[session.stopped, session.failed, session.escalated, escalation.ci_failure, escalation.review_comments, escalation.bot_review, escalation.merge_conflicts, escalation.auto_merge, escalation.merge_completion, budget.held]'
 
 # The port p1's workbench has on a worker host's loopback, through the
 # tunnel p1 opens to it (worker-host.sh); the same on every host.

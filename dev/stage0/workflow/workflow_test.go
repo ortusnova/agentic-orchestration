@@ -258,12 +258,12 @@ func TestTheReviewOpensThePreviewThroughTheFront(t *testing.T) {
 }
 
 // agent-platform/supervisor-autonomy#A change provable only after deploy is
-// merged, proven, or reverted by Sortie: the supervisor's rule 2 merges a
-// story whose only unmet criteria are after-deploy live criteria with
-// merge-and-prove, never with merge, and the review marks such a criterion
-// live-proof with the reason after-deploy. Sortie's side of both, with the
-// kit's texts, is sortie-test/stage0_deploy_test.go.
-func TestAnAfterDeployStoryGoesThroughMergeAndProve(t *testing.T) {
+// merged, proven, or reverted by Sortie, rejected by design D19: the
+// supervisor's rule 2 never merges a story with an after-deploy live
+// criterion, and the review marks such a criterion live-proof with the
+// reason after-deploy. Sortie's side of both, with the kit's texts, is
+// sortie-test/stage0_deploy_test.go.
+func TestAnAfterDeployStoryStaysOpen(t *testing.T) {
 	raw, err := os.ReadFile("../supervisor.md")
 	if err != nil {
 		t.Fatal(err)
@@ -274,11 +274,11 @@ func TestAnAfterDeployStoryGoesThroughMergeAndProve(t *testing.T) {
 	if start < 0 || end < start {
 		t.Fatal("supervisor.md has no rule 2")
 	}
-	if want := "A pull request whose only unmet criteria are after-deploy live criteria is merged with merge-and-prove once its other criteria are met and CI passes, never with merge; Sortie proves or reverts it."; !strings.Contains(supervisor[start:end], want) {
+	if want := "Never merge a pull request with one: leave it open, take no action on it, and do not ask a person to prove it by hand."; !strings.Contains(supervisor[start:end], want) {
 		t.Errorf("supervisor.md's rule 2 does not say %q", want)
 	}
-	if !strings.Contains(supervisor, "`POST /api/v1/<identifier>/merge-and-prove` instead, never with `merge`") {
-		t.Error("supervisor.md's actions do not name the merge-and-prove route")
+	if strings.Contains(supervisor, "merge-and-prove") {
+		t.Error("supervisor.md still names merge-and-prove")
 	}
 	b, err := os.ReadFile("../WORKFLOW.md")
 	if err != nil {
