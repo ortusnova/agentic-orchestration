@@ -155,13 +155,6 @@ export interface HomeNotification {
   unread: boolean;
   /** Its question is still open four hours or more after it was sent. */
   again: boolean;
-  /** "Needs a person" shows one entry per story, its latest notification: how many earlier ones it stands for,
-   * and the ids of them all, which are seen together. Absent from an older backend. */
-  earlier?: number;
-  ids?: number[];
-  /** When the workbench cleared it, as the story left the state that raised it, and why. Absent from an older backend. */
-  cleared_at?: number | null;
-  cleared_reason?: "merged" | "unparked" | "cancelled" | "question_closed" | null;
 }
 
 /** A notification's event in words: "stopped for a person", "CI still fails". */
@@ -248,8 +241,7 @@ export interface HomeDoc {
   faults?: HomeFault[];
   /** The stories whose supervisor lease ran out with no renewal, ranked after the questions; absent from an older backend. */
   expired_holds?: ExpiredHold[];
-  /** What the Sorties' notifications sent, one entry per story: its latest unread one, or one of an open question.
-   * Those of a story that moved on are cleared. Absent from an older backend. */
+  /** What the Sorties' notifications sent: every unread one, and every one of an open question. Absent from an older backend. */
   notifications?: HomeNotification[];
   needs_person: { total: number; questions?: number; faults?: number; expired_holds?: number; unread?: number; approve: number; approve_stories: number; spec: number; operator: number; nearest: string | null };
   timeline: { spans: Span[]; here: number; to_goal: number; axis: string } | null;

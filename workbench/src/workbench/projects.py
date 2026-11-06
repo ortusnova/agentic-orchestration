@@ -54,7 +54,7 @@ class ProjectRuntime:
                        previews=lambda: read_previews(config.previews_file),
                        alerts=(lambda qs: alerts.observe(project.slug, qs)) if alerts is not None else None,
                        history=RunHistory(RunWorkers(config.home / "run-workers" / f"{project.slug}.json")),
-                       notifications=registry, clock=clock)
+                       notifications=registry.notifications if registry is not None else None, clock=clock)
         self.deliveries.on_change = self.hub.rebuild
         self._own_github = github is None
         self.sessions = sessions

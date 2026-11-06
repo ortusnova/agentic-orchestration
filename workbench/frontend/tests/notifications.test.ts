@@ -128,29 +128,6 @@ describe("Scenario: A question on taichi's Sortie", () => {
   });
 });
 
-describe("Scenario: Six notifications for one story", () => {
-  it("shows one entry for the story, the latest, with the count of the earlier ones, seen together", async () => {
-    const seen: number[][] = [];
-    const latest = fromSortie(stopped, 6, { earlier: 5, ids: [1, 2, 3, 4, 5, 6] });
-    const other = fromSortie(ciFailure, 7, { identifier: "ONS-26", question: null, earlier: 0, ids: [7],
-      story: { key: "apw/other", label: "other", change: "apw", title: "Another", url: null } });
-    await home(doc([other, latest]), async (ids) => { seen.push(ids); return null; });
-    expect($$("[data-notifications] li.note-item").length).toBe(2);
-    const item = $("[data-notification='6']")!;
-    expect(item.dataset.earlier).toBe("5");
-    expect(text(item.querySelector(".earlier"))).toBe("5 earlier notifications");
-    expect($("[data-notification='7'] .earlier")).toBeNull();
-    // The count is of stories, not of webhooks.
-    expect(text($("[data-notifications] .ch"))).toContain("2 unread · 2 stories");
-    item.querySelector("button")!.click();
-    await settle();
-    expect(seen).toEqual([[1, 2, 3, 4, 5, 6]]);
-    $$("[data-notifications] .ch button")[0].click();
-    await settle();
-    expect(seen[1]).toEqual([7, 1, 2, 3, 4, 5, 6]);
-  });
-});
-
 describe("Scenario: Still open", () => {
   it("marks a notification whose question is still open after 4 hours", async () => {
     await home(doc([fromSortie(stopped, 1, { again: true, seen_at: PARKED_AT + 60, seen_by: "Ann Approver" })]));
