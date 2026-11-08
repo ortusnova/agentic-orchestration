@@ -2,14 +2,14 @@
 # installs, with acp-broker (one per planning session), the openspec CLI the
 # validator runs, git and cp-probe.
 # Build from the repository root: make -C control-plane images.
-FROM docker.io/library/node:24.22.1-bookworm@sha256:5630d96570d4ca4a8523fda3d169d0114554d0f48293e1ae3db6be7c79b42a17 AS frontend
+FROM docker.io/library/node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310 AS frontend
 WORKDIR /src/workbench/frontend
 COPY workbench/frontend/package.json workbench/frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY workbench/frontend/ ./
 RUN npx vite build --logLevel warn
 
-FROM docker.io/library/node:24.22.1-bookworm@sha256:5630d96570d4ca4a8523fda3d169d0114554d0f48293e1ae3db6be7c79b42a17 AS wheel
+FROM docker.io/library/node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310 AS wheel
 ENV UV_PYTHON_INSTALL_DIR=/opt/python UV_PYTHON_PREFERENCE=only-managed UV_LINK_MODE=copy
 RUN apt-get update && apt-get install -y --no-install-recommends python3-pip && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir --break-system-packages 'uv>=0.9'
@@ -23,7 +23,7 @@ RUN uv python install 3.12 \
  && uv pip install --python /opt/workbench/bin/python -r /tmp/requirements.txt \
  && uv pip install --python /opt/workbench/bin/python --no-deps dist/*.whl
 
-FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS go
+FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS go
 ENV CGO_ENABLED=0 GOWORK=off GOFLAGS=-trimpath
 WORKDIR /src
 COPY acp-broker/ acp-broker/
@@ -31,7 +31,7 @@ COPY control-plane/ control-plane/
 RUN cd acp-broker && go build -ldflags "-s -w" -o /out/acp-broker ./cmd/acp-broker
 RUN cd control-plane && go build -ldflags "-s -w" -o /out/cp-probe ./cmd/cp-probe
 
-FROM docker.io/library/node:24.22.1-bookworm@sha256:5630d96570d4ca4a8523fda3d169d0114554d0f48293e1ae3db6be7c79b42a17
+FROM docker.io/library/node:26.12.1-bookworm@sha256:3b764117159bda01d2396391e7789b6a9106af9729cfd001ef55e98557868310
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="workbench" \
       org.opencontainers.image.source="https://github.com/ortusnova/agentic-orchestration" \
