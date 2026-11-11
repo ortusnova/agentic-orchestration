@@ -355,7 +355,7 @@ services:
 
   # Huly's stores, reachable only on the internal network.
   huly-cockroach:
-    image: docker.io/cockroachdb/cockroach:latest-v24.3@sha256:c26f6eca2ce7ab783862cca4a88f6b8b0da006864e16109b1bb3e30d7670bab9
+    image: docker.io/cockroachdb/cockroach:latest-v26.1@sha256:e2d20dbf5873c74f725f521361f9d5a404050f03f0445d984800adb71089582e
     container_name: cp-huly-cockroach
     restart: unless-stopped
     command: ["start-single-node", "--insecure"]
