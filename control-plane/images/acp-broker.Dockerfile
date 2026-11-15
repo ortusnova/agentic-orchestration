@@ -1,7 +1,7 @@
 # acp-broker on its own. Sortie's and the workbench's images carry the same
 # broker, built from the same source, since each starts one per session.
 # Build from the repository root: make -C control-plane images.
-FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
+FROM docker.io/library/golang:1.27.0-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS build
 ENV CGO_ENABLED=0 GOWORK=off GOFLAGS=-trimpath
 WORKDIR /src
 COPY acp-broker/ acp-broker/
