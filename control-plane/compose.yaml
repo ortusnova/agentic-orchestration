@@ -116,7 +116,7 @@ services:
   # The only door for worker hosts: mTLS against the control plane's CA,
   # one route per flow, rendered by cpctl from the worker list.
   pomerium:
-    image: docker.io/pomerium/pomerium:v0.33.6@sha256:58354b2f45c01dbd8e34b54c1a8db2af07f834cb215f5e8b1cef60f871bce968
+    image: docker.io/pomerium/pomerium:v0.34.0@sha256:3cab15c8c01c8efbaa3402194b613894548579719c7a61456b5b09bb072abb5e
     container_name: cp-pomerium
     restart: unless-stopped
     command: ["--config", "/pomerium/config.yaml"]
