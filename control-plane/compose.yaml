@@ -163,7 +163,7 @@ services:
   # standard error). Its standard output, which repeats its own proxy
   # credential, goes nowhere.
   nono:
-    image: ghcr.io/nolabs-ai/nono:0.81.0@sha256:e03c93e54feb9d7b1c91c96e1195595bcdd6892a23529cc10dc7dc690ce13c0f
+    image: ghcr.io/nolabs-ai/nono:0.82.0@sha256:a1b6d0f8ab477b640ff05f33718faee3096879df96b78e03c1bdfbcf3dc7bcfb
     container_name: cp-nono
     restart: unless-stopped
     stop_signal: SIGINT
