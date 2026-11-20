@@ -2,83 +2,43 @@
 
 ## Legend
 
-An example, cut from the `Session` and `Workstream` diagrams. It has every kind of line and line end:
-
-```mermaid
-erDiagram
-    Session {
-        SessionId id PK
-        WorkstreamId workstream_id FK
-        PersonId held_by FK "optional"
-        AgentRef agent
-        SessionState state
-        Usage usage "optional"
-        datetime started_at "optional"
-    }
-    Workstream {
-        PersonId[] participants FK
-    }
-    AgentRef {
-        string harness
-        string model
-    }
-    Usage {
-        int input_tokens "optional"
-    }
-    Session }o..|| Workstream : "workstream_id"
-    Session }o..o| Person : "held_by"
-    Workstream }o..o{ Person : "participants"
-    Session ||--|| AgentRef : "agent"
-    Session ||--o| Usage : "usage"
-```
-
-### Boxes
-
-| Shape | Meaning |
-|---|---|
-| Box with a list of fields | A model, drawn in full. In a record's own diagram, the record and every value object it contains. |
-| Box with a name only | Another record, drawn only to show the line to it. It has its own diagram below. |
-| Box colour | Nothing. Mermaid picks the colours. |
-
 ### Lines
 
-| Line | Meaning |
-|---|---|
-| Solid | Contains: one model holds the other in the field the label names. The other is a value object, stored only inside its owner, so the owner's end always shows two bars: exactly one owner. |
-| Dashed | Refers to by ID: the model with the field the label names (marked `FK`) holds the other record's ID. |
+| Symbol | Name | Meaning |
+|---|---|---|
+| <img src="legend/line-contains.svg" alt="Contains"> | **Contains** | A holds B inside it, in the field the label names. B is a value object: it has no ID and is stored only as part of A. |
+| <img src="legend/line-refers.svg" alt="Refers to by ID"> | **Refers to by ID** | A has a field, marked `FK`, that holds the ID of record B. The label names the field. |
 
 ### Line ends
 
-| End (as drawn) | Meaning |
-|---|---|
-| Two bars | exactly one |
-| A circle and a bar | zero or one: the field is optional |
-| A circle and a crow's foot | zero or many: the field is a list, or many records may hold the same ID |
+| Symbol | Name | Meaning |
+|---|---|---|
+| <img src="legend/end-one.svg" alt="Exactly one"> | **Exactly one** | Each A has exactly one B. The field is required. |
+| <img src="legend/end-zero-or-one.svg" alt="Zero or one"> | **Zero or one** | Each A has at most one B. The field is optional. |
+| <img src="legend/end-zero-or-many.svg" alt="Zero or many"> | **Zero or many** | Each A has any number of B: the field is a list, or many A hold the same B. |
+| <img src="legend/example.svg" alt="Reading both ends"> | **Reading both ends** | Read each end from the box at the other end. Each `Session` has exactly one `Workstream`, in `workstream_id`. Each `Workstream` has zero or many `Session`s. |
 
-### Reading a line
+### Boxes
 
-| Example | Reads as |
-|---|---|
-| Dashed from `Session` to `Workstream`, labelled `workstream_id`: two bars at `Workstream`, a circle and a crow's foot at `Session` | Each session refers to exactly one workstream, in `workstream_id`. A workstream has zero or many sessions. The end next to a box says how many of that box the box at the other end has. |
-| Solid from `Session` to `Usage`, labelled `usage`: two bars at `Session`, a circle and a bar at `Usage` | A session contains zero or one `Usage`, in `usage`. Each `Usage` belongs to exactly one session. |
-| Dashed from `Workstream` to `Person`, labelled `participants`: a circle and a crow's foot at each end | A workstream refers to zero or many people, in the list `participants`. A person may be a participant in zero or many workstreams. |
+| Symbol | Name | Meaning |
+|---|---|---|
+| <img src="legend/box-full.svg" alt="Model, in full"> | **Model, in full** | A record or value object with all its fields. Each record has a diagram of its own. |
+| <img src="legend/box-name.svg" alt="Other record"> | **Other record** | Drawn by name only, to show a line to it. Its fields are in its own diagram. |
+| <img src="legend/box-colours.svg" alt="Box colour"> | **Box colour** | Means nothing. Mermaid picks the colours. |
 
 ### Fields
 
-| Column or type | Meaning |
-|---|---|
-| First column | The field's type. |
-| Second column | The field's name. |
-| `PK` | The record's own ID. |
-| `FK` | The ID of another record. A dashed line leads to it. |
-| `"optional"` | The field may be absent or null. A list is never marked: it may be empty. |
-| `SessionId`, `WorkstreamId`, ... | An ID of that record: `<prefix>_<ULID>`. Prefixes are in the table. |
-| `Type[]` | A list of `Type`. |
-| A capitalised type with no box, such as `SessionState` | An enum. Its values are in the schema. |
-| `A_B_C` | One of several models: `A`, `B`, or `C`. Each has a solid line. |
-| `datetime` | A point in time, always in UTC. |
-| `const` | A fixed value: the schema version, or the `kind` that tells union members apart. |
-| `string`, `int`, `float`, `bool` | As named. |
+| Symbol | Name | Meaning |
+|---|---|---|
+| <img src="legend/field-pk.svg" alt="Own ID"> | **Own ID** | The record's own ID. |
+| <img src="legend/field-fk.svg" alt="Reference"> | **Reference** | Holds another record's ID. A dashed line leads to that record. |
+| <img src="legend/field-optional.svg" alt="Optional"> | **Optional** | The field may be absent or null. |
+| <img src="legend/field-id-type.svg" alt="ID type"> | **ID type** | An ID of the named record, `<prefix>_<ULID>`. The prefixes are in the records table. |
+| <img src="legend/field-list.svg" alt="List"> | **List** | A list of the type before `[]`. A list may be empty, so it is never marked optional. |
+| <img src="legend/field-enum.svg" alt="Enum"> | **Enum** | A capitalised type with no box of its own. Its values are in the schema. |
+| <img src="legend/field-union.svg" alt="One of several"> | **One of several** | Types joined by `_`: the field holds one of those models. Each has a solid line. |
+| <img src="legend/field-datetime.svg" alt="Time"> | **Time** | A point in time, always in UTC. |
+| <img src="legend/field-const.svg" alt="Fixed value"> | **Fixed value** | Always the same value: the `kind` that tells the members of a union apart. |
 
 ## About this file
 

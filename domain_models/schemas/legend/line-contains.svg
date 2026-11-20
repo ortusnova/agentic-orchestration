@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="44" viewBox="0 0 260 44">
+<style>
+  text { font-family: Recursive Variable, arial, sans-serif; font-size: 13px; fill: #000; }
+  marker path, marker circle { stroke: #000; stroke-width: 2; fill: none; }
+  marker circle { fill: #fff; }
+  .line { stroke: #000; stroke-width: 2; fill: none; }
+  .dashed { stroke-dasharray: 2 2; }
+  .box { fill: #fdf4ff; stroke: #e879f9; stroke-width: 1; }
+  .hi { fill: #fde68a; stroke: #e879f9; stroke-width: 1; }
+</style>
+<defs>
+  <marker id="oneEnd" refX="18" refY="9" markerWidth="18" markerHeight="18" orient="auto"
+    markerUnits="userSpaceOnUse"><path d="M3,0 L3,18 M9,0 L9,18"/></marker>
+  <marker id="oneStart" refX="0" refY="9" markerWidth="18" markerHeight="18" orient="auto"
+    markerUnits="userSpaceOnUse"><path d="M9,0 L9,18 M15,0 L15,18"/></marker>
+  <marker id="zeroOneEnd" refX="30" refY="9" markerWidth="30" markerHeight="18" orient="auto"
+    markerUnits="userSpaceOnUse"><circle cx="9" cy="9" r="6"/><path d="M21,0 L21,18"/></marker>
+  <marker id="zeroManyEnd" refX="39" refY="18" markerWidth="57" markerHeight="36" orient="auto"
+    markerUnits="userSpaceOnUse"><circle cx="9" cy="18" r="6"/><path d="M21,18 Q39,0 57,18 Q39,36 21,18"/></marker>
+  <marker id="zeroManyStart" refX="18" refY="18" markerWidth="57" markerHeight="36" orient="auto"
+    markerUnits="userSpaceOnUse"><circle cx="48" cy="18" r="6"/><path d="M0,18 Q18,0 36,18 Q18,36 0,18"/></marker>
+</defs>
+<path class="line" d="M51,22 L209,22"/><rect x="1" y="7" width="50" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="26" y="26" text-anchor="middle">A</text><rect x="209" y="7" width="50" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="234" y="26" text-anchor="middle">B</text>
+</svg>

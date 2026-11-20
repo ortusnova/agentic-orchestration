@@ -13,11 +13,12 @@ from pathlib import Path
 
 from pydantic.json_schema import models_json_schema
 
-from . import RECORDS, SCHEMA_VERSION, erd
+from . import RECORDS, SCHEMA_VERSION, erd, legend
 
 SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
 SCHEMA_PATH = SCHEMAS_DIR / "domain.schema.json"
 DIAGRAMS_PATH = SCHEMAS_DIR / "domain.erd.md"
+LEGEND_DIR = SCHEMAS_DIR / "legend"
 MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.esm.min.mjs"
 
 
@@ -42,14 +43,16 @@ def generate() -> str:
 def outputs() -> dict[Path, str]:
     """Every generated file, and its exact text."""
     schema = generate()
-    return {SCHEMA_PATH: schema, DIAGRAMS_PATH: erd.markdown(json.loads(schema))}
+    out = {SCHEMA_PATH: schema, DIAGRAMS_PATH: erd.markdown(json.loads(schema))}
+    out.update({LEGEND_DIR / name: svg for name, svg in legend.files().items()})
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args == ["write"]:
-        SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
         for path, text in outputs().items():
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text)
             print(f"wrote {path}")
         return 0
