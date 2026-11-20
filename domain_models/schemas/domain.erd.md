@@ -75,6 +75,10 @@ Value objects: `AgentRef`, `Approval`, `CapabilityManifest`, `ComponentActor`, `
 Records only. A line joins a record to a record it belongs to: a required ID field holding one ID. A record with no line out is a root. Every line here is a reference by ID, even where Mermaid draws one solid at a crossing.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Person
     Project
@@ -115,6 +119,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Person {
         ⁠PK id "PersonId"
@@ -135,6 +143,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Project {
         ⁠PK id "ProjectId"
@@ -158,6 +170,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Membership {
         ⁠PK id "MembershipId"
@@ -174,6 +190,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Epic {
         ⁠PK id "EpicId"
@@ -192,6 +212,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Workstream {
         ⁠PK id "WorkstreamId"
@@ -257,6 +281,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     WorkstreamEvent {
         ⁠PK id "WorkstreamEventId"
@@ -302,6 +330,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Ticket {
         ⁠PK id "TicketId"
@@ -333,6 +365,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Schedule {
         ⁠PK id "ScheduleId"
@@ -354,6 +390,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Session {
         ⁠PK id "SessionId"
@@ -396,6 +436,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     WorkstreamVm {
         ⁠PK id "WorkstreamVmId"
@@ -446,6 +490,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Worker {
         ⁠PK id "WorkerId"
@@ -474,6 +522,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     Convo {
         ⁠PK id "ConvoId"
@@ -503,6 +555,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     ConvoLink {
         ⁠PK id "ConvoLinkId"
@@ -545,6 +601,10 @@ erDiagram
 Solid lines embed a value object; dashed lines refer to another record by ID.
 
 ```mermaid
+---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
 erDiagram
     ConvoEvent {
         ⁠PK id "ConvoEventId"

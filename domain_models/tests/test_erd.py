@@ -120,3 +120,11 @@ def test_rows_read_key_name_python_type():
     diagram = erd.record_diagram(DOMAIN, "Workstream")
     assert '        \u2060PK id "WorkstreamId"' in diagram
     assert '        \u2060 priority "int = 2"' in diagram
+
+
+def test_every_diagram_bolds_the_model_names():
+    doc = erd.markdown(json.loads(generate()))
+    blocks = doc.split("```mermaid\n")[1:]
+    assert len(blocks) == 1 + len(DOMAIN.records)
+    assert all(b.startswith(erd.DIAGRAM_CONFIG) for b in blocks)
+    assert "font-weight: bold" in erd.DIAGRAM_CONFIG

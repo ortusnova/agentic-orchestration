@@ -20,5 +20,5 @@
   <marker id="zeroManyStart" refX="18" refY="18" markerWidth="57" markerHeight="36" orient="auto"
     markerUnits="userSpaceOnUse"><circle cx="48" cy="18" r="6"/><path d="M0,18 Q18,0 36,18 Q18,36 0,18"/></marker>
 </defs>
-<path class="line dashed" d="M91,36 L289,36" marker-start="url(#zeroManyStart)" marker-end="url(#oneEnd)"/><text x="190" y="15" text-anchor="middle">workstream_id</text><rect x="1" y="21" width="90" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="46" y="40" text-anchor="middle">Session</text><rect x="289" y="21" width="110" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="344" y="40" text-anchor="middle">Workstream</text>
+<path class="line dashed" d="M91,36 L289,36" marker-start="url(#zeroManyStart)" marker-end="url(#oneEnd)"/><text x="190" y="15" text-anchor="middle">workstream_id</text><rect x="1" y="21" width="90" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="46" y="40" text-anchor="middle" font-weight="bold">Session</text><rect x="289" y="21" width="110" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="344" y="40" text-anchor="middle" font-weight="bold">Workstream</text>
 </svg>

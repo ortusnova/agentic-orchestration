@@ -51,7 +51,7 @@ def _svg(width: int, height: int, body: str) -> str:
 def _box(x: int, y: int, w: int, h: int, label: str, fill: str = BOX_FILL) -> str:
     return (
         f'<rect x="{x}" y="{y}" width="{w}" height="{h}" style="fill:{fill};stroke:{BOX_STROKE}"/>'
-        f'<text x="{x + w // 2}" y="{y + h // 2 + 4}" text-anchor="middle">{escape(label)}</text>'
+        f'<text x="{x + w // 2}" y="{y + h // 2 + 4}" text-anchor="middle" font-weight="bold">{escape(label)}</text>'
     )
 
 

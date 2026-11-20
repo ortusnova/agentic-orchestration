@@ -251,8 +251,21 @@ def record_diagram(domain: Domain, record: str) -> str:
     return "\n".join(lines)
 
 
+DIAGRAM_CONFIG = """---
+config:
+  themeCSS: "g.label.name * { font-weight: bold; }"
+---
+"""
+"""Front matter on every diagram: the model name at the top of each box is bold. A renderer that ignores
+``themeCSS`` still draws the diagram, with the name in normal weight."""
+
+
 def _diagrams(domain: Domain) -> list[tuple[str, str, str]]:
-    """Every diagram, as (title, intro, Mermaid source)."""
+    """Every diagram, as (title, intro, Mermaid source with its front matter)."""
+    return [(title, intro, DIAGRAM_CONFIG + source) for title, intro, source in _plain_diagrams(domain)]
+
+
+def _plain_diagrams(domain: Domain) -> list[tuple[str, str, str]]:
     out = [
         (
             "Overview",

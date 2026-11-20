@@ -20,5 +20,5 @@
   <marker id="zeroManyStart" refX="18" refY="18" markerWidth="57" markerHeight="36" orient="auto"
     markerUnits="userSpaceOnUse"><circle cx="48" cy="18" r="6"/><path d="M0,18 Q18,0 36,18 Q18,36 0,18"/></marker>
 </defs>
-<rect x="1" y="1" width="110" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="56" y="20" text-anchor="middle">Workstream</text>
+<rect x="1" y="1" width="110" height="30" style="fill:#fdf4ff;stroke:#e879f9"/><text x="56" y="20" text-anchor="middle" font-weight="bold">Workstream</text>
 </svg>
