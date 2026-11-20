@@ -1,0 +1,2281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agentic-orchestration:domain:v1",
+  "title": "Domain models",
+  "description": "Generated from the domain_models package. Do not edit: change the models and run `make -C domain_models schemas`.",
+  "x-schema-version": 1,
+  "x-records": [
+    "Person",
+    "Project",
+    "Membership",
+    "Epic",
+    "Workstream",
+    "WorkstreamEvent",
+    "Ticket",
+    "Schedule",
+    "Session",
+    "WorkstreamVm",
+    "Worker",
+    "Convo",
+    "ConvoLink",
+    "ConvoEvent"
+  ],
+  "$defs": {
+    "AgentRef": {
+      "additionalProperties": false,
+      "properties": {
+        "harness": {
+          "description": "The ACP agent, for example ``opencode`` or ``claude-code``.",
+          "minLength": 1,
+          "title": "Harness",
+          "type": "string"
+        },
+        "model": {
+          "description": "The model it runs, for example ``anthropic/claude-opus-5-5``.",
+          "minLength": 1,
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "harness",
+        "model"
+      ],
+      "title": "AgentRef",
+      "type": "object"
+    },
+    "Approval": {
+      "additionalProperties": false,
+      "description": "PROVISIONAL: who approves what is open (review item 8).",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/ApprovalState"
+        },
+        "by": {
+          "anyOf": [
+            {
+              "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "By"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "At"
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the approval covers: for a planned workstream, the story digest approved.",
+          "title": "Digest"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "title": "Approval",
+      "type": "object"
+    },
+    "ApprovalState": {
+      "enum": [
+        "not_required",
+        "pending",
+        "approved",
+        "rejected"
+      ],
+      "title": "ApprovalState",
+      "type": "string"
+    },
+    "CapabilityManifest": {
+      "additionalProperties": false,
+      "description": "Everything a workstream VM may do. What it is granted equals this, and nothing more.",
+      "properties": {
+        "network": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NetworkRule"
+          },
+          "title": "Network",
+          "type": "array"
+        },
+        "mounts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ResourceMount"
+          },
+          "title": "Mounts",
+          "type": "array"
+        },
+        "kvm": {
+          "default": false,
+          "title": "Kvm",
+          "type": "boolean"
+        },
+        "resources": {
+          "$ref": "#/$defs/Resources"
+        }
+      },
+      "required": [
+        "resources"
+      ],
+      "title": "CapabilityManifest",
+      "type": "object"
+    },
+    "Component": {
+      "description": "The parts of the system that act on their own.",
+      "enum": [
+        "workbench",
+        "router",
+        "worker",
+        "watchdog",
+        "tracker_sync",
+        "scheduler"
+      ],
+      "title": "Component",
+      "type": "string"
+    },
+    "ComponentActor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "component",
+          "default": "component",
+          "title": "Kind",
+          "type": "string"
+        },
+        "component": {
+          "$ref": "#/$defs/Component"
+        }
+      },
+      "required": [
+        "component"
+      ],
+      "title": "ComponentActor",
+      "type": "object"
+    },
+    "Convo": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^cv_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConvoKind"
+        },
+        "system": {
+          "description": "Where it lives, for example ``github``, ``slack``, ``huly``, ``workbench``.",
+          "minLength": 1,
+          "title": "System",
+          "type": "string"
+        },
+        "external_id": {
+          "description": "Its stable ID in that system.",
+          "minLength": 1,
+          "title": "External Id",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "pull_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PullRequestInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set exactly for a pull request."
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "kind",
+        "system",
+        "external_id"
+      ],
+      "title": "Convo",
+      "type": "object"
+    },
+    "ConvoEvent": {
+      "additionalProperties": false,
+      "description": "One event in a convo. Append-only.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^cve_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "convo_id": {
+          "pattern": "^cv_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Convo Id",
+          "type": "string"
+        },
+        "at": {
+          "description": "When it happened in its system.",
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConvoEventKind"
+        },
+        "author": {
+          "discriminator": {
+            "mapping": {
+              "component": "#/$defs/ComponentActor",
+              "external": "#/$defs/ExternalActor",
+              "person": "#/$defs/PersonActor",
+              "session": "#/$defs/SessionActor"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PersonActor"
+            },
+            {
+              "$ref": "#/$defs/ComponentActor"
+            },
+            {
+              "$ref": "#/$defs/SessionActor"
+            },
+            {
+              "$ref": "#/$defs/ExternalActor"
+            }
+          ],
+          "title": "Author"
+        },
+        "external_id": {
+          "description": "Its ID in the convo's system, so a second delivery is recognized.",
+          "minLength": 1,
+          "title": "External Id",
+          "type": "string"
+        },
+        "body": {
+          "default": "",
+          "description": "Untrusted: whatever its author wrote.",
+          "title": "Body",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "in_reply_to": {
+          "anyOf": [
+            {
+              "pattern": "^cve_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Reply To"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "convo_id",
+        "at",
+        "kind",
+        "author",
+        "external_id"
+      ],
+      "title": "ConvoEvent",
+      "type": "object"
+    },
+    "ConvoEventKind": {
+      "description": "PROVISIONAL: grows with the feedback loops (review item 10).",
+      "enum": [
+        "message",
+        "review_comment",
+        "review_verdict",
+        "ci_result",
+        "state_change",
+        "label_change"
+      ],
+      "title": "ConvoEventKind",
+      "type": "string"
+    },
+    "ConvoKind": {
+      "enum": [
+        "pull_request",
+        "tracker_issue",
+        "chat_thread",
+        "email_thread",
+        "workbench"
+      ],
+      "title": "ConvoKind",
+      "type": "string"
+    },
+    "ConvoLink": {
+      "additionalProperties": false,
+      "description": "Attaches one convo to one workstream. Follow-up events in the convo go to every attached workstream.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^cvl_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "convo_id": {
+          "pattern": "^cv_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Convo Id",
+          "type": "string"
+        },
+        "workstream_id": {
+          "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Workstream Id",
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/ConvoLinkReason"
+        },
+        "linked_by": {
+          "discriminator": {
+            "mapping": {
+              "component": "#/$defs/ComponentActor",
+              "external": "#/$defs/ExternalActor",
+              "person": "#/$defs/PersonActor",
+              "session": "#/$defs/SessionActor"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PersonActor"
+            },
+            {
+              "$ref": "#/$defs/ComponentActor"
+            },
+            {
+              "$ref": "#/$defs/SessionActor"
+            },
+            {
+              "$ref": "#/$defs/ExternalActor"
+            }
+          ],
+          "title": "Linked By"
+        },
+        "unlinked_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unlinked At"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "convo_id",
+        "workstream_id",
+        "reason",
+        "linked_by"
+      ],
+      "title": "ConvoLink",
+      "type": "object"
+    },
+    "ConvoLinkReason": {
+      "enum": [
+        "source",
+        "output",
+        "subscribed"
+      ],
+      "title": "ConvoLinkReason",
+      "type": "string"
+    },
+    "Epic": {
+      "additionalProperties": false,
+      "description": "Ties together the workstreams of one plan DAG. Never executed itself.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^ep_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "change": {
+          "description": "The OpenSpec change whose breakdown the epic's stories come from.",
+          "minLength": 1,
+          "title": "Change",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/EpicState"
+        },
+        "ticket_id": {
+          "anyOf": [
+            {
+              "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Its ticket, when epics are mirrored to a tracker.",
+          "title": "Ticket Id"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "change",
+        "title",
+        "state"
+      ],
+      "title": "Epic",
+      "type": "object"
+    },
+    "EpicState": {
+      "enum": [
+        "open",
+        "done",
+        "cancelled"
+      ],
+      "title": "EpicState",
+      "type": "string"
+    },
+    "ExternalActor": {
+      "additionalProperties": false,
+      "description": "Someone in another system the system cannot attribute to a person it knows.",
+      "properties": {
+        "kind": {
+          "const": "external",
+          "default": "external",
+          "title": "Kind",
+          "type": "string"
+        },
+        "system": {
+          "minLength": 1,
+          "title": "System",
+          "type": "string"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Handle"
+        }
+      },
+      "required": [
+        "system",
+        "subject"
+      ],
+      "title": "ExternalActor",
+      "type": "object"
+    },
+    "ExternalIdentity": {
+      "additionalProperties": false,
+      "description": "One account a person holds in another system, so events from that system can be attributed to them.",
+      "properties": {
+        "system": {
+          "description": "The system, for example ``oidc:https://idp.example``, ``github``, ``slack``, ``huly``.",
+          "minLength": 1,
+          "title": "System",
+          "type": "string"
+        },
+        "subject": {
+          "description": "The account's stable identifier in that system, not its display name.",
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "handle": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The name people see, for example a GitHub login. Informational; it may change.",
+          "title": "Handle"
+        }
+      },
+      "required": [
+        "system",
+        "subject"
+      ],
+      "title": "ExternalIdentity",
+      "type": "object"
+    },
+    "Forge": {
+      "enum": [
+        "github",
+        "gitea",
+        "gitlab"
+      ],
+      "title": "Forge",
+      "type": "string"
+    },
+    "ImageRef": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "digest": {
+          "description": "The content digest the VM started from. A name alone is never enough.",
+          "minLength": 1,
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "digest"
+      ],
+      "title": "ImageRef",
+      "type": "object"
+    },
+    "Membership": {
+      "additionalProperties": false,
+      "description": "One person's role in one project. A person has at most one membership per project.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^mbr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "person_id": {
+          "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Person Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ProjectRole"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "person_id",
+        "role"
+      ],
+      "title": "Membership",
+      "type": "object"
+    },
+    "MirrorOrigin": {
+      "enum": [
+        "imported",
+        "exported"
+      ],
+      "title": "MirrorOrigin",
+      "type": "string"
+    },
+    "NetworkRule": {
+      "additionalProperties": false,
+      "description": "One internet host a VM may reach.",
+      "properties": {
+        "host": {
+          "description": "A host name. Never an IP address or a range.",
+          "minLength": 1,
+          "title": "Host",
+          "type": "string"
+        },
+        "ports": {
+          "default": [
+            443
+          ],
+          "items": {
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Ports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "title": "NetworkRule",
+      "type": "object"
+    },
+    "Person": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "display_name": {
+          "minLength": 1,
+          "title": "Display Name",
+          "type": "string"
+        },
+        "email": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Email"
+        },
+        "identities": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExternalIdentity"
+          },
+          "title": "Identities",
+          "type": "array"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "display_name"
+      ],
+      "title": "Person",
+      "type": "object"
+    },
+    "PersonActor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "person",
+          "default": "person",
+          "title": "Kind",
+          "type": "string"
+        },
+        "person_id": {
+          "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Person Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id"
+      ],
+      "title": "PersonActor",
+      "type": "object"
+    },
+    "Project": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "slug": {
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+          "title": "Slug",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "repositories": {
+          "description": "Every repository of the project. Exactly one has the ``spec_store`` role.",
+          "items": {
+            "$ref": "#/$defs/Repository"
+          },
+          "title": "Repositories",
+          "type": "array"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "slug",
+        "name",
+        "repositories"
+      ],
+      "title": "Project",
+      "type": "object"
+    },
+    "ProjectRole": {
+      "description": "What a member may do in one project. Each role includes the ones before it.",
+      "enum": [
+        "viewer",
+        "planner",
+        "approver",
+        "admin"
+      ],
+      "title": "ProjectRole",
+      "type": "string"
+    },
+    "PullRequestInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "repository_id": {
+          "pattern": "^repo_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Repository Id",
+          "type": "string"
+        },
+        "number": {
+          "minimum": 1,
+          "title": "Number",
+          "type": "integer"
+        },
+        "head_branch": {
+          "minLength": 1,
+          "title": "Head Branch",
+          "type": "string"
+        },
+        "head_sha": {
+          "minLength": 1,
+          "title": "Head Sha",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/PullRequestState"
+        },
+        "merged_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merged Sha"
+        }
+      },
+      "required": [
+        "repository_id",
+        "number",
+        "head_branch",
+        "head_sha",
+        "state"
+      ],
+      "title": "PullRequestInfo",
+      "type": "object"
+    },
+    "PullRequestState": {
+      "enum": [
+        "open",
+        "merged",
+        "closed"
+      ],
+      "title": "PullRequestState",
+      "type": "string"
+    },
+    "Repository": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^repo_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/RepositoryRole"
+        },
+        "forge": {
+          "$ref": "#/$defs/Forge"
+        },
+        "owner": {
+          "minLength": 1,
+          "title": "Owner",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "default_branch": {
+          "default": "main",
+          "minLength": 1,
+          "title": "Default Branch",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "forge",
+        "owner",
+        "name"
+      ],
+      "title": "Repository",
+      "type": "object"
+    },
+    "RepositoryRole": {
+      "enum": [
+        "code",
+        "spec_store"
+      ],
+      "title": "RepositoryRole",
+      "type": "string"
+    },
+    "ResourceMount": {
+      "additionalProperties": false,
+      "description": "A named resource the worker provides, mounted read-only. The project never names a host path.",
+      "properties": {
+        "resource": {
+          "description": "For example ``go-module-cache``. Each worker maps the name to its own storage.",
+          "minLength": 1,
+          "title": "Resource",
+          "type": "string"
+        },
+        "path": {
+          "description": "Where it appears inside the VM.",
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "path"
+      ],
+      "title": "ResourceMount",
+      "type": "object"
+    },
+    "Resources": {
+      "additionalProperties": false,
+      "properties": {
+        "cpus": {
+          "minimum": 1,
+          "title": "Cpus",
+          "type": "integer"
+        },
+        "memory_mib": {
+          "minimum": 1,
+          "title": "Memory Mib",
+          "type": "integer"
+        },
+        "disk_gib": {
+          "minimum": 1,
+          "title": "Disk Gib",
+          "type": "integer"
+        },
+        "gpus": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Gpus",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpus",
+        "memory_mib",
+        "disk_gib"
+      ],
+      "title": "Resources",
+      "type": "object"
+    },
+    "Schedule": {
+      "additionalProperties": false,
+      "description": "Creates a scheduled workstream each time it fires. PROVISIONAL: cron ownership is open (review item 13).",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^sch_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "cron": {
+          "description": "A five-field cron expression, evaluated in UTC.",
+          "minLength": 1,
+          "title": "Cron",
+          "type": "string"
+        },
+        "goal": {
+          "minLength": 1,
+          "title": "Goal",
+          "type": "string"
+        },
+        "repositories": {
+          "items": {
+            "pattern": "^repo_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "owner": {
+          "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Owner",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "title",
+        "cron",
+        "goal",
+        "repositories",
+        "owner"
+      ],
+      "title": "Schedule",
+      "type": "object"
+    },
+    "Session": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "workstream_id": {
+          "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Workstream Id",
+          "type": "string"
+        },
+        "stage": {
+          "description": "The session's purpose, for example ``draft``, ``review``, ``address-review``.",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+          "title": "Stage",
+          "type": "string"
+        },
+        "attempt": {
+          "description": "1 for the first session of this stage in the workstream; a retry adds one.",
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/SessionState"
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentRef"
+        },
+        "vm_id": {
+          "anyOf": [
+            {
+              "pattern": "^vm_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vm Id"
+        },
+        "worker_id": {
+          "anyOf": [
+            {
+              "pattern": "^wkr_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Worker Id"
+        },
+        "held_by": {
+          "anyOf": [
+            {
+              "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Held By"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "ended_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ended At"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "statement": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The agent's own account of why it stopped, after secret masking.",
+          "title": "Statement"
+        },
+        "turns": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Turns",
+          "type": "integer"
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage",
+          "default": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "cost_usd": null
+          }
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "workstream_id",
+        "stage",
+        "attempt",
+        "state",
+        "agent"
+      ],
+      "title": "Session",
+      "type": "object"
+    },
+    "SessionActor": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "session",
+          "default": "session",
+          "title": "Kind",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Session Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "title": "SessionActor",
+      "type": "object"
+    },
+    "SessionOutcome": {
+      "enum": [
+        "completed",
+        "no_change",
+        "blocked",
+        "failed",
+        "timed_out",
+        "stalled",
+        "cancelled"
+      ],
+      "title": "SessionOutcome",
+      "type": "string"
+    },
+    "SessionState": {
+      "enum": [
+        "queued",
+        "starting",
+        "running",
+        "held",
+        "ended"
+      ],
+      "title": "SessionState",
+      "type": "string"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "description": "Where a workstream came from, and where its replies go.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/SourceChannel"
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who asked. None only for a scheduled workstream.",
+          "title": "Requester"
+        },
+        "schedule_id": {
+          "anyOf": [
+            {
+              "pattern": "^sch_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The schedule that created it, for a scheduled workstream.",
+          "title": "Schedule Id"
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "pattern": "^cv_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The convo replies go to. None when the requester reads replies in the workbench.",
+          "title": "Reply To"
+        },
+        "origin_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A link to the message, issue, or comment that started it.",
+          "title": "Origin Url"
+        }
+      },
+      "required": [
+        "channel",
+        "requester"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "SourceChannel": {
+      "enum": [
+        "workbench",
+        "tracker",
+        "forge",
+        "chat",
+        "email",
+        "schedule",
+        "api"
+      ],
+      "title": "SourceChannel",
+      "type": "string"
+    },
+    "StoryRef": {
+      "additionalProperties": false,
+      "description": "The plan node a planned workstream implements. The story itself lives in the spec store.",
+      "properties": {
+        "plan_key": {
+          "description": "The story's plan key, ``<change>/<deliverable>``.",
+          "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$",
+          "title": "Plan Key",
+          "type": "string"
+        },
+        "change": {
+          "description": "The OpenSpec change the story belongs to.",
+          "minLength": 1,
+          "title": "Change",
+          "type": "string"
+        },
+        "digest": {
+          "description": "The story digest (planlib) of the version this workstream implements.",
+          "minLength": 1,
+          "title": "Digest",
+          "type": "string"
+        },
+        "covers": {
+          "default": [],
+          "description": "The requirements the story covers.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Covers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan_key",
+        "change",
+        "digest"
+      ],
+      "title": "StoryRef",
+      "type": "object"
+    },
+    "Ticket": {
+      "additionalProperties": false,
+      "description": "The tracker record of a workstream or an epic, kept in the system's own database.\n\nA ticket has no state of its own: its state is its subject's. A mirror\nmaps that state to the tracker's states.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "workstream_id": {
+          "anyOf": [
+            {
+              "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workstream Id"
+        },
+        "epic_id": {
+          "anyOf": [
+            {
+              "pattern": "^ep_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Epic Id"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "labels": {
+          "default": [],
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Labels",
+          "type": "array"
+        },
+        "mirrors": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/TrackerMirror"
+          },
+          "title": "Mirrors",
+          "type": "array"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "title"
+      ],
+      "title": "Ticket",
+      "type": "object"
+    },
+    "TrackerKind": {
+      "enum": [
+        "huly",
+        "jira",
+        "linear",
+        "github",
+        "gitea",
+        "gitlab"
+      ],
+      "title": "TrackerKind",
+      "type": "string"
+    },
+    "TrackerMirror": {
+      "additionalProperties": false,
+      "description": "A ticket's copy in one external tracker. PROVISIONAL: sync and conflict rules are open (review item 3b).",
+      "properties": {
+        "tracker": {
+          "$ref": "#/$defs/TrackerKind"
+        },
+        "instance": {
+          "description": "Which installation, for example ``https://huly.example`` and its workspace.",
+          "minLength": 1,
+          "title": "Instance",
+          "type": "string"
+        },
+        "external_id": {
+          "description": "The tracker's stable ID for the issue.",
+          "minLength": 1,
+          "title": "External Id",
+          "type": "string"
+        },
+        "external_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The key people see, for example ``ONS-77``.",
+          "title": "External Key"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "origin": {
+          "$ref": "#/$defs/MirrorOrigin"
+        },
+        "synced_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "When the last sync in either direction finished.",
+          "title": "Synced At"
+        }
+      },
+      "required": [
+        "tracker",
+        "instance",
+        "external_id",
+        "origin"
+      ],
+      "title": "TrackerMirror",
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Input Tokens",
+          "type": "integer"
+        },
+        "output_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cache Read Tokens",
+          "type": "integer"
+        },
+        "cache_write_tokens": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cache Write Tokens",
+          "type": "integer"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        }
+      },
+      "title": "Usage",
+      "type": "object"
+    },
+    "VmState": {
+      "enum": [
+        "pending",
+        "running",
+        "stopped",
+        "removed",
+        "failed"
+      ],
+      "title": "VmState",
+      "type": "string"
+    },
+    "Worker": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^wkr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/WorkerState"
+        },
+        "offer": {
+          "$ref": "#/$defs/WorkerOffer"
+        },
+        "last_seen_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Seen At"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "name",
+        "state",
+        "offer"
+      ],
+      "title": "Worker",
+      "type": "object"
+    },
+    "WorkerOffer": {
+      "additionalProperties": false,
+      "description": "What a worker allows the VMs it runs.",
+      "properties": {
+        "capacity": {
+          "$ref": "#/$defs/Resources",
+          "description": "The worker's total, after its own reserve."
+        },
+        "kvm": {
+          "default": false,
+          "title": "Kvm",
+          "type": "boolean"
+        },
+        "resources": {
+          "default": [],
+          "description": "The named resources it can mount.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Resources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "capacity"
+      ],
+      "title": "WorkerOffer",
+      "type": "object"
+    },
+    "WorkerState": {
+      "enum": [
+        "online",
+        "draining",
+        "offline"
+      ],
+      "title": "WorkerState",
+      "type": "string"
+    },
+    "Workstream": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "project_id": {
+          "pattern": "^prj_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Project Id",
+          "type": "string"
+        },
+        "epic_id": {
+          "anyOf": [
+            {
+              "pattern": "^ep_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The epic of a planned workstream. None for the others.",
+          "title": "Epic Id"
+        },
+        "ticket_id": {
+          "pattern": "^tk_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Ticket Id",
+          "type": "string"
+        },
+        "shape": {
+          "$ref": "#/$defs/WorkstreamShape"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "story": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StoryRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set exactly for a planned workstream."
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "goal": {
+          "description": "What done means, in words. For a planned workstream, from its story.",
+          "minLength": 1,
+          "title": "Goal",
+          "type": "string"
+        },
+        "repositories": {
+          "description": "The project repositories its sessions change.",
+          "items": {
+            "pattern": "^repo_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Repositories",
+          "type": "array"
+        },
+        "state": {
+          "$ref": "#/$defs/WorkstreamState"
+        },
+        "approval": {
+          "$ref": "#/$defs/Approval"
+        },
+        "priority": {
+          "default": 2,
+          "description": "0 is the most urgent.",
+          "maximum": 4,
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "due_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Due At"
+        },
+        "blocked_by": {
+          "default": [],
+          "description": "Workstreams that must be done before this one starts.",
+          "items": {
+            "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Blocked By",
+          "type": "array"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who answers for it. None only for a scheduled workstream without an owner.",
+          "title": "Owner"
+        },
+        "participants": {
+          "default": [],
+          "description": "Everyone who acted on it, the owner and requester included.",
+          "items": {
+            "pattern": "^usr_[0-9A-HJKMNP-TV-Z]{26}$",
+            "type": "string"
+          },
+          "title": "Participants",
+          "type": "array"
+        },
+        "vm_id": {
+          "anyOf": [
+            {
+              "pattern": "^vm_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Its VM, from the first session until the VM is removed.",
+          "title": "Vm Id"
+        },
+        "current_session_id": {
+          "anyOf": [
+            {
+              "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Session Id"
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Closed At"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "project_id",
+        "ticket_id",
+        "shape",
+        "source",
+        "title",
+        "goal",
+        "repositories",
+        "state",
+        "approval",
+        "owner"
+      ],
+      "title": "Workstream",
+      "type": "object"
+    },
+    "WorkstreamEvent": {
+      "additionalProperties": false,
+      "description": "One entry in a workstream's history. Append-only: never changed or deleted.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^wse_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "workstream_id": {
+          "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Workstream Id",
+          "type": "string"
+        },
+        "at": {
+          "format": "date-time",
+          "title": "At",
+          "type": "string"
+        },
+        "actor": {
+          "discriminator": {
+            "mapping": {
+              "component": "#/$defs/ComponentActor",
+              "external": "#/$defs/ExternalActor",
+              "person": "#/$defs/PersonActor",
+              "session": "#/$defs/SessionActor"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PersonActor"
+            },
+            {
+              "$ref": "#/$defs/ComponentActor"
+            },
+            {
+              "$ref": "#/$defs/SessionActor"
+            },
+            {
+              "$ref": "#/$defs/ExternalActor"
+            }
+          ],
+          "title": "Actor"
+        },
+        "kind": {
+          "$ref": "#/$defs/WorkstreamEventKind"
+        },
+        "summary": {
+          "description": "One line a person can read.",
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "pattern": "^ses_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
+        },
+        "convo_id": {
+          "anyOf": [
+            {
+              "pattern": "^cv_[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Convo Id"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "workstream_id",
+        "at",
+        "actor",
+        "kind",
+        "summary"
+      ],
+      "title": "WorkstreamEvent",
+      "type": "object"
+    },
+    "WorkstreamEventKind": {
+      "description": "PROVISIONAL: grows with the lifecycle (review item 4).",
+      "enum": [
+        "submitted",
+        "state_changed",
+        "approved",
+        "rejected",
+        "session_started",
+        "session_ended",
+        "steered",
+        "escalated",
+        "watchdog_action",
+        "convo_linked",
+        "commented",
+        "decision"
+      ],
+      "title": "WorkstreamEventKind",
+      "type": "string"
+    },
+    "WorkstreamShape": {
+      "enum": [
+        "planned",
+        "adhoc",
+        "scheduled"
+      ],
+      "title": "WorkstreamShape",
+      "type": "string"
+    },
+    "WorkstreamState": {
+      "description": "PROVISIONAL: the lifecycle is open (review item 4).",
+      "enum": [
+        "submitted",
+        "awaiting_approval",
+        "queued",
+        "active",
+        "awaiting_person",
+        "done",
+        "cancelled"
+      ],
+      "title": "WorkstreamState",
+      "type": "string"
+    },
+    "WorkstreamVm": {
+      "additionalProperties": false,
+      "description": "The one VM a workstream's sessions run in. Untrusted.",
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^vm_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "workstream_id": {
+          "pattern": "^ws_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Workstream Id",
+          "type": "string"
+        },
+        "worker_id": {
+          "pattern": "^wkr_[0-9A-HJKMNP-TV-Z]{26}$",
+          "title": "Worker Id",
+          "type": "string"
+        },
+        "image": {
+          "$ref": "#/$defs/ImageRef"
+        },
+        "state": {
+          "$ref": "#/$defs/VmState"
+        },
+        "declared": {
+          "$ref": "#/$defs/CapabilityManifest",
+          "description": "What the project's manifest asks for."
+        },
+        "granted": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CapabilityManifest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the worker actually applied, as it reported. It must equal ``declared``."
+        },
+        "removed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Removed At"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "id",
+        "workstream_id",
+        "worker_id",
+        "image",
+        "state",
+        "declared"
+      ],
+      "title": "WorkstreamVm",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+[project]
+name = "domain-models"
+version = "0.1.0"
+description = "The domain data models of the platform: the source of truth for every language's types"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic==2.14.4",
+]
+
+[project.scripts]
+domain-models = "domain_models.schema:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/domain_models"]

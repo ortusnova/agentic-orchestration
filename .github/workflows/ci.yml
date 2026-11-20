@@ -53,6 +53,23 @@ jobs:
       - if: matrix.module == 'worker-daemon'
         run: make -C worker-daemon cross
 
+  domain-models:
+    name: Domain models
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # The oldest Python that pyproject.toml allows.
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: domain_models/uv.lock
+      - run: make -C domain_models test
+      - run: make -C domain_models lint
+
   workbench:
     name: Workbench
     runs-on: ubuntu-26.04

@@ -7,6 +7,7 @@ and for the people who plan, watch, steer, and review that work.
 
 | Directory | What it is | Language |
 |---|---|---|
+| `domain_models/` | The domain data models: the source of truth for every component's types, generated from them through JSON Schema. | Python |
 | `workbench/` | The plan workbench and `planlib`: plan a project as epics and stories, validate the plan, approve it, and sync it to the tracker. Watch and steer the agents that work on it. | Python, Svelte |
 | `acp-broker/` | Sits between an orchestrator and an Agent Client Protocol (ACP) agent. One session, two inputs: the autonomous driver and people, who can watch, steer, take over, hand back, and answer permission requests. | Go |
 | `smol-builder/` | Builds the smolvm machine images that agents run in. | Go |
