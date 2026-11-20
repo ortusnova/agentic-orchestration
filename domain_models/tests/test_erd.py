@@ -59,7 +59,7 @@ def test_record_diagrams_leave_out_the_fields_every_record_has():
     assert DOMAIN.common_record_fields == ["schema_version", "created_at", "updated_at"]
     diagram = erd.record_diagram(DOMAIN, "Session")
     assert "created_at" not in diagram
-    assert "WorkstreamId workstream_id FK" in diagram
+    assert '\u2060FK workstream_id "WorkstreamId"' in diagram
 
 
 def test_the_page_renders_every_diagram():
@@ -102,3 +102,21 @@ def test_line_ends_use_mermaids_markers():
 def test_every_diagram_draws_references_dashed_and_containment_solid():
     for line in erd.overview(DOMAIN).splitlines()[1:]:
         assert "--" not in line, "the overview has only references"
+
+
+def test_rows_read_key_name_python_type():
+    rows = {f.name: f.python for f in DOMAIN.models["Workstream"].fields}
+    assert rows["project_id"] == "ProjectId"
+    assert rows["epic_id"] == "EpicId | None = None"
+    assert rows["owner"] == "PersonId | None", "nullable but required: no default"
+    assert rows["priority"] == "int = 2"
+    assert rows["blocked_by"] == "list[WorkstreamId] = []"
+    assert rows["repositories"] == "list[RepositoryId]"
+    assert rows["schema_version"] == "Literal[1] = 1"
+    usage = {f.name: f.python for f in DOMAIN.models["Session"].fields}["usage"]
+    assert usage == "Usage = Usage()"
+    actor = {f.name: f.python for f in DOMAIN.models["WorkstreamEvent"].fields}["actor"]
+    assert actor == "PersonActor | ComponentActor | SessionActor | ExternalActor"
+    diagram = erd.record_diagram(DOMAIN, "Workstream")
+    assert '        \u2060PK id "WorkstreamId"' in diagram
+    assert '        \u2060 priority "int = 2"' in diagram

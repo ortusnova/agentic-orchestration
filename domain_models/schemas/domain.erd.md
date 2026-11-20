@@ -14,7 +14,7 @@
 | Symbol | Name | Meaning |
 |---|---|---|
 | <img src="legend/end-one.svg" alt="Exactly one"> | **Exactly one** | Each A has exactly one B. The field is required. |
-| <img src="legend/end-zero-or-one.svg" alt="Zero or one"> | **Zero or one** | Each A has at most one B. The field is optional. |
+| <img src="legend/end-zero-or-one.svg" alt="Zero or one"> | **Zero or one** | Each A has at most one B. The field may be null or left out. |
 | <img src="legend/end-zero-or-many.svg" alt="Zero or many"> | **Zero or many** | Each A has any number of B: the field is a list, or many A hold the same B. |
 | <img src="legend/example.svg" alt="Reading both ends"> | **Reading both ends** | Read each end from the box at the other end. Each `Session` has exactly one `Workstream`, in `workstream_id`. Each `Workstream` has zero or many `Session`s. |
 
@@ -31,14 +31,16 @@
 | Symbol | Name | Meaning |
 |---|---|---|
 | <img src="legend/field-pk.svg" alt="Own ID"> | **Own ID** | The record's own ID. |
-| <img src="legend/field-fk.svg" alt="Reference"> | **Reference** | Holds another record's ID. A dashed line leads to that record. |
-| <img src="legend/field-optional.svg" alt="Optional"> | **Optional** | The field may be absent or null. |
-| <img src="legend/field-id-type.svg" alt="ID type"> | **ID type** | An ID of the named record, `<prefix>_<ULID>`. The prefixes are in the records table. |
-| <img src="legend/field-list.svg" alt="List"> | **List** | A list of the type before `[]`. A list may be empty, so it is never marked optional. |
-| <img src="legend/field-enum.svg" alt="Enum"> | **Enum** | A capitalised type with no box of its own. Its values are in the schema. |
-| <img src="legend/field-union.svg" alt="One of several"> | **One of several** | Types joined by `_`: the field holds one of those models. Each has a solid line. |
-| <img src="legend/field-datetime.svg" alt="Time"> | **Time** | A point in time, always in UTC. |
-| <img src="legend/field-const.svg" alt="Fixed value"> | **Fixed value** | Always the same value: the `kind` that tells the members of a union apart. |
+| <img src="legend/field-fk.svg" alt="Reference"> | **Reference** | Holds the ID of another record, or a list of them. A dashed line leads to that record. |
+| <img src="legend/field-name.svg" alt="Name"> | **Name** | The field's name. Line labels use it. |
+| <img src="legend/field-type.svg" alt="Type"> | **Type** | The field's type, written as in Python. `WorkstreamId` is an ID of a `Workstream`: `<prefix>_<ULID>`, with the prefixes in the records table. |
+| <img src="legend/field-none.svg" alt="May be null"> | **May be null** | `| None`: the value may be null. With no `=`, the field must still be given. |
+| <img src="legend/field-default.svg" alt="Has a default"> | **Has a default** | `= value`: the field may be left out, and then has that value. |
+| <img src="legend/field-list.svg" alt="List"> | **List** | A list of the type in brackets. |
+| <img src="legend/field-enum.svg" alt="Enum"> | **Enum** | A type with no box of its own. Its values are in the schema. |
+| <img src="legend/field-union.svg" alt="One of several"> | **One of several** | The field holds one of the models joined by `|`. Each has a solid line. |
+| <img src="legend/field-literal.svg" alt="Fixed value"> | **Fixed value** | Always this value: here, the `kind` that tells the members of a union apart. |
+| <img src="legend/field-datetime.svg" alt="Time"> | **Time** | A `datetime` is always in UTC. |
 
 ## About this file
 
@@ -115,15 +117,15 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Person {
-        PersonId id PK
-        string display_name
-        string email "optional"
-        ExternalIdentity[] identities
+        ⁠PK id "PersonId"
+        ⁠ display_name "str"
+        ⁠ email "str | None = None"
+        ⁠ identities "list[ExternalIdentity] = []"
     }
     ExternalIdentity {
-        string system
-        string subject
-        string handle "optional"
+        ⁠ system "str"
+        ⁠ subject "str"
+        ⁠ handle "str | None = None"
     }
     Person ||--o{ ExternalIdentity : "identities"
 ```
@@ -135,18 +137,18 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Project {
-        ProjectId id PK
-        string slug
-        string name
-        Repository[] repositories
+        ⁠PK id "ProjectId"
+        ⁠ slug "str"
+        ⁠ name "str"
+        ⁠ repositories "list[Repository]"
     }
     Repository {
-        RepositoryId id PK
-        RepositoryRole role
-        Forge forge
-        string owner
-        string name
-        string default_branch "optional"
+        ⁠PK id "RepositoryId"
+        ⁠ role "RepositoryRole"
+        ⁠ forge "Forge"
+        ⁠ owner "str"
+        ⁠ name "str"
+        ⁠ default_branch "str = 'main'"
     }
     Project ||--o{ Repository : "repositories"
 ```
@@ -158,10 +160,10 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Membership {
-        MembershipId id PK
-        ProjectId project_id FK
-        PersonId person_id FK
-        ProjectRole role
+        ⁠PK id "MembershipId"
+        ⁠FK project_id "ProjectId"
+        ⁠FK person_id "PersonId"
+        ⁠ role "ProjectRole"
     }
     Membership }o..|| Project : "project_id"
     Membership }o..|| Person : "person_id"
@@ -174,12 +176,12 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Epic {
-        EpicId id PK
-        ProjectId project_id FK
-        string change
-        string title
-        EpicState state
-        TicketId ticket_id FK "optional"
+        ⁠PK id "EpicId"
+        ⁠FK project_id "ProjectId"
+        ⁠ change "str"
+        ⁠ title "str"
+        ⁠ state "EpicState"
+        ⁠FK ticket_id "TicketId | None = None"
     }
     Epic }o..|| Project : "project_id"
     Epic }o..o| Ticket : "ticket_id"
@@ -192,45 +194,45 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Workstream {
-        WorkstreamId id PK
-        ProjectId project_id FK
-        EpicId epic_id FK "optional"
-        TicketId ticket_id FK
-        WorkstreamShape shape
-        Source source
-        StoryRef story "optional"
-        string title
-        string goal
-        RepositoryId[] repositories FK
-        WorkstreamState state
-        Approval approval
-        int priority "optional"
-        datetime due_at "optional"
-        WorkstreamId[] blocked_by FK
-        PersonId owner FK "optional"
-        PersonId[] participants FK
-        WorkstreamVmId vm_id FK "optional"
-        SessionId current_session_id FK "optional"
-        datetime closed_at "optional"
+        ⁠PK id "WorkstreamId"
+        ⁠FK project_id "ProjectId"
+        ⁠FK epic_id "EpicId | None = None"
+        ⁠FK ticket_id "TicketId"
+        ⁠ shape "WorkstreamShape"
+        ⁠ source "Source"
+        ⁠ story "StoryRef | None = None"
+        ⁠ title "str"
+        ⁠ goal "str"
+        ⁠FK repositories "list[RepositoryId]"
+        ⁠ state "WorkstreamState"
+        ⁠ approval "Approval"
+        ⁠ priority "int = 2"
+        ⁠ due_at "datetime | None = None"
+        ⁠FK blocked_by "list[WorkstreamId] = []"
+        ⁠FK owner "PersonId | None"
+        ⁠FK participants "list[PersonId] = []"
+        ⁠FK vm_id "WorkstreamVmId | None = None"
+        ⁠FK current_session_id "SessionId | None = None"
+        ⁠ closed_at "datetime | None = None"
     }
     Source {
-        SourceChannel channel
-        PersonId requester FK "optional"
-        ScheduleId schedule_id FK "optional"
-        ConvoId reply_to FK "optional"
-        string origin_url "optional"
+        ⁠ channel "SourceChannel"
+        ⁠FK requester "PersonId | None"
+        ⁠FK schedule_id "ScheduleId | None = None"
+        ⁠FK reply_to "ConvoId | None = None"
+        ⁠ origin_url "str | None = None"
     }
     StoryRef {
-        string plan_key
-        string change
-        string digest
-        string[] covers
+        ⁠ plan_key "str"
+        ⁠ change "str"
+        ⁠ digest "str"
+        ⁠ covers "list[str] = []"
     }
     Approval {
-        ApprovalState state
-        PersonId by FK "optional"
-        datetime at "optional"
-        string digest "optional"
+        ⁠ state "ApprovalState"
+        ⁠FK by "PersonId | None = None"
+        ⁠ at "datetime | None = None"
+        ⁠ digest "str | None = None"
     }
     Workstream }o..|| Project : "project_id"
     Workstream }o..o| Epic : "epic_id"
@@ -257,32 +259,32 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     WorkstreamEvent {
-        WorkstreamEventId id PK
-        WorkstreamId workstream_id FK
-        datetime at
-        PersonActor_ComponentActor_SessionActor_ExternalActor actor
-        WorkstreamEventKind kind
-        string summary
-        SessionId session_id FK "optional"
-        ConvoId convo_id FK "optional"
+        ⁠PK id "WorkstreamEventId"
+        ⁠FK workstream_id "WorkstreamId"
+        ⁠ at "datetime"
+        ⁠ actor "PersonActor | ComponentActor | SessionActor | ExternalActor"
+        ⁠ kind "WorkstreamEventKind"
+        ⁠ summary "str"
+        ⁠FK session_id "SessionId | None = None"
+        ⁠FK convo_id "ConvoId | None = None"
     }
     PersonActor {
-        const kind "optional"
-        PersonId person_id FK
+        ⁠ kind "Literal['person'] = 'person'"
+        ⁠FK person_id "PersonId"
     }
     ComponentActor {
-        const kind "optional"
-        Component component
+        ⁠ kind "Literal['component'] = 'component'"
+        ⁠ component "Component"
     }
     SessionActor {
-        const kind "optional"
-        SessionId session_id FK
+        ⁠ kind "Literal['session'] = 'session'"
+        ⁠FK session_id "SessionId"
     }
     ExternalActor {
-        const kind "optional"
-        string system
-        string subject
-        string handle "optional"
+        ⁠ kind "Literal['external'] = 'external'"
+        ⁠ system "str"
+        ⁠ subject "str"
+        ⁠ handle "str | None = None"
     }
     WorkstreamEvent }o..|| Workstream : "workstream_id"
     WorkstreamEvent ||--|| PersonActor : "actor"
@@ -302,23 +304,23 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Ticket {
-        TicketId id PK
-        ProjectId project_id FK
-        WorkstreamId workstream_id FK "optional"
-        EpicId epic_id FK "optional"
-        string title
-        string description "optional"
-        string[] labels
-        TrackerMirror[] mirrors
+        ⁠PK id "TicketId"
+        ⁠FK project_id "ProjectId"
+        ⁠FK workstream_id "WorkstreamId | None = None"
+        ⁠FK epic_id "EpicId | None = None"
+        ⁠ title "str"
+        ⁠ description "str = ''"
+        ⁠ labels "list[str] = []"
+        ⁠ mirrors "list[TrackerMirror] = []"
     }
     TrackerMirror {
-        TrackerKind tracker
-        string instance
-        string external_id
-        string external_key "optional"
-        string url "optional"
-        MirrorOrigin origin
-        datetime synced_at "optional"
+        ⁠ tracker "TrackerKind"
+        ⁠ instance "str"
+        ⁠ external_id "str"
+        ⁠ external_key "str | None = None"
+        ⁠ url "str | None = None"
+        ⁠ origin "MirrorOrigin"
+        ⁠ synced_at "datetime | None = None"
     }
     Ticket }o..|| Project : "project_id"
     Ticket }o..o| Workstream : "workstream_id"
@@ -333,14 +335,14 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Schedule {
-        ScheduleId id PK
-        ProjectId project_id FK
-        string title
-        string cron
-        string goal
-        RepositoryId[] repositories FK
-        PersonId owner FK
-        bool enabled "optional"
+        ⁠PK id "ScheduleId"
+        ⁠FK project_id "ProjectId"
+        ⁠ title "str"
+        ⁠ cron "str"
+        ⁠ goal "str"
+        ⁠FK repositories "list[RepositoryId]"
+        ⁠FK owner "PersonId"
+        ⁠ enabled "bool = True"
     }
     Schedule }o..|| Project : "project_id"
     Schedule }o..o{ Repository : "repositories"
@@ -354,32 +356,32 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Session {
-        SessionId id PK
-        WorkstreamId workstream_id FK
-        string stage
-        int attempt
-        SessionState state
-        AgentRef agent
-        WorkstreamVmId vm_id FK "optional"
-        WorkerId worker_id FK "optional"
-        PersonId held_by FK "optional"
-        datetime started_at "optional"
-        datetime ended_at "optional"
-        SessionOutcome outcome "optional"
-        string statement "optional"
-        int turns "optional"
-        Usage usage "optional"
+        ⁠PK id "SessionId"
+        ⁠FK workstream_id "WorkstreamId"
+        ⁠ stage "str"
+        ⁠ attempt "int"
+        ⁠ state "SessionState"
+        ⁠ agent "AgentRef"
+        ⁠FK vm_id "WorkstreamVmId | None = None"
+        ⁠FK worker_id "WorkerId | None = None"
+        ⁠FK held_by "PersonId | None = None"
+        ⁠ started_at "datetime | None = None"
+        ⁠ ended_at "datetime | None = None"
+        ⁠ outcome "SessionOutcome | None = None"
+        ⁠ statement "str | None = None"
+        ⁠ turns "int = 0"
+        ⁠ usage "Usage = Usage()"
     }
     AgentRef {
-        string harness
-        string model
+        ⁠ harness "str"
+        ⁠ model "str"
     }
     Usage {
-        int input_tokens "optional"
-        int output_tokens "optional"
-        int cache_read_tokens "optional"
-        int cache_write_tokens "optional"
-        float cost_usd "optional"
+        ⁠ input_tokens "int = 0"
+        ⁠ output_tokens "int = 0"
+        ⁠ cache_read_tokens "int = 0"
+        ⁠ cache_write_tokens "int = 0"
+        ⁠ cost_usd "float | None = None"
     }
     Session }o..|| Workstream : "workstream_id"
     Session ||--|| AgentRef : "agent"
@@ -396,38 +398,38 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     WorkstreamVm {
-        WorkstreamVmId id PK
-        WorkstreamId workstream_id FK
-        WorkerId worker_id FK
-        ImageRef image
-        VmState state
-        CapabilityManifest declared
-        CapabilityManifest granted "optional"
-        datetime removed_at "optional"
+        ⁠PK id "WorkstreamVmId"
+        ⁠FK workstream_id "WorkstreamId"
+        ⁠FK worker_id "WorkerId"
+        ⁠ image "ImageRef"
+        ⁠ state "VmState"
+        ⁠ declared "CapabilityManifest"
+        ⁠ granted "CapabilityManifest | None = None"
+        ⁠ removed_at "datetime | None = None"
     }
     ImageRef {
-        string name
-        string digest
+        ⁠ name "str"
+        ⁠ digest "str"
     }
     CapabilityManifest {
-        NetworkRule[] network
-        ResourceMount[] mounts
-        bool kvm "optional"
-        Resources resources
+        ⁠ network "list[NetworkRule] = []"
+        ⁠ mounts "list[ResourceMount] = []"
+        ⁠ kvm "bool = False"
+        ⁠ resources "Resources"
     }
     NetworkRule {
-        string host
-        int[] ports
+        ⁠ host "str"
+        ⁠ ports "list[int] = [443]"
     }
     ResourceMount {
-        string resource
-        string path
+        ⁠ resource "str"
+        ⁠ path "str"
     }
     Resources {
-        int cpus
-        int memory_mib
-        int disk_gib
-        int gpus "optional"
+        ⁠ cpus "int"
+        ⁠ memory_mib "int"
+        ⁠ disk_gib "int"
+        ⁠ gpus "int = 0"
     }
     WorkstreamVm }o..|| Workstream : "workstream_id"
     WorkstreamVm }o..|| Worker : "worker_id"
@@ -446,22 +448,22 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Worker {
-        WorkerId id PK
-        string name
-        WorkerState state
-        WorkerOffer offer
-        datetime last_seen_at "optional"
+        ⁠PK id "WorkerId"
+        ⁠ name "str"
+        ⁠ state "WorkerState"
+        ⁠ offer "WorkerOffer"
+        ⁠ last_seen_at "datetime | None = None"
     }
     WorkerOffer {
-        Resources capacity
-        bool kvm "optional"
-        string[] resources
+        ⁠ capacity "Resources"
+        ⁠ kvm "bool = False"
+        ⁠ resources "list[str] = []"
     }
     Resources {
-        int cpus
-        int memory_mib
-        int disk_gib
-        int gpus "optional"
+        ⁠ cpus "int"
+        ⁠ memory_mib "int"
+        ⁠ disk_gib "int"
+        ⁠ gpus "int = 0"
     }
     Worker ||--|| WorkerOffer : "offer"
     WorkerOffer ||--|| Resources : "capacity"
@@ -474,22 +476,22 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     Convo {
-        ConvoId id PK
-        ProjectId project_id FK
-        ConvoKind kind
-        string system
-        string external_id
-        string url "optional"
-        string title "optional"
-        PullRequestInfo pull_request "optional"
+        ⁠PK id "ConvoId"
+        ⁠FK project_id "ProjectId"
+        ⁠ kind "ConvoKind"
+        ⁠ system "str"
+        ⁠ external_id "str"
+        ⁠ url "str | None = None"
+        ⁠ title "str | None = None"
+        ⁠ pull_request "PullRequestInfo | None = None"
     }
     PullRequestInfo {
-        RepositoryId repository_id FK
-        int number
-        string head_branch
-        string head_sha
-        PullRequestState state
-        string merged_sha "optional"
+        ⁠FK repository_id "RepositoryId"
+        ⁠ number "int"
+        ⁠ head_branch "str"
+        ⁠ head_sha "str"
+        ⁠ state "PullRequestState"
+        ⁠ merged_sha "str | None = None"
     }
     Convo }o..|| Project : "project_id"
     Convo ||--o| PullRequestInfo : "pull_request"
@@ -503,30 +505,30 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     ConvoLink {
-        ConvoLinkId id PK
-        ConvoId convo_id FK
-        WorkstreamId workstream_id FK
-        ConvoLinkReason reason
-        PersonActor_ComponentActor_SessionActor_ExternalActor linked_by
-        datetime unlinked_at "optional"
+        ⁠PK id "ConvoLinkId"
+        ⁠FK convo_id "ConvoId"
+        ⁠FK workstream_id "WorkstreamId"
+        ⁠ reason "ConvoLinkReason"
+        ⁠ linked_by "PersonActor | ComponentActor | SessionActor | ExternalActor"
+        ⁠ unlinked_at "datetime | None = None"
     }
     PersonActor {
-        const kind "optional"
-        PersonId person_id FK
+        ⁠ kind "Literal['person'] = 'person'"
+        ⁠FK person_id "PersonId"
     }
     ComponentActor {
-        const kind "optional"
-        Component component
+        ⁠ kind "Literal['component'] = 'component'"
+        ⁠ component "Component"
     }
     SessionActor {
-        const kind "optional"
-        SessionId session_id FK
+        ⁠ kind "Literal['session'] = 'session'"
+        ⁠FK session_id "SessionId"
     }
     ExternalActor {
-        const kind "optional"
-        string system
-        string subject
-        string handle "optional"
+        ⁠ kind "Literal['external'] = 'external'"
+        ⁠ system "str"
+        ⁠ subject "str"
+        ⁠ handle "str | None = None"
     }
     ConvoLink }o..|| Convo : "convo_id"
     ConvoLink }o..|| Workstream : "workstream_id"
@@ -545,33 +547,33 @@ Solid lines embed a value object; dashed lines refer to another record by ID.
 ```mermaid
 erDiagram
     ConvoEvent {
-        ConvoEventId id PK
-        ConvoId convo_id FK
-        datetime at
-        ConvoEventKind kind
-        PersonActor_ComponentActor_SessionActor_ExternalActor author
-        string external_id
-        string body "optional"
-        string url "optional"
-        ConvoEventId in_reply_to FK "optional"
+        ⁠PK id "ConvoEventId"
+        ⁠FK convo_id "ConvoId"
+        ⁠ at "datetime"
+        ⁠ kind "ConvoEventKind"
+        ⁠ author "PersonActor | ComponentActor | SessionActor | ExternalActor"
+        ⁠ external_id "str"
+        ⁠ body "str = ''"
+        ⁠ url "str | None = None"
+        ⁠FK in_reply_to "ConvoEventId | None = None"
     }
     PersonActor {
-        const kind "optional"
-        PersonId person_id FK
+        ⁠ kind "Literal['person'] = 'person'"
+        ⁠FK person_id "PersonId"
     }
     ComponentActor {
-        const kind "optional"
-        Component component
+        ⁠ kind "Literal['component'] = 'component'"
+        ⁠ component "Component"
     }
     SessionActor {
-        const kind "optional"
-        SessionId session_id FK
+        ⁠ kind "Literal['session'] = 'session'"
+        ⁠FK session_id "SessionId"
     }
     ExternalActor {
-        const kind "optional"
-        string system
-        string subject
-        string handle "optional"
+        ⁠ kind "Literal['external'] = 'external'"
+        ⁠ system "str"
+        ⁠ subject "str"
+        ⁠ handle "str | None = None"
     }
     ConvoEvent }o..|| Convo : "convo_id"
     ConvoEvent ||--|| PersonActor : "author"

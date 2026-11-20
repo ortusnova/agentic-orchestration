@@ -71,31 +71,32 @@ def _connection(*, dashed: bool, start: str | None, end: str | None, left: str =
     )
 
 
-_COLUMNS = (0, 120, 230, 270, 345)
-"""The x of each column of a field row: type, name, key, note, and the right edge."""
+_COLUMNS = (0, 44, 164, 424)
+"""The x of each column of a field row: key, name, type, and the right edge."""
 
 
-def _field_row(cells: tuple[str, str, str, str], highlight: int) -> str:
-    """One field row as a diagram draws it, with cell ``highlight`` marked."""
-    body = []
+def _cells(y: int, cells: tuple[str, str, str], highlight: int | None = None) -> list[str]:
+    out = []
     for i, text in enumerate(cells):
         x, right = _COLUMNS[i] + 1, _COLUMNS[i + 1] + 1
         cls = "hi" if i == highlight else "box"
-        body.append(f'<rect class="{cls}" x="{x}" y="1" width="{right - x}" height="30"/>')
+        out.append(f'<rect class="{cls}" x="{x}" y="{y}" width="{right - x}" height="28"/>')
         if text:
-            body.append(f'<text x="{x + 8}" y="20">{escape(text)}</text>')
-    return _svg(_COLUMNS[-1] + 2, 32, "".join(body))
+            out.append(f'<text x="{x + 8}" y="{y + 18}">{escape(text)}</text>')
+    return out
+
+
+def _field_row(cells: tuple[str, str, str], highlight: int) -> str:
+    """One field row as a diagram draws it: key, name, type, with cell ``highlight`` marked."""
+    return _svg(_COLUMNS[-1] + 2, 30, "".join(_cells(1, cells, highlight)))
 
 
 def _full_box() -> str:
-    rows = [("SessionId", "id", "PK"), ("WorkstreamId", "workstream_id", "FK")]
-    body = [_box(1, 1, 250, 28, "Session")]
-    for i, (t, n, k) in enumerate(rows):
-        y = 29 + i * 28
-        for x, w, text in ((1, 110, t), (111, 110, n), (221, 30, k)):
-            body.append(f'<rect class="box" x="{x}" y="{y}" width="{w}" height="28"/>')
-            body.append(f'<text x="{x + 8}" y="{y + 18}">{escape(text)}</text>')
-    return _svg(253, 87, "".join(body))
+    rows = [("PK", "id", "SessionId"), ("FK", "workstream_id", "WorkstreamId"), ("", "stage", "str")]
+    body = [_box(1, 1, _COLUMNS[-1], 28, "Session")]
+    for i, row in enumerate(rows):
+        body += _cells(29 + i * 28, row)
+    return _svg(_COLUMNS[-1] + 2, 30 + 28 * len(rows), "".join(body))
 
 
 def _example() -> str:
@@ -159,7 +160,7 @@ def groups() -> tuple[Group, ...]:
                     "end-zero-or-one.svg",
                     _connection(dashed=False, start=None, end="zeroOneEnd"),
                     "Zero or one",
-                    "Each A has at most one B. The field is optional.",
+                    "Each A has at most one B. The field may be null or left out.",
                 ),
                 Entry(
                     "end-zero-or-many.svg",
@@ -204,57 +205,70 @@ def groups() -> tuple[Group, ...]:
             (
                 Entry(
                     "field-pk.svg",
-                    _field_row(("SessionId", "id", "PK", ""), 2),
+                    _field_row(("PK", "id", "SessionId"), 0),
                     "Own ID",
                     "The record's own ID.",
                 ),
                 Entry(
                     "field-fk.svg",
-                    _field_row(("WorkstreamId", "workstream_id", "FK", ""), 2),
+                    _field_row(("FK", "workstream_id", "WorkstreamId"), 0),
                     "Reference",
-                    "Holds another record's ID. A dashed line leads to that record.",
+                    "Holds the ID of another record, or a list of them. A dashed line leads to that record.",
                 ),
                 Entry(
-                    "field-optional.svg",
-                    _field_row(("PersonId", "held_by", "FK", "optional"), 3),
-                    "Optional",
-                    "The field may be absent or null.",
+                    "field-name.svg",
+                    _field_row(("FK", "workstream_id", "WorkstreamId"), 1),
+                    "Name",
+                    "The field's name. Line labels use it.",
                 ),
                 Entry(
-                    "field-id-type.svg",
-                    _field_row(("WorkstreamId", "workstream_id", "FK", ""), 0),
-                    "ID type",
-                    "An ID of the named record, `<prefix>_<ULID>`. The prefixes are in the records table.",
+                    "field-type.svg",
+                    _field_row(("FK", "workstream_id", "WorkstreamId"), 2),
+                    "Type",
+                    "The field's type, written as in Python. `WorkstreamId` is an ID of a `Workstream`:"
+                    " `<prefix>_<ULID>`, with the prefixes in the records table.",
+                ),
+                Entry(
+                    "field-none.svg",
+                    _field_row(("FK", "owner", "PersonId | None"), 2),
+                    "May be null",
+                    "`| None`: the value may be null. With no `=`, the field must still be given.",
+                ),
+                Entry(
+                    "field-default.svg",
+                    _field_row(("", "priority", "int = 2"), 2),
+                    "Has a default",
+                    "`= value`: the field may be left out, and then has that value.",
                 ),
                 Entry(
                     "field-list.svg",
-                    _field_row(("PersonId[]", "participants", "FK", ""), 0),
+                    _field_row(("FK", "participants", "list[PersonId] = []"), 2),
                     "List",
-                    "A list of the type before `[]`. A list may be empty, so it is never marked optional.",
+                    "A list of the type in brackets.",
                 ),
                 Entry(
                     "field-enum.svg",
-                    _field_row(("SessionState", "state", "", ""), 0),
+                    _field_row(("", "state", "SessionState"), 2),
                     "Enum",
-                    "A capitalised type with no box of its own. Its values are in the schema.",
+                    "A type with no box of its own. Its values are in the schema.",
                 ),
                 Entry(
                     "field-union.svg",
-                    _field_row(("PersonActor_...", "actor", "", ""), 0),
+                    _field_row(("", "actor", "PersonActor | ComponentActor | ..."), 2),
                     "One of several",
-                    "Types joined by `_`: the field holds one of those models. Each has a solid line.",
+                    "The field holds one of the models joined by `|`. Each has a solid line.",
+                ),
+                Entry(
+                    "field-literal.svg",
+                    _field_row(("", "kind", "Literal['person'] = 'person'"), 2),
+                    "Fixed value",
+                    "Always this value: here, the `kind` that tells the members of a union apart.",
                 ),
                 Entry(
                     "field-datetime.svg",
-                    _field_row(("datetime", "started_at", "", "optional"), 0),
+                    _field_row(("", "started_at", "datetime | None = None"), 2),
                     "Time",
-                    "A point in time, always in UTC.",
-                ),
-                Entry(
-                    "field-const.svg",
-                    _field_row(("const", "kind", "", "optional"), 0),
-                    "Fixed value",
-                    "Always the same value: the `kind` that tells the members of a union apart.",
+                    "A `datetime` is always in UTC.",
                 ),
             ),
         ),

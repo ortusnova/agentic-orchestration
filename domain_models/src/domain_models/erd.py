@@ -18,7 +18,25 @@ from typing import Any
 from . import legend
 
 _ID_PATTERN = re.compile(r"^\^([a-z]+)_\[")
-_PRIMITIVES = {"string": "string", "integer": "int", "number": "float", "boolean": "bool"}
+_PRIMITIVES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool"}
+_NO_DEFAULT = object()
+
+KEY_PREFIX = "\u2060"
+"""A word joiner: invisible, and not whitespace to Mermaid. Mermaid lexes ``PK`` and ``FK`` as keys in the
+type position, and needs a word there; prefixing it lets the key column hold ``PK``, ``FK``, or nothing."""
+
+
+def _py_literal(value: Any) -> str:
+    """A JSON value as Python writes it, with single quotes so it can sit inside a Mermaid comment."""
+    if isinstance(value, str):
+        return "'" + value.replace("'", "\\'") + "'"
+    if value is None or isinstance(value, bool):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_py_literal(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_py_literal(k)}: {_py_literal(v)}" for k, v in value.items()) + "}"
+    return repr(value)
 
 
 @dataclass(frozen=True)
@@ -26,7 +44,10 @@ class Field:
     name: str
 
     type: str
-    """The attribute type shown: a primitive, an enum, a model, or ``<Entity>Id``."""
+    """The base type: a primitive, an enum, a model, ``<Entity>Id``, or ``A | B`` for a union."""
+
+    python: str
+    """The field's full type in Python notation, as the diagrams show it: ``list[PersonId] = []``."""
 
     many: bool
     optional: bool
@@ -97,30 +118,38 @@ class Domain:
         return Model(name=name, record=name in self._records, fields=fields)
 
     def _field(self, name: str, prop: dict[str, Any], defaulted: bool) -> Field:
+        default = prop.get("default", _NO_DEFAULT) if defaulted else _NO_DEFAULT
         prop, nullable = _strip_optional(prop)
         many = prop.get("type") == "array"
         if many:
             prop = prop["items"]
         optional = nullable or (defaulted and not many)
 
+        def make(type_: str, **kw: Any) -> Field:
+            python = f"list[{type_}]" if many else type_
+            if nullable:
+                python += " | None"
+            if default is not _NO_DEFAULT:
+                is_model = isinstance(default, dict) and type_ in self._defs and not self.is_enum(type_)
+                python += f" = {type_}()" if is_model else f" = {_py_literal(default)}"
+            return Field(name, type_, python, many, optional, **kw)
+
         if (ref := _ref(prop)) is not None:
-            if self.is_enum(ref):
-                return Field(name, ref, many, optional)
-            return Field(name, ref, many, optional, embeds=(ref,))
+            return make(ref) if self.is_enum(ref) else make(ref, embeds=(ref,))
         if "oneOf" in prop:
             branches = tuple(r for r in map(_ref, prop["oneOf"]) if r)
-            return Field(name, "|".join(branches), many, optional, embeds=branches)
+            return make(" | ".join(branches), embeds=branches)
         m = _ID_PATTERN.match(prop.get("pattern", ""))
         if m:
             target = self._by_prefix.get(m.group(1))
             if name == "id":
-                return Field(name, f"{target}Id", many, optional, primary_key=True)
-            return Field(name, f"{target}Id", many, optional, ref_entity=target)
+                return make(f"{target}Id", primary_key=True)
+            return make(f"{target}Id", ref_entity=target)
         if "const" in prop:
-            return Field(name, "const", many, optional)
+            return make(f"Literal[{_py_literal(prop['const'])}]")
         if prop.get("format") == "date-time":
-            return Field(name, "datetime", many, optional)
-        return Field(name, _PRIMITIVES.get(prop.get("type", ""), "any"), many, optional)
+            return make("datetime")
+        return make(_PRIMITIVES.get(prop.get("type", ""), "Any"))
 
     def embedded_in(self) -> dict[str, str]:
         """For each value object, the first record that embeds it."""
@@ -173,10 +202,13 @@ def _card(many: bool, optional: bool) -> str:
 
 
 def _attribute(f: Field) -> str:
-    type_ = re.sub(r"[^A-Za-z0-9_]", "_", f.type) + ("[]" if f.many else "")
-    key = " PK" if f.primary_key else " FK" if f.ref_entity else ""
-    note = " " + _quote("optional") if f.optional else ""
-    return f"        {type_} {f.name}{key}{note}"
+    """One field row, in three columns: key, name, Python type.
+
+    Mermaid's columns are type, name, keys, comment. The key goes in the type position and the Python type
+    in the comment, so the row reads key | name | type.
+    """
+    key = "PK" if f.primary_key else "FK" if f.ref_entity else ""
+    return f"        {KEY_PREFIX}{key} {f.name} {_quote(f.python)}"
 
 
 def parents(domain: Domain, record: str) -> list[tuple[str, str]]:

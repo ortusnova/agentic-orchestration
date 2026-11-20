@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="347" height="32" viewBox="0 0 347 32">
+<svg xmlns="http://www.w3.org/2000/svg" width="426" height="30" viewBox="0 0 426 30">
 <style>
   text { font-family: Recursive Variable, arial, sans-serif; font-size: 13px; fill: #000; }
   marker path, marker circle { stroke: #000; stroke-width: 2; fill: none; }
@@ -20,5 +20,5 @@
   <marker id="zeroManyStart" refX="18" refY="18" markerWidth="57" markerHeight="36" orient="auto"
     markerUnits="userSpaceOnUse"><circle cx="48" cy="18" r="6"/><path d="M0,18 Q18,0 36,18 Q18,36 0,18"/></marker>
 </defs>
-<rect class="hi" x="1" y="1" width="120" height="30"/><text x="9" y="20">SessionState</text><rect class="box" x="121" y="1" width="110" height="30"/><text x="129" y="20">state</text><rect class="box" x="231" y="1" width="40" height="30"/><rect class="box" x="271" y="1" width="75" height="30"/>
+<rect class="box" x="1" y="1" width="44" height="28"/><rect class="box" x="45" y="1" width="120" height="28"/><text x="53" y="19">state</text><rect class="hi" x="165" y="1" width="260" height="28"/><text x="173" y="19">SessionState</text>
 </svg>
