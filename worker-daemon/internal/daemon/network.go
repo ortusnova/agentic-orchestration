@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -116,4 +118,32 @@ func (d *Daemon) keepRefusals(ctx context.Context, log *slog.Logger, id string, 
 		return
 	}
 	log.Info("egress: the machine's refusals kept", slog.String("file", file))
+}
+
+// logForge writes the job's GitHub access to the job's log: per owner,
+// its repositories and the permissions its token carries, and where
+// Sortie read them. It names no token; the offer carries none.
+func logForge(log *slog.Logger, f *protocol.Forge) {
+	if f == nil {
+		log.Info("forge: the offer names no GitHub access")
+		return
+	}
+	src := []any{slog.String("repository", f.Source.Repository), slog.String("commit", f.Source.Commit),
+		slog.String("file", f.Source.File), slog.Bool("declared", f.Source.Declared)}
+	if len(f.Owners) == 0 {
+		log.Info("forge: the job is granted no GitHub access", src...)
+		return
+	}
+	for _, o := range f.Owners {
+		repos := make([]string, 0, len(o.Repositories))
+		for _, r := range o.Repositories {
+			repos = append(repos, r.Repository)
+		}
+		perms := make([]string, 0, len(o.Permissions))
+		for _, p := range slices.Sorted(maps.Keys(o.Permissions)) {
+			perms = append(perms, p+"="+o.Permissions[p])
+		}
+		log.Info("forge: GitHub access", append([]any{slog.String("owner", o.Owner),
+			slog.String("repositories", strings.Join(repos, ",")), slog.String("permissions", strings.Join(perms, ","))}, src...)...)
+	}
 }

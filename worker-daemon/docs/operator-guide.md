@@ -401,6 +401,24 @@ connection from the machine, by name or by address.
 `--allow-udp` was not measured: smolvm answers every UDP query to port 53
 itself, so a DNS probe does not show it.
 
+### The job's GitHub access
+
+An offer's `run.forge` (`agent-platform/forge-access`) names what the
+job may reach on GitHub: where Sortie read the repository's
+`.sortie/forge.yaml`, and the grant grouped by owner, each owner with its
+repositories and the permissions its one token carries. It names no
+token. The daemon writes it to the job's log, one line per owner:
+
+```
+forge: GitHub access owner=ortusnova repositories=ortusnova/fleet-vm,ortusnova/homelab permissions="contents=write,pull_requests=write" repository=homelab commit=4b825dc… file=.sortie/forge.yaml declared=true
+```
+
+`forge: the job is granted no GitHub access` names a grant with no
+owner, and `forge: the offer names no GitHub access` an offer without
+`run.forge`, from a Sortie that sends none. The daemon gives the machine
+nothing for it yet: it is the operator's record of what the job was
+granted.
+
 ### Flows on the wire
 
 The daemon speaks `agent-platform/worker-api#Data-plane flows on the
