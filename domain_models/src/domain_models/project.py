@@ -37,6 +37,12 @@ class Repository(DomainModel):
 
 
 class Project(Record):
+    """A body of work: its repositories, its spec store, and its members.
+
+    Everything else belongs to a project. It scopes who may see and do what, and which repositories
+    sessions may change.
+    """
+
     id: ProjectId
     slug: Slug
     name: NonEmptyStr
@@ -71,7 +77,11 @@ class ProjectRole(enum.StrEnum):
 
 
 class Membership(Record):
-    """One person's role in one project. A person has at most one membership per project."""
+    """One person's role in one project.
+
+    Used to decide what that person may see and do in the project. A person has at most one membership
+    per project.
+    """
 
     id: MembershipId
     project_id: ProjectId

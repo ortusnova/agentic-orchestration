@@ -57,6 +57,12 @@ class Usage(DomainModel):
 
 
 class Session(Record):
+    """One agent conversation with one purpose, run in its workstream's VM.
+
+    For example, drafting a change, reviewing it, or addressing review comments. The unit a worker runs
+    and acp-broker relays; a retry is a new session. Records who held it, how it ended, and what it cost.
+    """
+
     id: SessionId
     workstream_id: WorkstreamId
 

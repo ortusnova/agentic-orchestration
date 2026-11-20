@@ -25,6 +25,12 @@ class ExternalIdentity(DomainModel):
 
 
 class Person(Record):
+    """A human who uses the system: plans, approves, steers, or asks for work.
+
+    Used to attribute every action, to grant roles in projects through memberships, and to recognise the
+    same person in other systems through their external identities.
+    """
+
     id: PersonId
     display_name: NonEmptyStr
     email: str | None = None

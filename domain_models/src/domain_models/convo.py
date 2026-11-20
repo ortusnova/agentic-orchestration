@@ -41,6 +41,12 @@ class PullRequestInfo(DomainModel):
 
 
 class Convo(Record):
+    """A conversation outside the system that bears on one or more workstreams.
+
+    A pull request, a chat thread, an email chain, or the comments on a tracker issue. Used to route
+    follow-up events to the workstreams attached to it, and to send replies back where they were asked.
+    """
+
     id: ConvoId
     project_id: ProjectId
     kind: ConvoKind
@@ -76,7 +82,11 @@ class ConvoLinkReason(enum.StrEnum):
 
 
 class ConvoLink(Record):
-    """Attaches one convo to one workstream. Follow-up events in the convo go to every attached workstream."""
+    """Attaches one convo to one workstream, and says why.
+
+    The convo started the workstream, the workstream created it, or it was attached later. Follow-up
+    events in the convo go to every workstream attached to it.
+    """
 
     id: ConvoLinkId
     convo_id: ConvoId
@@ -98,7 +108,11 @@ class ConvoEventKind(enum.StrEnum):
 
 
 class ConvoEvent(Record):
-    """One event in a convo. Append-only."""
+    """One event in a convo: a message, a review comment or verdict, a CI result, a state or label change.
+
+    Used to start and inform the sessions of the workstreams attached to the convo. Append-only. Its body
+    is untrusted.
+    """
 
     id: ConvoEventId
     convo_id: ConvoId

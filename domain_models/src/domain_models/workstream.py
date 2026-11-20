@@ -132,6 +132,13 @@ class WorkstreamState(enum.StrEnum):
 
 
 class Workstream(Record):
+    """One unit of work, from the moment it is asked for until it is done or cancelled.
+
+    A planned story, an ad-hoc ask, or a scheduled run. The central record: sessions run for it, its
+    ticket shows it in trackers, its convos carry the discussion about it, and its events record
+    everything that happened to it.
+    """
+
     id: WorkstreamId
     project_id: ProjectId
 
@@ -213,7 +220,12 @@ class WorkstreamEventKind(enum.StrEnum):
 
 
 class WorkstreamEvent(Record):
-    """One entry in a workstream's history. Append-only: never changed or deleted."""
+    """One entry in a workstream's history.
+
+    A state change, an approval, a session starting or ending, a steer, an escalation, or a decision.
+    Used to show people what happened and why, and to give later sessions that context. Append-only:
+    never changed or deleted.
+    """
 
     id: WorkstreamEventId
     workstream_id: WorkstreamId
@@ -235,7 +247,11 @@ class EpicState(enum.StrEnum):
 
 
 class Epic(Record):
-    """Ties together the workstreams of one plan DAG. Never executed itself."""
+    """The workstreams that come from one plan DAG: the breakdown of one OpenSpec change.
+
+    Used to follow the progress of a plan as a whole. An epic is never executed itself: it is done when
+    all its workstreams are.
+    """
 
     id: EpicId
     project_id: ProjectId
@@ -251,7 +267,11 @@ class Epic(Record):
 
 
 class Schedule(Record):
-    """Creates a scheduled workstream each time it fires. PROVISIONAL: cron ownership is open (review item 13)."""
+    """A recurring request: each time it fires, it creates a scheduled workstream with its goal.
+
+    Used for cron-like work, such as dependency updates or nightly checks. PROVISIONAL: cron ownership
+    is open (review item 13).
+    """
 
     id: ScheduleId
     project_id: ProjectId

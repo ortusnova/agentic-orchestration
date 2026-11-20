@@ -106,6 +106,11 @@ class Domain:
     def records(self) -> list[str]:
         return list(self._records)
 
+    def description(self, name: str) -> str:
+        """A model's description, from its docstring, as paragraphs joined by blank lines."""
+        text = self._defs[name].get("description", "")
+        return "\n\n".join(" ".join(p.split()) for p in text.split("\n\n") if p.strip())
+
     def is_enum(self, name: str) -> bool:
         return "enum" in self._defs.get(name, {})
 
@@ -279,7 +284,7 @@ def _plain_diagrams(domain: Domain) -> list[tuple[str, str, str]]:
         out.append(
             (
                 record,
-                "Solid lines embed a value object; dashed lines refer to another record by ID.",
+                domain.description(record),
                 record_diagram(domain, record),
             )
         )
@@ -363,7 +368,8 @@ def html(schema: dict[str, Any], mermaid_url: str) -> str:
         anchor = title.lower()
         nav.append(f'<a href="#{anchor}">{title}</a>')
         tag = "h2" if i == 0 else "h3"
-        heading = f"<{tag}>{title}</{tag}><p>{intro}</p>"
+        paragraphs = "".join(f"<p>{_inline_html(p)}</p>" for p in intro.split("\n\n"))
+        heading = f"<{tag}>{title}</{tag}>{paragraphs}"
         sections.append(f'<section id="{anchor}">{heading}\n<pre class="mermaid">\n{source}\n</pre></section>')
     return f"""<!doctype html>
 <html lang="en">

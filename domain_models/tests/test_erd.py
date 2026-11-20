@@ -128,3 +128,17 @@ def test_every_diagram_bolds_the_model_names():
     assert len(blocks) == 1 + len(DOMAIN.records)
     assert all(b.startswith(erd.DIAGRAM_CONFIG) for b in blocks)
     assert "font-weight: bold" in erd.DIAGRAM_CONFIG
+
+
+def test_every_record_says_what_it_is_for():
+    for record in DOMAIN.records:
+        text = DOMAIN.description(record)
+        assert text, f"{record} has no docstring"
+        assert "Solid lines" not in text
+
+
+def test_each_record_section_opens_with_its_description():
+    doc = erd.markdown(json.loads(generate()))
+    section = doc[doc.index("### Workstream\n") :]
+    assert section.split("\n")[2] == DOMAIN.description("Workstream").split("\n\n")[0]
+    assert "Solid lines embed" not in doc

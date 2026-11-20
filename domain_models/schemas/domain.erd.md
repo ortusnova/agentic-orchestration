@@ -116,7 +116,9 @@ erDiagram
 
 ### Person
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+A human who uses the system: plans, approves, steers, or asks for work.
+
+Used to attribute every action, to grant roles in projects through memberships, and to recognise the same person in other systems through their external identities.
 
 ```mermaid
 ---
@@ -140,7 +142,9 @@ erDiagram
 
 ### Project
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+A body of work: its repositories, its spec store, and its members.
+
+Everything else belongs to a project. It scopes who may see and do what, and which repositories sessions may change.
 
 ```mermaid
 ---
@@ -167,7 +171,9 @@ erDiagram
 
 ### Membership
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+One person's role in one project.
+
+Used to decide what that person may see and do in the project. A person has at most one membership per project.
 
 ```mermaid
 ---
@@ -187,7 +193,9 @@ erDiagram
 
 ### Epic
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+The workstreams that come from one plan DAG: the breakdown of one OpenSpec change.
+
+Used to follow the progress of a plan as a whole. An epic is never executed itself: it is done when all its workstreams are.
 
 ```mermaid
 ---
@@ -209,7 +217,9 @@ erDiagram
 
 ### Workstream
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+One unit of work, from the moment it is asked for until it is done or cancelled.
+
+A planned story, an ad-hoc ask, or a scheduled run. The central record: sessions run for it, its ticket shows it in trackers, its convos carry the discussion about it, and its events record everything that happened to it.
 
 ```mermaid
 ---
@@ -278,7 +288,9 @@ erDiagram
 
 ### WorkstreamEvent
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+One entry in a workstream's history.
+
+A state change, an approval, a session starting or ending, a steer, an escalation, or a decision. Used to show people what happened and why, and to give later sessions that context. Append-only: never changed or deleted.
 
 ```mermaid
 ---
@@ -327,7 +339,9 @@ erDiagram
 
 ### Ticket
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+The tracker record of a workstream or an epic, kept in the system's own database.
+
+People find and discuss work through it, and it is mirrored to external trackers (Huly, Jira, Linear) in either direction. A ticket has no state of its own: its state is its subject's, and each mirror maps that state to its tracker's states.
 
 ```mermaid
 ---
@@ -362,7 +376,9 @@ erDiagram
 
 ### Schedule
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+A recurring request: each time it fires, it creates a scheduled workstream with its goal.
+
+Used for cron-like work, such as dependency updates or nightly checks. PROVISIONAL: cron ownership is open (review item 13).
 
 ```mermaid
 ---
@@ -387,7 +403,9 @@ erDiagram
 
 ### Session
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+One agent conversation with one purpose, run in its workstream's VM.
+
+For example, drafting a change, reviewing it, or addressing review comments. The unit a worker runs and acp-broker relays; a retry is a new session. Records who held it, how it ended, and what it cost.
 
 ```mermaid
 ---
@@ -433,7 +451,9 @@ erDiagram
 
 ### WorkstreamVm
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+The one VM a workstream's sessions run in, from its first session until the workstream closes.
+
+Records which worker runs it, the image it started from, and the capabilities it asked for and was granted. Untrusted: everything the agent runs is inside it.
 
 ```mermaid
 ---
@@ -487,7 +507,9 @@ erDiagram
 
 ### Worker
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+A trusted machine that runs workstream VMs.
+
+Used to place each VM on a worker that offers every capability and resource the VM needs, and to know which workers are online.
 
 ```mermaid
 ---
@@ -519,7 +541,9 @@ erDiagram
 
 ### Convo
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+A conversation outside the system that bears on one or more workstreams.
+
+A pull request, a chat thread, an email chain, or the comments on a tracker issue. Used to route follow-up events to the workstreams attached to it, and to send replies back where they were asked.
 
 ```mermaid
 ---
@@ -552,7 +576,9 @@ erDiagram
 
 ### ConvoLink
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+Attaches one convo to one workstream, and says why.
+
+The convo started the workstream, the workstream created it, or it was attached later. Follow-up events in the convo go to every workstream attached to it.
 
 ```mermaid
 ---
@@ -598,7 +624,9 @@ erDiagram
 
 ### ConvoEvent
 
-Solid lines embed a value object; dashed lines refer to another record by ID.
+One event in a convo: a message, a review comment or verdict, a CI result, a state or label change.
+
+Used to start and inform the sessions of the workstreams attached to the convo. Append-only. Its body is untrusted.
 
 ```mermaid
 ---

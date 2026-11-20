@@ -51,8 +51,9 @@ class TrackerMirror(DomainModel):
 class Ticket(Record):
     """The tracker record of a workstream or an epic, kept in the system's own database.
 
-    A ticket has no state of its own: its state is its subject's. A mirror
-    maps that state to the tracker's states.
+    People find and discuss work through it, and it is mirrored to external trackers (Huly, Jira,
+    Linear) in either direction. A ticket has no state of its own: its state is its subject's, and each
+    mirror maps that state to its tracker's states.
     """
 
     id: TicketId

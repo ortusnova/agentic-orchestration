@@ -21,6 +21,12 @@ class WorkerState(enum.StrEnum):
 
 
 class Worker(Record):
+    """A trusted machine that runs workstream VMs.
+
+    Used to place each VM on a worker that offers every capability and resource the VM needs, and to
+    know which workers are online.
+    """
+
     id: WorkerId
     name: NonEmptyStr
     state: WorkerState
@@ -49,7 +55,11 @@ class VmState(enum.StrEnum):
 
 
 class WorkstreamVm(Record):
-    """The one VM a workstream's sessions run in. Untrusted."""
+    """The one VM a workstream's sessions run in, from its first session until the workstream closes.
+
+    Records which worker runs it, the image it started from, and the capabilities it asked for and was
+    granted. Untrusted: everything the agent runs is inside it.
+    """
 
     id: WorkstreamVmId
     workstream_id: WorkstreamId
