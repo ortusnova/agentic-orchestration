@@ -364,3 +364,28 @@ func TestAPrivateEntryOfLoopbackGetsNoMachine(t *testing.T) {
 		})
 	}
 }
+
+// forge-access: The offer carries the job's GitHub access. The daemon
+// writes run.forge to the job's log, per owner, with where Sortie read
+// it, so the operator sees what the job may reach on GitHub.
+func TestTheJobLogNamesItsGitHubAccess(t *testing.T) {
+	h := newHarness(t, defaults())
+	h.offerJob("ONS-40", 1, nil, func(j *fakecp.Job) {
+		j.Run.Forge = &protocol.Forge{
+			Source: protocol.ForgeSource{Repository: "homelab", Branch: "master", Commit: "4b825dc", File: ".sortie/forge.yaml", Declared: true},
+			Owners: []protocol.ForgeOwner{{Owner: "ortusnova", Permissions: map[string]string{"contents": "write", "pull_requests": "write"},
+				Repositories: []protocol.ForgeRepository{
+					{Repository: "ortusnova/fleet-vm", Permissions: map[string]string{"contents": "write"}},
+					{Repository: "ortusnova/homelab", Permissions: map[string]string{"pull_requests": "write"}},
+				}}},
+		}
+	})
+	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-40", 1) > 0 })
+	logs := h.logs.String()
+	for _, want := range []string{"forge: GitHub access", "owner=ortusnova", "repositories=ortusnova/fleet-vm,ortusnova/homelab",
+		`permissions="contents=write,pull_requests=write"`, "commit=4b825dc", "declared=true"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the job's log does not hold %q", want)
+		}
+	}
+}

@@ -342,6 +342,7 @@ func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
 		j.noProxy = plan.NoProxy()
 	}
 	logNetwork(j.log, network, plan)
+	logForge(j.log, j.offer.Run.Forge)
 	return spec, img, nil
 }
 

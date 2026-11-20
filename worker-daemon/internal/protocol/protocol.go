@@ -147,6 +147,42 @@ type Run struct {
 	// kept as sent so that the daemon checks it strictly; absent, the
 	// machine gets no network. See [Egress].
 	Egress json.RawMessage `json:"egress,omitempty"`
+	// Forge is the job's GitHub access as Sortie read it
+	// (agent-platform/forge-access): repositories and permissions by
+	// owner, never a token. Absent from a Sortie that sends none.
+	Forge *Forge `json:"forge,omitempty"`
+}
+
+// Forge is run.forge: where Sortie read the job's GitHub access, and the
+// access grouped by owner, since a GitHub token reaches one owner.
+type Forge struct {
+	Source ForgeSource  `json:"source"`
+	Owners []ForgeOwner `json:"owners"`
+}
+
+// ForgeSource names where Sortie read the declaration. Declared is false
+// when the commit holds no file and the job has the default access.
+type ForgeSource struct {
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	Commit     string `json:"commit"`
+	File       string `json:"file"`
+	Declared   bool   `json:"declared"`
+}
+
+// ForgeOwner is the access granted on one owner's repositories, and
+// Permissions what that owner's one token carries.
+type ForgeOwner struct {
+	Owner        string            `json:"owner"`
+	Repositories []ForgeRepository `json:"repositories"`
+	Permissions  map[string]string `json:"permissions"`
+}
+
+// ForgeRepository is one granted repository, owner/name, and its
+// permissions.
+type ForgeRepository struct {
+	Repository  string            `json:"repository"`
+	Permissions map[string]string `json:"permissions"`
 }
 
 // Egress is run.egress: the policies whose hosts the job's machine
