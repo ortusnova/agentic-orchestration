@@ -192,7 +192,7 @@ def overview(domain: Domain) -> str:
     lines.extend(f"    {record}" for record in domain.records)
     for record in domain.records:
         for field, parent in parents(domain, record):
-            lines.append(f"    {record} }}o--|| {parent} : {_quote(field)}")
+            lines.append(f"    {record} }}o..|| {parent} : {_quote(field)}")
     return "\n".join(lines)
 
 
@@ -223,7 +223,8 @@ def _diagrams(domain: Domain) -> list[tuple[str, str, str]]:
         (
             "Overview",
             "Records only. A line joins a record to a record it belongs to: a required ID field holding one ID."
-            " A record with no line out is a root.",
+            " A record with no line out is a root. Every line here is a reference by ID, even where Mermaid"
+            " draws one solid at a crossing.",
             overview(domain),
         )
     ]
@@ -242,6 +243,155 @@ def _md_list(names: list[str]) -> str:
     return ", ".join(f"`{n}`" for n in names) or "—"
 
 
+LEGEND_EXAMPLE = """erDiagram
+    Session {
+        SessionId id PK
+        WorkstreamId workstream_id FK
+        PersonId held_by FK "optional"
+        AgentRef agent
+        SessionState state
+        Usage usage "optional"
+        datetime started_at "optional"
+    }
+    Workstream {
+        PersonId[] participants FK
+    }
+    AgentRef {
+        string harness
+        string model
+    }
+    Usage {
+        int input_tokens "optional"
+    }
+    Session }o..|| Workstream : "workstream_id"
+    Session }o..o| Person : "held_by"
+    Workstream }o..o{ Person : "participants"
+    Session ||--|| AgentRef : "agent"
+    Session ||--o| Usage : "usage"
+"""
+"""A small diagram, cut from the Session and Workstream diagrams, with every kind of line and line end."""
+
+LEGEND_INTRO = "An example, cut from the `Session` and `Workstream` diagrams. It has every kind of line and line end:"
+
+LEGEND: list[tuple[str, list[str], list[tuple[str, str]]]] = [
+    (
+        "Boxes",
+        ["Shape", "Meaning"],
+        [
+            (
+                "Box with a list of fields",
+                "A model, drawn in full. In a record's own diagram, the record and every value object it contains.",
+            ),
+            (
+                "Box with a name only",
+                "Another record, drawn only to show the line to it. It has its own diagram below.",
+            ),
+            ("Box colour", "Nothing. Mermaid picks the colours."),
+        ],
+    ),
+    (
+        "Lines",
+        ["Line", "Meaning"],
+        [
+            (
+                "Solid",
+                "Contains: one model holds the other in the field the label names. The other is a value object,"
+                " stored only inside its owner, so the owner's end always shows two bars: exactly one owner.",
+            ),
+            (
+                "Dashed",
+                "Refers to by ID: the model with the field the label names (marked `FK`) holds the other record's ID.",
+            ),
+        ],
+    ),
+    (
+        "Line ends",
+        ["End (as drawn)", "Meaning"],
+        [
+            ("Two bars", "exactly one"),
+            ("A circle and a bar", "zero or one: the field is optional"),
+            ("A circle and a crow's foot", "zero or many: the field is a list, or many records may hold the same ID"),
+        ],
+    ),
+    (
+        "Reading a line",
+        ["Example", "Reads as"],
+        [
+            (
+                "Dashed from `Session` to `Workstream`, labelled `workstream_id`: two bars at `Workstream`,"
+                " a circle and a crow's foot at `Session`",
+                "Each session refers to exactly one workstream, in `workstream_id`. A workstream has zero or"
+                " many sessions. The end next to a box says how many of that box the box at the other end has.",
+            ),
+            (
+                "Solid from `Session` to `Usage`, labelled `usage`: two bars at `Session`, a circle and a bar"
+                " at `Usage`",
+                "A session contains zero or one `Usage`, in `usage`. Each `Usage` belongs to exactly one session.",
+            ),
+            (
+                "Dashed from `Workstream` to `Person`, labelled `participants`: a circle and a crow's foot at each end",
+                "A workstream refers to zero or many people, in the list `participants`. A person may be a"
+                " participant in zero or many workstreams.",
+            ),
+        ],
+    ),
+    (
+        "Fields",
+        ["Column or type", "Meaning"],
+        [
+            ("First column", "The field's type."),
+            ("Second column", "The field's name."),
+            ("`PK`", "The record's own ID."),
+            ("`FK`", "The ID of another record. A dashed line leads to it."),
+            ('`"optional"`', "The field may be absent or null. A list is never marked: it may be empty."),
+            ("`SessionId`, `WorkstreamId`, ...", "An ID of that record: `<prefix>_<ULID>`. Prefixes are in the table."),
+            ("`Type[]`", "A list of `Type`."),
+            ("A capitalised type with no box, such as `SessionState`", "An enum. Its values are in the schema."),
+            ("`A_B_C`", "One of several models: `A`, `B`, or `C`. Each has a solid line."),
+            ("`datetime`", "A point in time, always in UTC."),
+            ("`const`", "A fixed value: the schema version, or the `kind` that tells union members apart."),
+            ("`string`, `int`, `float`, `bool`", "As named."),
+        ],
+    ),
+]
+"""The legend, as (section, column headings, rows). Cells use Markdown backticks for code."""
+
+
+def _legend_markdown() -> list[str]:
+    example = LEGEND_EXAMPLE.rstrip("\n")
+    out = [
+        "## Legend",
+        "",
+        LEGEND_INTRO,
+        "",
+        "```mermaid",
+        example,
+        "```",
+        "",
+    ]
+    for title, heads, rows in LEGEND:
+        out += [f"### {title}", "", f"| {heads[0]} | {heads[1]} |", "|---|---|"]
+        out += [f"| {a.replace('|', chr(92) + '|')} | {b.replace('|', chr(92) + '|')} |" for a, b in rows]
+        out.append("")
+    return out
+
+
+def _inline_html(text: str) -> str:
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+
+
+def _legend_html() -> str:
+    parts = [f'<section id="legend"><h2>Legend</h2><p>{_inline_html(LEGEND_INTRO)}</p>']
+    parts.append(f'<pre class="mermaid">\n{LEGEND_EXAMPLE.rstrip()}\n</pre>')
+    for title, heads, rows in LEGEND:
+        parts.append(f"<h3>{title}</h3><table><tr><th>{heads[0]}</th><th>{heads[1]}</th></tr>")
+        parts += [f"<tr><td>{_inline_html(a)}</td><td>{_inline_html(b)}</td></tr>" for a, b in rows]
+        parts.append("</table>")
+    parts.append("</section>")
+    return "\n".join(parts)
+
+
 def markdown(schema: dict[str, Any]) -> str:
     """The diagram document: a table of the records, the overview, and one diagram per record."""
     domain = Domain(schema)
@@ -253,6 +403,9 @@ def markdown(schema: dict[str, Any]) -> str:
     value_objects = sorted(n for n, m in domain.models.items() if not m.record)
     out = [
         "# Domain model diagrams",
+        "",
+        *_legend_markdown(),
+        "## About this file",
         "",
         "Generated from `schemas/domain.schema.json` by `make -C domain_models schemas`. Do not edit.",
         "",
@@ -300,11 +453,15 @@ def html(schema: dict[str, Any], mermaid_url: str) -> str:
   section {{ margin: 32px 0; }}
   pre.mermaid {{ overflow: auto; }}
   .error {{ color: #b00020; white-space: pre-wrap; }}
+  table {{ border-collapse: collapse; margin: 8px 0 16px; }}
+  th, td {{ border: 1px solid #ddd; padding: 6px 10px; text-align: left; vertical-align: top; }}
+  th {{ background: #f6f6f6; }}
 </style>
 </head>
 <body>
 <h1>Domain model diagrams</h1>
-<nav>{" ".join(nav)}</nav>
+<nav><a href="#legend">Legend</a> {" ".join(nav)}</nav>
+{_legend_html()}
 {chr(10).join(sections)}
 <script type="module">
   import mermaid from {json.dumps(mermaid_url)};

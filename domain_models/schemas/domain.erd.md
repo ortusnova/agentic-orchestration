@@ -1,5 +1,87 @@
 # Domain model diagrams
 
+## Legend
+
+An example, cut from the `Session` and `Workstream` diagrams. It has every kind of line and line end:
+
+```mermaid
+erDiagram
+    Session {
+        SessionId id PK
+        WorkstreamId workstream_id FK
+        PersonId held_by FK "optional"
+        AgentRef agent
+        SessionState state
+        Usage usage "optional"
+        datetime started_at "optional"
+    }
+    Workstream {
+        PersonId[] participants FK
+    }
+    AgentRef {
+        string harness
+        string model
+    }
+    Usage {
+        int input_tokens "optional"
+    }
+    Session }o..|| Workstream : "workstream_id"
+    Session }o..o| Person : "held_by"
+    Workstream }o..o{ Person : "participants"
+    Session ||--|| AgentRef : "agent"
+    Session ||--o| Usage : "usage"
+```
+
+### Boxes
+
+| Shape | Meaning |
+|---|---|
+| Box with a list of fields | A model, drawn in full. In a record's own diagram, the record and every value object it contains. |
+| Box with a name only | Another record, drawn only to show the line to it. It has its own diagram below. |
+| Box colour | Nothing. Mermaid picks the colours. |
+
+### Lines
+
+| Line | Meaning |
+|---|---|
+| Solid | Contains: one model holds the other in the field the label names. The other is a value object, stored only inside its owner, so the owner's end always shows two bars: exactly one owner. |
+| Dashed | Refers to by ID: the model with the field the label names (marked `FK`) holds the other record's ID. |
+
+### Line ends
+
+| End (as drawn) | Meaning |
+|---|---|
+| Two bars | exactly one |
+| A circle and a bar | zero or one: the field is optional |
+| A circle and a crow's foot | zero or many: the field is a list, or many records may hold the same ID |
+
+### Reading a line
+
+| Example | Reads as |
+|---|---|
+| Dashed from `Session` to `Workstream`, labelled `workstream_id`: two bars at `Workstream`, a circle and a crow's foot at `Session` | Each session refers to exactly one workstream, in `workstream_id`. A workstream has zero or many sessions. The end next to a box says how many of that box the box at the other end has. |
+| Solid from `Session` to `Usage`, labelled `usage`: two bars at `Session`, a circle and a bar at `Usage` | A session contains zero or one `Usage`, in `usage`. Each `Usage` belongs to exactly one session. |
+| Dashed from `Workstream` to `Person`, labelled `participants`: a circle and a crow's foot at each end | A workstream refers to zero or many people, in the list `participants`. A person may be a participant in zero or many workstreams. |
+
+### Fields
+
+| Column or type | Meaning |
+|---|---|
+| First column | The field's type. |
+| Second column | The field's name. |
+| `PK` | The record's own ID. |
+| `FK` | The ID of another record. A dashed line leads to it. |
+| `"optional"` | The field may be absent or null. A list is never marked: it may be empty. |
+| `SessionId`, `WorkstreamId`, ... | An ID of that record: `<prefix>_<ULID>`. Prefixes are in the table. |
+| `Type[]` | A list of `Type`. |
+| A capitalised type with no box, such as `SessionState` | An enum. Its values are in the schema. |
+| `A_B_C` | One of several models: `A`, `B`, or `C`. Each has a solid line. |
+| `datetime` | A point in time, always in UTC. |
+| `const` | A fixed value: the schema version, or the `kind` that tells union members apart. |
+| `string`, `int`, `float`, `bool` | As named. |
+
+## About this file
+
 Generated from `schemas/domain.schema.json` by `make -C domain_models schemas`. Do not edit.
 
 A **record** is stored on its own and has an ID. Every other model is a **value object**, stored
@@ -28,7 +110,7 @@ Value objects: `AgentRef`, `Approval`, `CapabilityManifest`, `ComponentActor`, `
 
 ## Overview
 
-Records only. A line joins a record to a record it belongs to: a required ID field holding one ID. A record with no line out is a root.
+Records only. A line joins a record to a record it belongs to: a required ID field holding one ID. A record with no line out is a root. Every line here is a reference by ID, even where Mermaid draws one solid at a crossing.
 
 ```mermaid
 erDiagram
@@ -46,22 +128,22 @@ erDiagram
     Convo
     ConvoLink
     ConvoEvent
-    Membership }o--|| Project : "project_id"
-    Membership }o--|| Person : "person_id"
-    Epic }o--|| Project : "project_id"
-    Workstream }o--|| Project : "project_id"
-    Workstream }o--|| Ticket : "ticket_id"
-    WorkstreamEvent }o--|| Workstream : "workstream_id"
-    Ticket }o--|| Project : "project_id"
-    Schedule }o--|| Project : "project_id"
-    Schedule }o--|| Person : "owner"
-    Session }o--|| Workstream : "workstream_id"
-    WorkstreamVm }o--|| Workstream : "workstream_id"
-    WorkstreamVm }o--|| Worker : "worker_id"
-    Convo }o--|| Project : "project_id"
-    ConvoLink }o--|| Convo : "convo_id"
-    ConvoLink }o--|| Workstream : "workstream_id"
-    ConvoEvent }o--|| Convo : "convo_id"
+    Membership }o..|| Project : "project_id"
+    Membership }o..|| Person : "person_id"
+    Epic }o..|| Project : "project_id"
+    Workstream }o..|| Project : "project_id"
+    Workstream }o..|| Ticket : "ticket_id"
+    WorkstreamEvent }o..|| Workstream : "workstream_id"
+    Ticket }o..|| Project : "project_id"
+    Schedule }o..|| Project : "project_id"
+    Schedule }o..|| Person : "owner"
+    Session }o..|| Workstream : "workstream_id"
+    WorkstreamVm }o..|| Workstream : "workstream_id"
+    WorkstreamVm }o..|| Worker : "worker_id"
+    Convo }o..|| Project : "project_id"
+    ConvoLink }o..|| Convo : "convo_id"
+    ConvoLink }o..|| Workstream : "workstream_id"
+    ConvoEvent }o..|| Convo : "convo_id"
 ```
 
 ## Each record

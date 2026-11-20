@@ -63,5 +63,22 @@ def test_record_diagrams_leave_out_the_fields_every_record_has():
 
 def test_the_page_renders_every_diagram():
     page = erd.html(json.loads(generate()), "https://example.invalid/mermaid.mjs")
-    assert page.count('<pre class="mermaid">') == 1 + len(DOMAIN.records)
+    assert page.count('<pre class="mermaid">') == 2 + len(DOMAIN.records), "the legend, the overview, each record"
     assert "did not render" in page
+
+
+def test_the_legend_comes_first():
+    doc = erd.markdown(json.loads(generate()))
+    assert doc.index("## Legend") < doc.index("## Records") < doc.index("## Overview")
+    page = erd.html(json.loads(generate()), "https://example.invalid/mermaid.mjs")
+    assert page.index('id="legend"') < page.index('id="overview"')
+
+
+def test_the_legend_example_uses_every_kind_of_line_end():
+    for marker in ("}o..||", "}o..o|", "}o..o{", "||--||", "||--o|"):
+        assert marker in erd.LEGEND_EXAMPLE
+
+
+def test_every_diagram_draws_references_dashed_and_containment_solid():
+    for line in erd.overview(DOMAIN).splitlines()[1:]:
+        assert "--" not in line, "the overview has only references"
