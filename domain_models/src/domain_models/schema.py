@@ -1,7 +1,8 @@
-"""Generate ``schemas/domain.schema.json`` from the models, or check that it is current.
+"""Generate ``schemas/`` from the models, or check that it is current.
 
-domain-models write   # regenerate the file
-domain-models check   # exit 1 if the file differs from what the models generate
+domain-models write        # regenerate the schema and its diagrams
+domain-models check        # exit 1 if either differs from what the models generate
+domain-models html PATH    # write a standalone page that renders the diagrams
 """
 
 from __future__ import annotations
@@ -12,9 +13,12 @@ from pathlib import Path
 
 from pydantic.json_schema import models_json_schema
 
-from . import RECORDS, SCHEMA_VERSION
+from . import RECORDS, SCHEMA_VERSION, erd
 
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "domain.schema.json"
+SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
+SCHEMA_PATH = SCHEMAS_DIR / "domain.schema.json"
+DIAGRAMS_PATH = SCHEMAS_DIR / "domain.erd.md"
+MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.esm.min.mjs"
 
 
 def generate() -> str:
@@ -35,19 +39,32 @@ def generate() -> str:
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
 
+def outputs() -> dict[Path, str]:
+    """Every generated file, and its exact text."""
+    schema = generate()
+    return {SCHEMA_PATH: schema, DIAGRAMS_PATH: erd.markdown(json.loads(schema))}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args == ["write"]:
-        SCHEMA_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SCHEMA_PATH.write_text(generate())
-        print(f"wrote {SCHEMA_PATH}")
+        SCHEMAS_DIR.mkdir(parents=True, exist_ok=True)
+        for path, text in outputs().items():
+            path.write_text(text)
+            print(f"wrote {path}")
         return 0
     if args == ["check"]:
-        current = SCHEMA_PATH.read_text() if SCHEMA_PATH.exists() else ""
-        if current != generate():
-            print(f"{SCHEMA_PATH} is out of date: run `make -C domain_models schemas`", file=sys.stderr)
+        stale = [p for p, text in outputs().items() if (p.read_text() if p.exists() else "") != text]
+        for path in stale:
+            print(f"{path} is out of date: run `make -C domain_models schemas`", file=sys.stderr)
+        if stale:
             return 1
         print("schemas: ok")
+        return 0
+    if len(args) == 2 and args[0] == "html":
+        out = Path(args[1])
+        out.write_text(erd.html(json.loads(generate()), MERMAID_URL))
+        print(f"wrote {out}")
         return 0
     print(__doc__, file=sys.stderr)
     return 2

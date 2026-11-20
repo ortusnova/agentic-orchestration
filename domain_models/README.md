@@ -11,6 +11,12 @@ What each model means, and the rules about versions and IDs, are in
 ```sh
 make test      # the tests, including the check that schemas/ is current
 make schemas   # regenerate schemas/ after changing a model
+make erd       # write build/domain.erd.html, to view the diagrams in a browser
+make fmt       # space out documented attributes, then format with ruff
 ```
+
+[`schemas/domain.erd.md`](schemas/domain.erd.md) shows the models as
+entity-relationship diagrams: an overview of the records and what each
+belongs to, then one diagram per record. GitHub renders it.
 
 New IDs come from `domain_models.ids.new_id`, never from anywhere else.

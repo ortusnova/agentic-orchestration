@@ -1,4 +1,4 @@
-.PHONY: help test lint fmt schemas
+.PHONY: help test lint fmt schemas erd
 
 SOURCES := src tests tools
 
@@ -21,3 +21,7 @@ fmt: ## Space out documented attributes, then format with ruff
 
 schemas: ## Regenerate schemas/ from the models
 	uv run domain-models write
+
+erd: ## Write build/domain.erd.html, a page that renders the diagrams (loads Mermaid from a CDN)
+	@mkdir -p build
+	uv run domain-models html build/domain.erd.html

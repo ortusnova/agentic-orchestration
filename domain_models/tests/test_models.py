@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from domain_models import RECORDS, Convo, Project, Session, Ticket, Workstream
 from domain_models.ids import IdKind, new_id
-from domain_models.schema import SCHEMA_PATH, generate
+from domain_models.schema import generate
 
 NOW = "2026-11-20T12:00:00Z"
 TIMES = {"created_at": NOW, "updated_at": NOW}
@@ -51,10 +51,6 @@ def session(**over):
         "agent": {"harness": "opencode", "model": "anthropic/claude-opus-5-5"},
     }
     return load(Session, **{**fields, **over})
-
-
-def test_the_committed_schema_is_current():
-    assert SCHEMA_PATH.read_text() == generate(), "run `make -C domain_models schemas`"
 
 
 def test_every_record_is_in_the_schema():
