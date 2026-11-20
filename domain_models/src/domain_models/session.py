@@ -16,6 +16,7 @@ StageName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,62}$")]
 class AgentRef(DomainModel):
     harness: NonEmptyStr
     """The ACP agent, for example ``opencode`` or ``claude-code``."""
+
     model: NonEmptyStr
     """The model it runs, for example ``anthropic/claude-opus-5-5``."""
 
@@ -24,18 +25,23 @@ class SessionState(enum.StrEnum):
     QUEUED = "queued"
     STARTING = "starting"
     RUNNING = "running"
+
     HELD = "held"
     """A person holds the floor; the session's clock is stopped."""
+
     ENDED = "ended"
 
 
 class SessionOutcome(enum.StrEnum):
     COMPLETED = "completed"
     """The stage's work is done."""
+
     NO_CHANGE = "no_change"
     """The agent claims nothing needed changing, with evidence."""
+
     BLOCKED = "blocked"
     """The agent cannot proceed without a person."""
+
     FAILED = "failed"
     TIMED_OUT = "timed_out"
     STALLED = "stalled"
@@ -53,10 +59,13 @@ class Usage(DomainModel):
 class Session(Record):
     id: SessionId
     workstream_id: WorkstreamId
+
     stage: StageName
     """The session's purpose, for example ``draft``, ``review``, ``address-review``."""
+
     attempt: Annotated[int, Field(ge=1)]
     """1 for the first session of this stage in the workstream; a retry adds one."""
+
     state: SessionState
     agent: AgentRef
     vm_id: WorkstreamVmId | None = None
@@ -65,8 +74,10 @@ class Session(Record):
     started_at: UtcDatetime | None = None
     ended_at: UtcDatetime | None = None
     outcome: SessionOutcome | None = None
+
     statement: str | None = None
     """The agent's own account of why it stopped, after secret masking."""
+
     turns: Annotated[int, Field(ge=0)] = 0
     usage: Usage = Usage()
 

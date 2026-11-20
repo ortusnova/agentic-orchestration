@@ -22,6 +22,7 @@ class TrackerKind(enum.StrEnum):
 class MirrorOrigin(enum.StrEnum):
     IMPORTED = "imported"
     """The ticket was read from the tracker: the tracker had it first."""
+
     EXPORTED = "exported"
     """The system created the ticket in the tracker."""
 
@@ -30,14 +31,19 @@ class TrackerMirror(DomainModel):
     """A ticket's copy in one external tracker. PROVISIONAL: sync and conflict rules are open (review item 3b)."""
 
     tracker: TrackerKind
+
     instance: NonEmptyStr
     """Which installation, for example ``https://huly.example`` and its workspace."""
+
     external_id: NonEmptyStr
     """The tracker's stable ID for the issue."""
+
     external_key: str | None = None
     """The key people see, for example ``ONS-77``."""
+
     url: str | None = None
     origin: MirrorOrigin
+
     synced_at: UtcDatetime | None = None
     """When the last sync in either direction finished."""
 

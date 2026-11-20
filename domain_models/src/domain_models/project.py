@@ -22,6 +22,7 @@ class Forge(enum.StrEnum):
 class RepositoryRole(enum.StrEnum):
     CODE = "code"
     """A repository sessions change."""
+
     SPEC_STORE = "spec_store"
     """The project's OpenSpec store: its plan, changes, and breakdowns."""
 
@@ -39,6 +40,7 @@ class Project(Record):
     id: ProjectId
     slug: Slug
     name: NonEmptyStr
+
     repositories: list[Repository]
     """Every repository of the project. Exactly one has the ``spec_store`` role."""
 
@@ -57,10 +59,13 @@ class ProjectRole(enum.StrEnum):
 
     VIEWER = "viewer"
     """Sees the project, its workstreams, and their sessions."""
+
     PLANNER = "planner"
     """Also submits workstreams and plans with the planning session."""
+
     APPROVER = "approver"
     """Also approves workstreams and steers, takes over, or cancels sessions."""
+
     ADMIN = "admin"
     """Also manages the project's members, repositories, and settings."""
 

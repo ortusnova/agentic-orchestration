@@ -1,7 +1,7 @@
 """Generate ``schemas/domain.schema.json`` from the models, or check that it is current.
 
-    domain-models write   # regenerate the file
-    domain-models check   # exit 1 if the file differs from what the models generate
+domain-models write   # regenerate the file
+domain-models check   # exit 1 if the file differs from what the models generate
 """
 
 from __future__ import annotations
@@ -24,7 +24,10 @@ def generate() -> str:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": f"urn:agentic-orchestration:domain:v{SCHEMA_VERSION}",
         "title": "Domain models",
-        "description": "Generated from the domain_models package. Do not edit: change the models and run `make -C domain_models schemas`.",
+        "description": (
+            "Generated from the domain_models package. Do not edit: change the models"
+            " and run `make -C domain_models schemas`."
+        ),
         "x-schema-version": SCHEMA_VERSION,
         "x-records": [m.__name__ for m in RECORDS],
         "$defs": dict(sorted(top["$defs"].items())),

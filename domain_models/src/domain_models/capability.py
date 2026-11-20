@@ -27,6 +27,7 @@ class NetworkRule(DomainModel):
 
     host: NonEmptyStr
     """A host name. Never an IP address or a range."""
+
     ports: list[Port] = [443]
 
 
@@ -35,6 +36,7 @@ class ResourceMount(DomainModel):
 
     resource: NonEmptyStr
     """For example ``go-module-cache``. Each worker maps the name to its own storage."""
+
     path: NonEmptyStr
     """Where it appears inside the VM."""
 
@@ -53,6 +55,8 @@ class WorkerOffer(DomainModel):
 
     capacity: Resources
     """The worker's total, after its own reserve."""
+
     kvm: bool = False
+
     resources: list[NonEmptyStr] = []
     """The named resources it can mount."""

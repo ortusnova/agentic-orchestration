@@ -150,7 +150,12 @@ def test_a_ticket_belongs_to_one_workstream_or_one_epic():
 
 def test_a_ticket_has_one_mirror_per_tracker_instance():
     mirror = {"tracker": "huly", "instance": "https://huly.example/sortie", "external_id": "65f0", "origin": "imported"}
-    base = {"id": new_id(IdKind.TICKET), "project_id": PROJECT, "title": "Fix it", "workstream_id": new_id(IdKind.WORKSTREAM)}
+    base = {
+        "id": new_id(IdKind.TICKET),
+        "project_id": PROJECT,
+        "title": "Fix it",
+        "workstream_id": new_id(IdKind.WORKSTREAM),
+    }
     assert load(Ticket, **base, mirrors=[mirror]).mirrors[0].external_id == "65f0"
     with pytest.raises(ValidationError, match="one mirror"):
         load(Ticket, **base, mirrors=[mirror, {**mirror, "external_id": "65f1"}])
@@ -158,7 +163,13 @@ def test_a_ticket_has_one_mirror_per_tracker_instance():
 
 def test_a_project_has_one_spec_store():
     repo = {"id": REPO, "role": "code", "forge": "github", "owner": "ortusnova", "name": "app"}
-    store = {"id": new_id(IdKind.REPOSITORY), "role": "spec_store", "forge": "github", "owner": "ortusnova", "name": "specs"}
+    store = {
+        "id": new_id(IdKind.REPOSITORY),
+        "role": "spec_store",
+        "forge": "github",
+        "owner": "ortusnova",
+        "name": "specs",
+    }
     assert load(Project, id=PROJECT, slug="app", name="App", repositories=[repo, store])
     with pytest.raises(ValidationError, match="spec_store"):
         load(Project, id=PROJECT, slug="app", name="App", repositories=[repo])

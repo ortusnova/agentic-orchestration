@@ -30,7 +30,10 @@ def test_two_ids_from_the_same_millisecond_differ():
     assert new_id(IdKind.TICKET, now_ms=7) != new_id(IdKind.TICKET, now_ms=7)
 
 
-@pytest.mark.parametrize("value", ["ONS-77", "ws_", "ws_01JD3Z8Q6V4C7M2N9P0R5S8T1", "xx_01JD3Z8Q6V4C7M2N9P0R5S8T1W", "ws_01JD3Z8Q6V4C7M2N9P0R5S8TIW"])
+@pytest.mark.parametrize(
+    "value",
+    ["ONS-77", "ws_", "ws_01JD3Z8Q6V4C7M2N9P0R5S8T1", "xx_01JD3Z8Q6V4C7M2N9P0R5S8T1W", "ws_01JD3Z8Q6V4C7M2N9P0R5S8TIW"],
+)
 def test_anything_else_is_not_an_id(value):
     with pytest.raises(ValueError):
         kind_of(value)

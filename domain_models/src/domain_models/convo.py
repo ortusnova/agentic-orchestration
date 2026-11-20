@@ -14,10 +14,13 @@ from .people import Actor
 
 class ConvoKind(enum.StrEnum):
     PULL_REQUEST = "pull_request"
+
     TRACKER_ISSUE = "tracker_issue"
     """The comments on a ticket's mirror."""
+
     CHAT_THREAD = "chat_thread"
     EMAIL_THREAD = "email_thread"
+
     WORKBENCH = "workbench"
     """A conversation held in the workbench."""
 
@@ -41,12 +44,16 @@ class Convo(Record):
     id: ConvoId
     project_id: ProjectId
     kind: ConvoKind
+
     system: NonEmptyStr
     """Where it lives, for example ``github``, ``slack``, ``huly``, ``workbench``."""
+
     external_id: NonEmptyStr
     """Its stable ID in that system."""
+
     url: str | None = None
     title: str | None = None
+
     pull_request: PullRequestInfo | None = None
     """Set exactly for a pull request."""
 
@@ -60,8 +67,10 @@ class Convo(Record):
 class ConvoLinkReason(enum.StrEnum):
     SOURCE = "source"
     """The convo the workstream came from, and replies to."""
+
     OUTPUT = "output"
     """The workstream created it, for example its pull request."""
+
     SUBSCRIBED = "subscribed"
     """Attached later, by a person, the router, or a session."""
 
@@ -93,13 +102,18 @@ class ConvoEvent(Record):
 
     id: ConvoEventId
     convo_id: ConvoId
+
     at: UtcDatetime
     """When it happened in its system."""
+
     kind: ConvoEventKind
     author: Actor
+
     external_id: NonEmptyStr
     """Its ID in the convo's system, so a second delivery is recognized."""
+
     body: str = ""
     """Untrusted: whatever its author wrote."""
+
     url: str | None = None
     in_reply_to: ConvoEventId | None = None

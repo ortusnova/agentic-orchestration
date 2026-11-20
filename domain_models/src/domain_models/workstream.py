@@ -27,8 +27,10 @@ from .people import Actor
 class WorkstreamShape(enum.StrEnum):
     PLANNED = "planned"
     """Implements a story of an approved plan."""
+
     ADHOC = "adhoc"
     """A one-off ask: a fix, an investigation."""
+
     SCHEDULED = "scheduled"
     """Created by a schedule."""
 
@@ -47,12 +49,16 @@ class Source(DomainModel):
     """Where a workstream came from, and where its replies go."""
 
     channel: SourceChannel
+
     requester: PersonId | None
     """Who asked. None only for a scheduled workstream."""
+
     schedule_id: ScheduleId | None = None
     """The schedule that created it, for a scheduled workstream."""
+
     reply_to: ConvoId | None = None
     """The convo replies go to. None when the requester reads replies in the workbench."""
+
     origin_url: str | None = None
     """A link to the message, issue, or comment that started it."""
 
@@ -70,10 +76,13 @@ class StoryRef(DomainModel):
 
     plan_key: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")]
     """The story's plan key, ``<change>/<deliverable>``."""
+
     change: NonEmptyStr
     """The OpenSpec change the story belongs to."""
+
     digest: NonEmptyStr
     """The story digest (planlib) of the version this workstream implements."""
+
     covers: list[NonEmptyStr] = []
     """The requirements the story covers."""
 
@@ -91,6 +100,7 @@ class Approval(DomainModel):
     state: ApprovalState
     by: PersonId | None = None
     at: UtcDatetime | None = None
+
     digest: str | None = None
     """What the approval covers: for a planned workstream, the story digest approved."""
 
@@ -107,12 +117,16 @@ class WorkstreamState(enum.StrEnum):
 
     SUBMITTED = "submitted"
     AWAITING_APPROVAL = "awaiting_approval"
+
     QUEUED = "queued"
     """Approved; waits for its blockers, a worker, or a session to start."""
+
     ACTIVE = "active"
     """A session runs, or the next one is due."""
+
     AWAITING_PERSON = "awaiting_person"
     """Stopped until a person acts: a question, a park, a review."""
+
     DONE = "done"
     CANCELLED = "cancelled"
 
@@ -120,31 +134,45 @@ class WorkstreamState(enum.StrEnum):
 class Workstream(Record):
     id: WorkstreamId
     project_id: ProjectId
+
     epic_id: EpicId | None = None
     """The epic of a planned workstream. None for the others."""
+
     ticket_id: TicketId
     shape: WorkstreamShape
     source: Source
+
     story: StoryRef | None = None
     """Set exactly for a planned workstream."""
+
     title: NonEmptyStr
+
     goal: NonEmptyStr
     """What done means, in words. For a planned workstream, from its story."""
+
     repositories: Annotated[list[RepositoryId], Field(min_length=1)]
     """The project repositories its sessions change."""
+
     state: WorkstreamState
     approval: Approval
+
     priority: Annotated[int, Field(ge=0, le=4)] = 2
     """0 is the most urgent."""
+
     due_at: UtcDatetime | None = None
+
     blocked_by: list[WorkstreamId] = []
     """Workstreams that must be done before this one starts."""
+
     owner: PersonId | None
     """Who answers for it. None only for a scheduled workstream without an owner."""
+
     participants: list[PersonId] = []
     """Everyone who acted on it, the owner and requester included."""
+
     vm_id: WorkstreamVmId | None = None
     """Its VM, from the first session until the VM is removed."""
+
     current_session_id: SessionId | None = None
     closed_at: UtcDatetime | None = None
 
@@ -179,6 +207,7 @@ class WorkstreamEventKind(enum.StrEnum):
     WATCHDOG_ACTION = "watchdog_action"
     CONVO_LINKED = "convo_linked"
     COMMENTED = "commented"
+
     DECISION = "decision"
     """A decision about the work, recorded so later sessions and people see it."""
 
@@ -191,8 +220,10 @@ class WorkstreamEvent(Record):
     at: UtcDatetime
     actor: Actor
     kind: WorkstreamEventKind
+
     summary: NonEmptyStr
     """One line a person can read."""
+
     session_id: SessionId | None = None
     convo_id: ConvoId | None = None
 
@@ -208,10 +239,13 @@ class Epic(Record):
 
     id: EpicId
     project_id: ProjectId
+
     change: NonEmptyStr
     """The OpenSpec change whose breakdown the epic's stories come from."""
+
     title: NonEmptyStr
     state: EpicState
+
     ticket_id: TicketId | None = None
     """Its ticket, when epics are mirrored to a tracker."""
 
@@ -222,8 +256,10 @@ class Schedule(Record):
     id: ScheduleId
     project_id: ProjectId
     title: NonEmptyStr
+
     cron: NonEmptyStr
     """A five-field cron expression, evaluated in UTC."""
+
     goal: NonEmptyStr
     repositories: Annotated[list[RepositoryId], Field(min_length=1)]
     owner: PersonId

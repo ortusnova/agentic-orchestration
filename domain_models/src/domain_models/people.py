@@ -16,8 +16,10 @@ class ExternalIdentity(DomainModel):
 
     system: NonEmptyStr
     """The system, for example ``oidc:https://idp.example``, ``github``, ``slack``, ``huly``."""
+
     subject: NonEmptyStr
     """The account's stable identifier in that system, not its display name."""
+
     handle: str | None = None
     """The name people see, for example a GitHub login. Informational; it may change."""
 
