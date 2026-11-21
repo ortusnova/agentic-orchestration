@@ -25,6 +25,8 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [[ -f $ROOT/dev/.env ]]; then set -a; source "$ROOT/dev/.env"; set +a; fi
+# shellcheck source=stage0/huly-restart-policy.sh
+. "$ROOT/dev/stage0/huly-restart-policy.sh"
 WB=$ROOT/workbench
 SORTIE_SRC=${SORTIE_SRC:-$ROOT/sortie}
 BROKER_SRC=${BROKER_SRC:-$ROOT/acp-broker}
@@ -111,11 +113,12 @@ mkdir -p "$DEV_BIN"
 # The workbench and Sortie start acp-broker by name.
 export PATH=$DEV_BIN:$PATH
 
-if ! curl -sf -o /dev/null "$HULY_URL/config.json"; then
-  say "Starting Huly from $HULY_COMPOSE_DIR"
-  (cd "$HULY_COMPOSE_DIR" && CONTAINERS_REGISTRIES_CONF=$PWD/.podman-registries.conf docker compose up -d >/dev/null)
-  for _ in $(seq 60); do curl -sf -o /dev/null "$HULY_URL/config.json" && break; sleep 2; done
+# Every Huly container runs, not just its front end (huly-restart-policy.sh).
+if [[ -f $HULY_COMPOSE_DIR/compose.yml ]]; then
+  CONTAINERS_REGISTRIES_CONF=$HULY_COMPOSE_DIR/.podman-registries.conf huly_ensure "$HULY_COMPOSE_DIR" docker compose \
+    || die "could not start Huly in $HULY_COMPOSE_DIR"
 fi
+for _ in $(seq 60); do curl -sf -o /dev/null "$HULY_URL/config.json" && break; sleep 2; done
 HULY_TOKEN=$(python3 "$ROOT/dev/huly_project.py" "$HULY_URL" "$HULY_WORKSPACE" "$HULY_EMAIL" "$HULY_PASSWORD" \
   "$HULY_PROJECT" ${RESET:+--reset}) || die "could not prepare Huly project $HULY_PROJECT at $HULY_URL"
 

@@ -27,6 +27,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+# shellcheck source=../stage0/huly-restart-policy.sh
+. "$ROOT/dev/stage0/huly-restart-policy.sh"
 WB=$ROOT/workbench
 KIT=$ROOT/dev/live
 FORGE=$ROOT/dev/forge
@@ -63,11 +65,11 @@ say "Installing workbench dependencies and building the frontend"
 (cd "$WB" && uv sync -q)
 (cd "$WB/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
 
-if ! curl -sf -o /dev/null "$HULY_URL/config.json"; then
-  say "Starting Huly"
-  (cd "$HULY_COMPOSE_DIR" && docker compose up -d >/dev/null)
-  for _ in $(seq 60); do curl -sf -o /dev/null "$HULY_URL/config.json" && break; sleep 2; done
+# Every Huly container runs, not just its front end (huly-restart-policy.sh).
+if [[ -f $HULY_COMPOSE_DIR/compose.yml ]]; then
+  huly_ensure "$HULY_COMPOSE_DIR" docker compose || die "could not start Huly in $HULY_COMPOSE_DIR"
 fi
+for _ in $(seq 60); do curl -sf -o /dev/null "$HULY_URL/config.json" && break; sleep 2; done
 say "Preparing Huly project $LIVE_PROJECT"
 HULY_TOKEN=$(python3 "$ROOT/dev/huly_project.py" "$HULY_URL" "$HULY_WORKSPACE" "$HULY_EMAIL" "$HULY_PASSWORD" \
   "$LIVE_PROJECT" ${RESET:+--reset}) || die "could not prepare Huly project $LIVE_PROJECT"

@@ -401,17 +401,16 @@ say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
 
 HULY_DIR=${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost}
-if ! curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json"; then
-  [[ -d $HULY_DIR ]] || die "Huly is not running and HULY_COMPOSE_DIR is not set"
-  say "Starting Huly"
-  # The containers outlive this run; they must not hold its lock.
-  (cd "$HULY_DIR" && podman compose up -d >/dev/null 9>&-)
-  for _ in $(seq 60); do curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" && break; sleep 2; done
+# Every Huly container runs and restarts unless stopped, the policy in the
+# compose files themselves, so a `compose up` by anyone keeps it; a front
+# end that answers is not enough (huly-restart-policy.sh).
+if [[ -f $HULY_DIR/compose.yml ]]; then
+  huly_ensure "$HULY_DIR" || die "could not start Huly in $HULY_DIR"
+elif ! curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json"; then
+  die "Huly is not running and $HULY_DIR holds no compose project; set HULY_COMPOSE_DIR"
 fi
-# Every Huly container must restart unless stopped, and podman honors that
-# after a reboot only through this user unit. huly-selfhost leaves redpanda
-# without a policy (huly-restart-policy.sh).
-for name in $(huly_restart_policies "$HULY_DIR"); do say "Huly container $name now restarts unless stopped"; done
+for _ in $(seq 60); do curl -sf -o /dev/null "$STAGE0_HULY_URL/config.json" && break; sleep 2; done
+# podman honors the restart policy after a reboot only through this user unit.
 systemctl --user is-enabled -q podman-restart.service || { say "Enabling podman-restart.service"; systemctl --user enable -q podman-restart.service; }
 say "Preparing Huly project $STAGE0_HULY_PROJECT"
 python3 "$ROOT/dev/huly_project.py" "$STAGE0_HULY_URL" "$STAGE0_HULY_WORKSPACE" "$STAGE0_HULY_EMAIL" \
