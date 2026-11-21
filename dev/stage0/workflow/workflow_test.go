@@ -167,7 +167,8 @@ func TestNoFlowReachesTheEdge(t *testing.T) {
 // (unknown_sub_key): the allowed hosts are nono's (egress-profile.json),
 // and IS_SANDBOX is the worker image's, not a pass_env.
 func TestTheRemoteSectionHasOnlyRemoteKeys(t *testing.T) {
-	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository", "profiles"}
+	known := []string{"backend", "image", "requires", "flows", "credentials", "repositories", "default_repository", "profiles",
+		"forge_app", "forge_gate", "forge_ceiling"}
 	key := regexp.MustCompile(`^    ([a-z_]+):`)
 	in := false
 	for _, line := range workflowFrontMatter(t) {
@@ -299,5 +300,65 @@ func TestAnAfterDeployStoryStaysOpen(t *testing.T) {
 		if !strings.Contains(review, want) {
 			t.Errorf("the review prompt does not say %q", want)
 		}
+	}
+}
+
+// forgeCeiling maps each repository of environment.remote.forge_ceiling
+// to the GitHub repositories its jobs may be granted.
+func forgeCeiling(t *testing.T) map[string][]string {
+	t.Helper()
+	ceiling := map[string][]string{}
+	repo := regexp.MustCompile(`^      ([a-z0-9-]+):$`)
+	entry := regexp.MustCompile(`^        - repository: (\S+)$`)
+	in, cur := false, ""
+	for _, line := range workflowFrontMatter(t) {
+		switch {
+		case line == "    forge_ceiling:":
+			in = true
+			continue
+		case in && !strings.HasPrefix(line, "      "):
+			in = false
+		}
+		if !in {
+			continue
+		}
+		if m := repo.FindStringSubmatch(line); m != nil {
+			cur = m[1]
+			ceiling[cur] = []string{}
+		} else if m := entry.FindStringSubmatch(line); m != nil {
+			ceiling[cur] = append(ceiling[cur], m[1])
+		} else if !strings.HasPrefix(strings.TrimSpace(line), "permissions:") {
+			t.Errorf("forge_ceiling line %q is neither a repository, an entry nor its permissions", line)
+		}
+	}
+	return ceiling
+}
+
+// agent-platform/forge-access#The platform caps each repository's access,
+// scenario The metal fleet stays out of reach: no repository's jobs may be
+// granted ortusnova/fleet (spec store job-scoped-github-tokens, task 1.3:
+// it changes only through the promotion branch the operator pushes), and
+// every repository Sortie runs has a ceiling, so none falls back to
+// asking for what no one reviewed.
+func TestNoCeilingReachesTheMetalFleet(t *testing.T) {
+	ceiling := forgeCeiling(t)
+	names, _ := repositories(t, workflowFrontMatter(t))
+	for _, name := range names {
+		if _, ok := ceiling[name]; !ok {
+			t.Errorf("repository %s has no forge_ceiling", name)
+		}
+	}
+	for name, repos := range ceiling {
+		if !slices.Contains(names, name) {
+			t.Errorf("forge_ceiling names %s, which is not a repository of the workflow", name)
+		}
+		for _, r := range repos {
+			if strings.EqualFold(r, "ortusnova/fleet") {
+				t.Errorf("forge_ceiling.%s lists ortusnova/fleet: no repository's jobs may reach the metal fleet", name)
+			}
+		}
+	}
+	if !slices.Contains(ceiling["homelab"], "ortusnova/fleet-vm") {
+		t.Errorf("homelab's ceiling %v lacks ortusnova/fleet-vm, which its fleet mirror writes", ceiling["homelab"])
 	}
 }

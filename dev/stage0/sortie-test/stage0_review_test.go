@@ -34,6 +34,7 @@ const reviewHuman = "sortie-review:human"
 // stage0Values stand in for what stage0.sh renders into the workflow.
 var stage0Values = map[string]string{
 	"STAGE0_SORTIE_PORT":       "7680",
+	"STAGE0_EGRESS_GATE_PORT":  "7692",
 	"STAGE0_SORTIE_MAX_AGENTS": "16",
 	"STAGE0_HOMELAB_MOUNTS":    "[]",
 	"STAGE0_HULY_URL":          "http://127.0.0.1:8087",

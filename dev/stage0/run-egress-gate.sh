@@ -10,8 +10,13 @@
 # p1's loopback ($STAGE0_HOME/previews/front-routes, which preview.sh
 # writes), never through nono, and gives a review job's requests the
 # previews' review key; Sortie's control token admits preview-sync's check
-# that a preview answers there. While Sortie cannot answer, as while it
-# restarts, it answers 503, which the worker retries.
+# that a preview answers there. Sortie registers each attempt's GitHub
+# tokens with it (POST /v1/forge-tokens, the control token): while the
+# attempt runs, its CONNECTs for github.com and api.github.com go to a nono
+# the gate starts for it, with the kit's nono and egress CA, whose token
+# files are in $STAGE0_FORGE_TOKENS_DIR (front-config.sh). While Sortie
+# cannot answer, as while it restarts, it answers 503, which the worker
+# retries.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -25,4 +30,6 @@ exec "$STAGE0_HOME/bin/cp-egress" -listen "127.0.0.1:$STAGE0_EGRESS_GATE_PORT" \
   -nono "127.0.0.1:$STAGE0_NONO_PORT" -nono-pass-file "$STAGE0_HOME/nono-pass" \
   -live-proof-nono "127.0.0.1:$STAGE0_NONO_LIVE_PROOF_PORT" -live-proof-jobs-file "$STAGE0_LIVE_PROOFS/active" \
   -preview-domain "$(preview_domain)" -previews-file "$STAGE0_PREVIEW_FRONT_ROUTES" \
-  -preview-review-key-file "$STAGE0_PREVIEW_REVIEW_KEY"
+  -preview-review-key-file "$STAGE0_PREVIEW_REVIEW_KEY" \
+  -forge-nono "$STAGE0_HOME/bin/nono" -forge-ca-cert "$STAGE0_HOME/egress-ca/ca.crt" -forge-ca-key "$STAGE0_HOME/egress-ca/ca.key" \
+  -forge-dir "$STAGE0_FORGE_TOKENS_DIR"

@@ -261,6 +261,41 @@ environment:
       # its result on the pull request and opens issues with it (README.md
       # "Live proofs"). Git over HTTPS gets no placeholder: Sortie pushes.
       - {name: github_api, env: SORTIE_GITHUB_TOKEN, hosts: [api.github.com]}
+    # Each attempt's GitHub tokens (spec store job-scoped-github-tokens):
+    # Sortie mints one per owner of the repository's .sortie/forge.yaml,
+    # within the ceiling below, from the App ortus-nova-build-jobs, whose
+    # key is in the stage-0 home, mode 0600 (stage0.sh refuses a wider
+    # one). It hands them to the egress gate, which gives them to the
+    # attempt's requests to github.com and api.github.com through a nono
+    # of the attempt's own; the machine holds only placeholders
+    # (sortie-credential-github-<owner>, SORTIE_GITHUB_TOKEN_<OWNER>, and
+    # pack/git-credential-sortie-github for git).
+    forge_app:
+      app_id: 5857256
+      private_key_file: ${STAGE0_HOME}/github-app.pem
+    forge_gate:
+      url: http://127.0.0.1:${STAGE0_EGRESS_GATE_PORT}
+    # The most a repository's jobs may be granted, whatever its
+    # .sortie/forge.yaml declares: a merged change to that file can widen
+    # a declaration only up to here. No repository's jobs may reach
+    # ortusnova/fleet, the metal fleet: it changes only through the
+    # promotion branch the operator pushes (spec store
+    # promote-fleet-to-metal; workflow/workflow_test.go fails if a ceiling
+    # lists it). Workflows is left out: Sortie pushes from this host.
+    forge_ceiling:
+      sortie:
+        - repository: ortusnova/sortie
+          permissions: {contents: write, pull_requests: write, issues: write, metadata: read}
+      agentic-orchestration:
+        - repository: ortusnova/agentic-orchestration
+          permissions: {contents: write, pull_requests: write, issues: write, metadata: read}
+      homelab:
+        - repository: ortusnova/homelab
+          permissions: {contents: write, pull_requests: write, issues: write, metadata: read}
+        # The fleet mirror: each vm seed pushes its fleet to its own
+        # branch seed/<worktree> (homelab .sortie/forge.yaml).
+        - repository: ortusnova/fleet-vm
+          permissions: {contents: write, metadata: read}
     # A story runs in the repository its plan node names (the Huly label
     # sortie-repository:<name>), else in sortie. Every one is dispatched here:
     # no other Sortie polls the project.

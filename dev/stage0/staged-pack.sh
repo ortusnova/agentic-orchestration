@@ -41,6 +41,6 @@ stage_harness() {
   mkdir -p "$1"
   cp "$KIT/pack/install-harness.sh" "$KIT/pack/install-opencode-plugins.sh" \
      "$KIT/pack/agent-acp" "$KIT/pack/agent-usage" "$KIT/pack/sortie-usage.js" \
-     "$KIT/pack/claude-settings.json" \
+     "$KIT/pack/claude-settings.json" "$KIT/pack/git-credential-sortie-github" "$KIT/pack/gitconfig-github" \
      "$KIT/pack/opencode.json" "$1/"
 }

@@ -176,7 +176,8 @@ func (n *fakeNono) serve(c net.Conn) {
 		return
 	}
 	_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\n\r\n")
-	tc := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return n.ca.leaf("api.anthropic.com") }})
+	name, _, _ := net.SplitHostPort(req.Host)
+	tc := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return n.ca.leaf(name) }})
 	inner, err := http.ReadRequest(bufio.NewReader(tc))
 	if err != nil {
 		return
@@ -221,6 +222,7 @@ type harness struct {
 	nono   *fakeNono
 	ca     *testCA
 	gate   *httptest.Server
+	g      *Gate
 	log    *syncBuffer
 }
 
@@ -256,6 +258,7 @@ func newHarnessWith(t *testing.T, configure func(*harness, *Config)) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.g = g
 	// The worker header is what Pomerium sets in front of the gate.
 	h.gate = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set(DefaultIdentityHeader, "p1")

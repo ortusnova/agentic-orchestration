@@ -4,8 +4,10 @@
 // CONNECT only when Sortie's token introspection says its job token is
 // live and granted for the egress flow, logs it with the worker, job and
 // attempt, and tunnels it through nono's proxy, which holds the
-// credentials and decides the host. A live-proof job that runs gets a
-// second nono's, of the live-proof profile, instead. A CONNECT for a
+// credentials and decides the host. Its route picks the nono: an attempt
+// that holds GitHub tokens (ForgeTokens) gets its own nono's for GitHub's
+// hosts, and a live-proof job that runs gets a second nono's, of the
+// live-proof profile, for the others. A CONNECT for a
 // preview's name (Previews) is served from the preview's port on the
 // gate's loopback instead of nono. While Sortie cannot
 // answer, as while it restarts, the gate answers 503, which a worker
@@ -59,6 +61,9 @@ type Config struct {
 	// Previews, when set, are the previews a job reaches at a name under
 	// their domain, from the gate's loopback, never through nono.
 	Previews *Previews
+	// ForgeTokens, when set, takes Sortie's registrations of attempts'
+	// GitHub tokens and runs a nono for each registered attempt.
+	ForgeTokens *ForgeTokens
 }
 
 // LiveProof is the egress of live-proof jobs (agent-platform/run-supervision,
@@ -89,6 +94,7 @@ type Gate struct {
 	identityHeader string
 	client         *http.Client
 	log            *slog.Logger
+	forge          *forge
 }
 
 // New reads the secret files and builds the gate.
@@ -133,7 +139,36 @@ func New(cfg Config, log *slog.Logger) (*Gate, error) {
 	if g.identityHeader == "" {
 		g.identityHeader = DefaultIdentityHeader
 	}
+	if cfg.ForgeTokens != nil {
+		f, err := newForge(*cfg.ForgeTokens, pass, log)
+		if err != nil {
+			return nil, err
+		}
+		f.restore(time.Now())
+		g.forge = f
+	}
 	return g, nil
+}
+
+// Run unregisters, once a minute, each attempt whose GitHub tokens were
+// not refreshed within their hour, until ctx ends; then it stops every
+// attempt's nono, keeping their registrations for the next gate.
+func (g *Gate) Run(ctx context.Context) {
+	if g.forge == nil {
+		<-ctx.Done()
+		return
+	}
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			g.forge.close()
+			return
+		case now := <-t.C:
+			g.forge.sweep(now)
+		}
+	}
 }
 
 // ReadSecret reads a secret file and trims it; an empty one is an error.
@@ -152,6 +187,10 @@ func ReadSecret(file string) (string, error) {
 // ServeHTTP serves one request of the egress route.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	worker := r.Header.Get(g.identityHeader)
+	if r.Method != http.MethodConnect && r.URL.Path == ForgeTokensPath {
+		g.serveForge(w, r)
+		return
+	}
 	if r.Method != http.MethodConnect {
 		g.log.Info("egress refused", slog.String("worker", worker), slog.String("method", r.Method), slog.String("reason", "not CONNECT"))
 		http.Error(w, "the egress flow takes CONNECT only", http.StatusMethodNotAllowed)
@@ -174,10 +213,9 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	attrs := []any{slog.String("worker", worker), slog.String("job", grant.Job), slog.Uint64("attempt", grant.Attempt), slog.String("host", host)}
-	nono := g.cfg.Nono
-	if g.liveProof(grant.Job) {
-		nono = g.cfg.LiveProof.Nono
-		attrs = append(attrs, slog.String("profile", "live-proof"))
+	nono, profile := g.route(grant, host)
+	if profile != "" {
+		attrs = append(attrs, slog.String("profile", profile))
 	}
 	upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(r.Context(), "tcp", nono)
 	if err != nil {
@@ -250,6 +288,21 @@ func (g *Gate) admit(ctx context.Context, token string) (Grant, bool, error) {
 func unavailable(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", "1")
 	http.Error(w, "Sortie cannot check the job token now; try again", http.StatusServiceUnavailable)
+}
+
+// route returns the nono that serves grant's CONNECT for host, and the
+// name of its profile, empty for the shared nono's: the attempt's own
+// for GitHub's hosts while it holds registered tokens, else the
+// live-proof nono's while its job is a live proof that runs, else the
+// shared nono's.
+func (g *Gate) route(grant Grant, host string) (addr, profile string) {
+	if addr, ok := g.forge.route(grant.Job, grant.Attempt, host); ok {
+		return addr, "forge-tokens"
+	}
+	if g.liveProof(grant.Job) {
+		return g.cfg.LiveProof.Nono, "live-proof"
+	}
+	return g.cfg.Nono, ""
 }
 
 // liveProof reports whether job is a live proof that runs: the live-proof

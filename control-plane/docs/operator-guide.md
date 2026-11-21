@@ -254,6 +254,53 @@ the control plane's, and restart the daemon. Nothing else on the worker
 host changes, and a remote-kind workflow names the flows by Pomerium's URL
 instead of the tunnel's loopback end.
 
+## GitHub tokens per attempt: what nono can do
+
+Spec store `job-scoped-github-tokens`, story `egress-replaces-forge-tokens`,
+measured first, on p1, 2026-11-20, with the pinned nono 0.81.0
+(`dev/stage0/nono-version.sh`). The upstreams were two local HTTPS echo
+servers that record each request's path and `Authorization` header:
+`localhost:9443` in place of `api.github.com` (header mode, `Bearer {}`) and
+`localhost:9444` in place of `github.com` (`basic_auth` mode). A test CA
+signed their certificate (nono read it from `SSL_CERT_FILE`), and nono
+intercepted TLS with a second test CA. curl and git went through nono with
+its proxy credential, as the egress gate sends them. The tokens were the
+values `TOKEN-A` (owner `ortusnova`) and `TOKEN-B` (owner `briancappello`).
+
+| Question | Result |
+|---|---|
+| Can one nono hold two credentials on one host and replace each by the placeholder the request carries? | **No**, in both modes. nono loads both routes, then refuses every request on that host with 403: `ambiguous route: GET /repos/briancappello/x matched 2 credential routes: ["gh_a", "gh_b"]. Narrow endpoint rules so each request matches exactly one route.` (git: the same for `/briancappello/site.git/info/refs`). A credential route never reads the placeholder: it strips the credential header and injects its own value. |
+| Is a `file://` credential read again for new connections after the file changes? | **No**. After the file was replaced (by rename, and in place), new connections still got the value read at start. |
+| Does a `cmd://` credential select the owner from the request path, and see a new token at once? | **Yes**. With `credential_capture` `cache_ttl_secs: 0`, nono runs the command for every request, with `NONO_CACHE_SCOPE` set by `cache_path_regex`: `^/(?:repos/\|orgs/)?([^/]+)` gives the owner of an API path, `^/([^/]+)/` the owner of a git path. A command that prints the token of the owner the scope names gave `/repos/ortusnova/x` `Bearer TOKEN-A` and `/repos/briancappello/x` `Bearer TOKEN-B`; `git ls-remote` of `ortusnova/fleet-vm` and `briancappello/site` sent `x-access-token:TOKEN-A` and `x-access-token:TOKEN-B`, before git had sent any credential. After the token file changed, the next request got the new token. When the command fails (no owner, as for `/graphql`), nono answers 503 `credential_capture_failed` and forwards nothing. |
+| Does nono honour `XDG_STATE_HOME`? | **Yes**. Its session directory (the trust bundle only) goes there, and stays after nono stops, so the gate deletes it with the attempt's directory. |
+
+So the gate runs one nono per registered attempt, for `github.com` and
+`api.github.com` only, with two `cmd://` credentials (`github_api` in header
+mode, `github_git` in `basic_auth` mode). Their capture command is
+`cp-egress forge-credential <attempt directory> bearer|basic`: it prints
+the token of the owner that `NONO_CACHE_SCOPE` names, or the only token
+when the attempt has one owner, whatever the path (`/graphql`,
+`/user`). The owner comes from the request path, not from the placeholder,
+which only makes the client send a credential. A refresh rewrites the token
+files, and the next request uses the new token. This is option (a) of the
+design's fallback (spec store `job-scoped-github-tokens`, design D6).
+
+The gate does this only with its `-forge-*` flags: `-forge-nono` (the nono
+binary), `-forge-ca-cert` and `-forge-ca-key` (the CA the shared nono
+intercepts with, which every machine trusts) and `-forge-dir` (the token
+files, best on a tmpfs). The stage-0 kit on p1 sets them
+(`dev/stage0/run-egress-gate.sh`). This compose project does not: its gate
+image holds no nono, so a Sortie here must not set
+`environment.remote.forge_gate`, and its jobs keep the forge credential
+nono holds. A registration to a gate without them answers 404, and Sortie
+mints nothing it could deliver.
+
+`endpoint_rules` would also select per owner: with one route per owner whose
+rules match `/repos/<owner>/**`, `/orgs/<owner>/**` and `/<owner>/**`, each
+path got its owner's token, other paths passed with the placeholder, and a
+route without rules took every path no other route matched. It needs the
+same `cmd://` capture to see a refresh, and more routes, so it is not used.
+
 ## Check it
 
 `make -C control-plane test` runs the unit tests: Pomerium's configuration,

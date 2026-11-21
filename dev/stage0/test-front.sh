@@ -17,6 +17,8 @@ KIT=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export STAGE0_HOME=$tmp/home
+# An attempt's GitHub token files go to the user's tmpfs: here, the test's.
+export XDG_RUNTIME_DIR=$tmp/run
 failed=0
 ok() { echo "ok: $1"; }
 fail() { echo "FAIL: $1"; failed=1; }
@@ -54,11 +56,12 @@ rm -f "$tmp/calls"
 "$KIT/run-egress-gate.sh" > "$tmp/out" 2>&1 || fail "run-egress-gate.sh: $(cat "$tmp/out")"
 want="cp-egress -listen 127.0.0.1:7692 -sortie http://127.0.0.1:7680 -control-token-file $STAGE0_HOME/sortie-token -nono 127.0.0.1:7690 -nono-pass-file $STAGE0_HOME/nono-pass -live-proof-nono 127.0.0.1:7691 -live-proof-jobs-file $STAGE0_HOME/live-proofs/active"
 want+=" -preview-domain preview.p1.example.org -previews-file $STAGE0_HOME/previews/front-routes -preview-review-key-file $STAGE0_HOME/preview-review-key"
+want+=" -forge-nono $STAGE0_HOME/bin/nono -forge-ca-cert $STAGE0_HOME/egress-ca/ca.crt -forge-ca-key $STAGE0_HOME/egress-ca/ca.key -forge-dir $XDG_RUNTIME_DIR/ortus-forge-tokens"
 [[ $(cat "$tmp/calls") == "$want" ]] \
-  && ok "the egress gate listens on loopback, tunnels through nono, sends a running live proof's egress to the live-proof nono, and serves the previews under Pomerium's host from preview.sh's routes" \
+  && ok "the egress gate listens on loopback, tunnels through nono, sends a running live proof's egress to the live-proof nono, serves the previews under Pomerium's host from preview.sh's routes, and runs a nono per attempt with GitHub tokens on the user's tmpfs" \
   || fail "cp-egress: $(cat "$tmp/calls")"
 (cd "$KIT/../../control-plane" && go run ./cmd/cp-egress -h > "$tmp/flags" 2>&1 || true)
-for f in listen sortie control-token-file nono nono-pass-file live-proof-nono live-proof-jobs-file preview-domain previews-file preview-review-key-file; do
+for f in listen sortie control-token-file nono nono-pass-file live-proof-nono live-proof-jobs-file preview-domain previews-file preview-review-key-file forge-nono forge-ca-cert forge-ca-key forge-dir; do
   grep -q -- "^  -$f " "$tmp/flags" || fail "cp-egress has no -$f flag"
 done
 ok "cp-egress takes every flag run-egress-gate.sh gives it"

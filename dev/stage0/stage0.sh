@@ -494,6 +494,10 @@ render_worker_config "$STAGE0_HOME/worker.json" "$STAGE0_WORKER_NAME" "$STAGE0_C
   || die "the worker daemon refused $STAGE0_HOME/worker.json"
 
 say "Rendering Sortie's workflow"
+# shellcheck source=forge-app.sh
+. "$KIT/forge-app.sh"
+forge_app_key_ok "$STAGE0_GITHUB_APP_KEY" || die "Sortie would not start"
+export STAGE0_EGRESS_GATE_PORT
 STAGE0_SORTIE_MAX_AGENTS=$(sortie_agent_cap) || die "the Sortie-wide agent cap is wrong ($ENV_FILE)"
 export STAGE0_SORTIE_MAX_AGENTS
 STAGE0_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$STAGE0_HOME/sortie/WORKFLOW.md"
