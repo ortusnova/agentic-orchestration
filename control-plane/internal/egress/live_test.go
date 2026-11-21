@@ -31,7 +31,7 @@ func TestLiveNono(t *testing.T) {
 	if bin == "" {
 		t.Skip("CP_EGRESS_LIVE_NONO is unset; dev/stage0/test-egress-live.sh runs this on p1")
 	}
-	for _, v := range []string{"CP_EGRESS_ANTHROPIC", "CP_EGRESS_GITHUB", "CP_EGRESS_GITHUB_BASIC"} {
+	for _, v := range []string{"CP_EGRESS_ANTHROPIC"} {
 		if os.Getenv(v) == "" {
 			t.Fatalf("%s is unset", v)
 		}

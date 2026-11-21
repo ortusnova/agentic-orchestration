@@ -115,3 +115,47 @@ func TestEgressProfileFollowsTheWorkflow(t *testing.T) {
 		}
 	}
 }
+
+// agent-platform/forge-tokens#The operator's token is not on the job path:
+// nono holds no GitHub credential and the workflow binds none, so a job's
+// GitHub request gets only the tokens the egress gate holds for its
+// attempt; and nothing on p1 gives nono `gh auth token` or github-token.
+func TestNoJobGetsTheOperatorsGitHubToken(t *testing.T) {
+	p := readProfile(t)
+	for name, c := range p.Network.CustomCredentials {
+		u, err := url.Parse(c.Upstream)
+		if err == nil && slices.Contains(forgeHosts, u.Hostname()) {
+			t.Errorf("nono holds %s for %s: a GitHub credential is back on the job path", name, u.Hostname())
+		}
+		if strings.Contains(c.CredentialKey, "GITHUB") {
+			t.Errorf("nono's %s reads %s, a GitHub credential", name, c.CredentialKey)
+		}
+	}
+	for _, name := range p.Network.Credentials {
+		if strings.HasPrefix(name, "github") {
+			t.Errorf("nono serves the credential %s", name)
+		}
+	}
+	for name, hosts := range workflowCredentials(t) {
+		for _, h := range hosts {
+			if slices.Contains(forgeHosts, h) {
+				t.Errorf("WORKFLOW.md binds %s on %s: only the minted tokens may reach GitHub", name, h)
+			}
+		}
+	}
+	for _, script := range []string{"../egress-credentials.sh", "../run-nono.sh"} {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for line := range strings.SplitSeq(string(b), "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "#") {
+				continue
+			}
+			if strings.Contains(code, "gh auth token") || strings.Contains(code, "github-token") || strings.Contains(code, "CP_EGRESS_GITHUB") {
+				t.Errorf("%s gives nono a GitHub credential: %s", script, code)
+			}
+		}
+	}
+}

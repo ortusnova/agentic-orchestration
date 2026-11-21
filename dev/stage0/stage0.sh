@@ -556,7 +556,7 @@ systemctl --user restart ortus-stage0-sortie.service
 deploy_sortie_ran "$sortie_built"
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_SORTIE_PORT/readyz" && break; sleep 1; done
 nono_inputs=("$STAGE0_HOME/bin/nono" "$KIT/run-nono.sh" "$KIT/egress-credentials.sh" "$KIT/anthropic-token.py"
-  "$ROOT/control-plane/nono/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$STAGE0_HOME/github-token" "$ENV_FILE")
+  "$ROOT/control-plane/nono/egress-profile.json" "$STAGE0_HOME/egress-ca" "$STAGE0_HOME/nono-pass" "$ENV_FILE")
 restart_changed ortus-stage0-nono.service "${nono_inputs[@]}" "$UNITS/ortus-stage0-nono.service"
 # The live-proof nono also runs stage0-live-proofs (its source, not its
 # binary, which Go stamps with the kit's commit) on egress-live-proof.json.
