@@ -1,0 +1,28 @@
+# kit: huly-compose.override.yml (agentic-orchestration dev/stage0)
+# Installed by the kit as compose.override.yml beside huly-selfhost's
+# compose.yml (huly-restart-policy.sh, huly_compose_override), which
+# podman compose and docker compose both merge on every `compose up`, the
+# kit's and a person's alike. Edit the kit's copy, not the installed one:
+# the kit replaces it.
+#
+# huly-selfhost gives redpanda, Huly's message queue, no restart policy. A
+# container created without one stays down after a reboot while the rest
+# come back, and every Huly workspace call then fails (2026-11-18).
+#
+# The services that read the queue (QUEUE_CONFIG) start after it: a
+# transactor started while redpanda is down fails to create its topics,
+# never retries, and keeps running broken. podman compose records
+# depends_on as a container dependency, which podman-restart.service
+# honors after a reboot too. HULY_QUEUE_SERVICES in huly-restart-policy.sh
+# lists the same services.
+services:
+  redpanda:
+    restart: unless-stopped
+  account:
+    depends_on: [redpanda]
+  fulltext:
+    depends_on: [redpanda]
+  transactor:
+    depends_on: [redpanda]
+  workspace:
+    depends_on: [redpanda]
