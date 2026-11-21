@@ -25,6 +25,8 @@ dev/stage0/test-unit-restart.sh       # check that nono, the egress gate, Pomeri
 dev/stage0/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
 dev/stage0/test-worker.sh             # check the workers' configuration and the retired Sortie
 dev/stage0/test-front.sh              # check Pomerium's and the egress gate's units on p1, with stubs
+dev/stage0/test-github-credential.sh  # check that git in a job's machine sends each owner's GitHub placeholder, through a fake proxy
+dev/stage0/test-forge-app.sh          # check that stage0.sh refuses the GitHub App's key at a mode wider than 600
 dev/stage0/test-worker-host.sh        # check a worker host's certificate, its issue and its revocation
 dev/stage0/test-retire-edge.sh        # check that the stage-1 edge's units and tunnels are retired
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
@@ -698,6 +700,22 @@ What a worker's request meets:
   (`sortie-credential-<name>`) with the credential. A refusal is recorded
   in the gate's journal with the worker, job, attempt and host:
   `msg="egress refused" worker=taichi job=ONS-7 attempt=1 host=pastebin.com:443 status=403`.
+- **GitHub, per attempt.** Sortie mints each attempt's GitHub tokens, one
+  per owner its repository's `.sortie/forge.yaml` names within the
+  workflow's `forge_ceiling`, from the App `ortus-nova-build-jobs`
+  (`WORKFLOW.md` `forge_app`), and registers them with the egress gate
+  before the job is queued. While the attempt is registered, the gate sends
+  its `CONNECT`s for `github.com` and `api.github.com` to a nono it starts
+  for that attempt, which gives each request the token of the owner its
+  path names (`/repos/<owner>/...`, `/<owner>/<repository>.git/...`; one
+  owner's token on every path when the attempt has one), and every other
+  host to the shared nono. The machine holds only placeholders:
+  `SORTIE_GITHUB_TOKEN_<OWNER>`, and git's helper
+  (`pack/git-credential-sortie-github`). The gate's journal records these
+  tunnels with `profile=forge-tokens`, and `GitHub tokens registered`,
+  `refreshed` and `unregistered` with the job and attempt, never a token.
+  What nono can and cannot do here is measured in
+  `control-plane/docs/operator-guide.md`, "GitHub tokens per attempt".
   A live-proof job that runs goes through the live-proof nono instead.
 - **Previews.** A `CONNECT` for a name under `preview.<Pomerium's host>`
   (`front-config.sh` `preview_domain`) on port 80 is a ui story's preview
@@ -792,6 +810,7 @@ All on p1 but a worker's own key; no credential is stored on a worker host.
 | --- | --- |
 | Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired |
 | Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
+| An attempt's GitHub tokens | minted by Sortie from the GitHub App, whose private key is `github-app.pem` in the stage-0 home (mode 0600, read by Sortie only, at start; `stage0.sh` refuses a wider mode); Sortie's database keeps them sealed until revoked; the egress gate's copy is in `$XDG_RUNTIME_DIR/ortus-forge-tokens/` (a tmpfs), one directory per attempt, deleted when the attempt ends |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The egress gate's credential to nono | `nono-pass` in the stage-0 home |
 | Egress CA | `egress-ca/ca.key` (mode 0600) and `egress-ca/ca.crt` in the stage-0 home |

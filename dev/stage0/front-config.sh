@@ -17,6 +17,10 @@ STAGE0_CP_PUBLIC_URL=${STAGE0_CP_PUBLIC_URL:-https://$(hostname -f):8443}
 STAGE0_NONO_PORT=${STAGE0_NONO_PORT:-7690}
 STAGE0_NONO_LIVE_PROOF_PORT=${STAGE0_NONO_LIVE_PROOF_PORT:-7691}
 STAGE0_EGRESS_GATE_PORT=${STAGE0_EGRESS_GATE_PORT:-7692}
+# The token files of each attempt whose GitHub tokens Sortie registered
+# with the egress gate, on the user's tmpfs (XDG_RUNTIME_DIR), never on
+# disk; the gate deletes an attempt's when it ends.
+STAGE0_FORGE_TOKENS_DIR=${XDG_RUNTIME_DIR:-$STAGE0_HOME}/ortus-forge-tokens
 # The file of the live-proof jobs that run, which stage0-live-proofs writes
 # and the egress gate reads.
 STAGE0_LIVE_PROOFS=$STAGE0_HOME/live-proofs

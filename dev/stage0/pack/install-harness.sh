@@ -4,7 +4,8 @@
 # usage command agent-usage, opencode's usage plugin, both
 # harnesses' policy files, and opencode's plugins. Shared by the stage-0 pack (agent.Dockerfile,
 # as root) and the homelab pack (homelab-pack/Dockerfile, as builder), so the
-# harness and its pin live in one place.
+# harness and its pin live in one place. It also gives git a credential
+# helper for GitHub (git-credential-sortie-github).
 #
 #   install-harness.sh USER HOME
 #
@@ -17,6 +18,12 @@ dir=$(dirname "$0")
 npm install -g --no-fund --no-audit @agentclientprotocol/claude-agent-acp@0.99.1
 command -v claude-agent-acp
 install -m 0755 "$dir/agent-acp" "$dir/agent-usage" /usr/local/bin/
+# Git over HTTPS to GitHub: one placeholder per owner the job is granted,
+# which the egress gate replaces with that owner's token (spec store
+# job-scoped-github-tokens, design D6). System-wide, for any user.
+install -m 0755 "$dir/git-credential-sortie-github" /usr/local/bin/
+install -m 0644 "$dir/gitconfig-github" /etc/sortie-github.gitconfig
+printf '[include]\n\tpath = /etc/sortie-github.gitconfig\n' >> /etc/gitconfig
 install -d -o "$user" -g "$user" "$home/.claude" "$home/.config" "$home/.config/opencode" "$home/.config/opencode/plugins"
 install -m 0644 -o "$user" -g "$user" "$dir/claude-settings.json" "$home/.claude/settings.json"
 install -m 0644 -o "$user" -g "$user" "$dir/opencode.json" "$home/.config/opencode/opencode.json"

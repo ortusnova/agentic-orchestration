@@ -1,0 +1,6 @@
+# GitHub over HTTPS in a job's machine (install-harness.sh includes it from
+# /etc/gitconfig): git asks git-credential-sortie-github for each
+# repository's owner, which needs the path in the credential request.
+[credential "https://github.com"]
+	useHttpPath = true
+	helper = sortie-github
