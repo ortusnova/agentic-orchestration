@@ -285,6 +285,16 @@ which only makes the client send a credential. A refresh rewrites the token
 files, and the next request uses the new token. This is option (a) of the
 design's fallback (spec store `job-scoped-github-tokens`, design D6).
 
+The gate does this only with its `-forge-*` flags: `-forge-nono` (the nono
+binary), `-forge-ca-cert` and `-forge-ca-key` (the CA the shared nono
+intercepts with, which every machine trusts) and `-forge-dir` (the token
+files, best on a tmpfs). The stage-0 kit on p1 sets them
+(`dev/stage0/run-egress-gate.sh`). This compose project does not: its gate
+image holds no nono, so a Sortie here must not set
+`environment.remote.forge_gate`, and its jobs keep the forge credential
+nono holds. A registration to a gate without them answers 404, and Sortie
+mints nothing it could deliver.
+
 `endpoint_rules` would also select per owner: with one route per owner whose
 rules match `/repos/<owner>/**`, `/orgs/<owner>/**` and `/<owner>/**`, each
 path got its owner's token, other paths passed with the placeholder, and a

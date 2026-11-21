@@ -4,8 +4,10 @@
 # control plane's egress profile and the credentials on p1, through the
 # egress gate, with a fake Sortie for introspection. Calls api.anthropic.com
 # once, with the Claude subscription, and Firecrawl's keyless search
-# (mcp.firecrawl.dev) once, for opencode's websearch. Uses its own ports and
-# CA, so the running units are untouched.
+# (mcp.firecrawl.dev) once, for opencode's websearch. Then an attempt's
+# GitHub egress (TestLiveForgeNono): the pinned nono per attempt, with
+# local echo servers in place of GitHub and no credential. Uses its own
+# ports and CA, so the running units are untouched.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -23,4 +25,4 @@ fi
 . "$KIT/egress-credentials.sh"
 egress_credentials
 cd "$KIT/../../control-plane"
-CP_EGRESS_LIVE_NONO=$bin/nono go test -count=1 -run '^TestLiveNono$' -v ./internal/egress/
+CP_EGRESS_LIVE_NONO=$bin/nono go test -count=1 -run '^(TestLiveNono|TestLiveForgeNono)$' -v ./internal/egress/
