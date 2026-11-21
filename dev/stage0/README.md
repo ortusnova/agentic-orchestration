@@ -27,6 +27,8 @@ dev/stage0/test-worker.sh             # check the workers' configuration and the
 dev/stage0/test-front.sh              # check Pomerium's and the egress gate's units on p1, with stubs
 dev/stage0/test-github-credential.sh  # check that git in a job's machine sends each owner's GitHub placeholder, through a fake proxy
 dev/stage0/test-forge-app.sh          # check that stage0.sh refuses the GitHub App's key at a mode wider than 600
+dev/stage0/test-check-forge-rules.sh  # check check-forge-rules.py against a fake GitHub API
+make check-forge-rules                # read the rulesets that bound every minted token (GitHub API, read only); fails naming each repository
 dev/stage0/test-worker-host.sh        # check a worker host's certificate, its issue and its revocation
 dev/stage0/test-retire-edge.sh        # check that the stage-1 edge's units and tunnels are retired
 dev/stage0/test-merge-carry.sh        # check the carry of a worker host's Sortie's merge records into p1's
@@ -415,8 +417,10 @@ machine could not run it as its `evidence`. Every minute
   needs to that file, not to `control-plane/nono/egress-profile.json`. The
   egress gate's journal records each live-proof tunnel with `profile=live-proof`.
 - **The result.** The job comments its result on the pull request through
-  GitHub's API, with `SORTIE_GITHUB_TOKEN`, the placeholder of the
-  `github_api` credential that nono holds. The comment's first line is
+  GitHub's API, with `SORTIE_GITHUB_TOKEN_<OWNER>`, the placeholder of
+  the job's own token for its repository's owner, which needs `issues:
+  write` or `pull_requests: write` on that repository in its
+  `.sortie/forge.yaml`. The comment's first line is
   `<!-- live-proof-result -->`, followed by `Result: proven` or
   `Result: unproven`, `Commit: <sha>`, the criterion, with a proven result
   the line `sortie:live-proof proven <sha>`, and the step table. Sortie's
@@ -524,7 +528,7 @@ changed, when it is not running, or when it runs with no record of what it
 runs, as a unit an earlier kit left running on its own configuration
 (ONS-123) (`unit-restart.sh`; the digest each started with is in
 `$STAGE0_HOME/started/`, written once the unit runs after its restart):
-nono for its binary, scripts, profile, egress CA, pass, `github-token`,
+nono for its binary, scripts, profile, egress CA, pass,
 `stage0.env` or unit (the live-proof nono also for `egress-live-proof.json`
 and `live-proofs/`); the egress gate for its source and `control-plane/go.mod`,
 its script, `stage0.env`, the control token, nono's pass, the previews'
@@ -632,7 +636,8 @@ job's machine sees only Sortie's placeholders, which nono on p1 replaces
 
 | Credential | Source |
 | --- | --- |
-| GitHub | `github-token` in the stage-0 home, else `gh auth token`. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. nono holds it for the jobs: a job's `SORTIE_GITHUB_TOKEN` is only the `github_api` placeholder, for GitHub's API, which a live-proof job comments its result with ([Live proofs](#live-proofs)) |
+| GitHub, for Sortie on p1 | `github-token` in the stage-0 home, else `gh auth token`: Sortie's own token, which pushes branches and opens pull requests from p1, unchanged. `run-workbench.sh` reads the same one, so the workbench looks up the pull requests a story names in `delivered_by` with no credential of its own; restart the workbench unit after changing it. No job gets it: nono holds no GitHub credential |
+| GitHub, for jobs | the App `ortus-nova-build-jobs` (ID 5857256), installed on `ortusnova` and `briancappello`, whose private key is `github-app.pem` in the stage-0 home (mode 0600; `stage0.sh` refuses a wider one; Sortie alone reads it, at start). Sortie mints each attempt one installation token per owner its repository's `.sortie/forge.yaml` names, within that repository's `forge_ceiling` in `WORKFLOW.md`, at most one hour, refreshed while the attempt lives and revoked when it ends; the egress gate gives it to the attempt's GitHub requests ([GitHub, per attempt](#worker-hosts-p1)). The machine holds only `SORTIE_GITHUB_TOKEN_<OWNER>`, a placeholder. A repository with no file gets read access to itself only |
 | Claude subscription, for both harnesses | `claude-oauth-token` (from `claude setup-token`); else the freshest live OAuth login: opencode's (`~/.local/share/opencode/opencode.db`) or Claude Code's (`~/.claude/.credentials.json`). `anthropic-token.py` picks it. Sortie hands it to no job: nono holds it and puts it in each job's egress to `api.anthropic.com` (see Egress below); `refresh-token.sh` restarts nono onto a fresher login |
 | Huly | a login with the dev account in `stage0.env` |
 | The workbench's notifications | `notify-tokens/<host>.token` in the stage-0 home, mode 0600, minted by `stage0.sh`: Sortie posts its notifications to the workbench with it, and the workbench refuses any other; no operator credential. See [below](#the-operators-channel) |
@@ -809,7 +814,6 @@ All on p1 but a worker's own key; no credential is stored on a worker host.
 | What | Where |
 | --- | --- |
 | Model (`anthropic`, `api.anthropic.com`) | the Claude subscription token Sortie uses (see Credentials above), read by `run-nono.sh` at start into nono's environment (`egress-credentials.sh`); nono reads it only at start, so `ortus-stage0-token.timer` restarts both nonos alone onto a fresher one while no agent runs, or at once when its token has expired |
-| Forge (`github_api`, `api.github.com`; `github_git`, `github.com` for git over HTTPS) | `github-token` in the stage-0 home, else `gh auth token`, read the same way |
 | An attempt's GitHub tokens | minted by Sortie from the GitHub App, whose private key is `github-app.pem` in the stage-0 home (mode 0600, read by Sortie only, at start; `stage0.sh` refuses a wider mode); Sortie's database keeps them sealed until revoked; the egress gate's copy is in `$XDG_RUNTIME_DIR/ortus-forge-tokens/` (a tmpfs), one directory per attempt, deleted when the attempt ends |
 | Sortie's control token, for introspection | `sortie-token` in the stage-0 home |
 | The egress gate's credential to nono | `nono-pass` in the stage-0 home |

@@ -8,18 +8,13 @@
 #   CP_EGRESS_ANTHROPIC     the Claude subscription token Sortie uses too
 #                           (anthropic-token.py: claude-oauth-token, else
 #                           the freshest live login)
-#   CP_EGRESS_GITHUB        $STAGE0_HOME/github-token, else `gh auth token`
-#   CP_EGRESS_GITHUB_BASIC  x-access-token:<that token>, for git over HTTPS
+# No GitHub credential: each attempt's GitHub requests get that attempt's
+# own tokens from the egress gate (spec store job-scoped-github-tokens), so
+# neither github-token nor `gh auth token` reaches a job.
 egress_credentials() {
   CP_EGRESS_ANTHROPIC=$(STAGE0_HOME=$STAGE0_HOME "$KIT/anthropic-token.py") || {
     echo "no live Claude subscription token: run claude setup-token into $STAGE0_HOME/claude-oauth-token" >&2
     return 1
   }
-  if [[ -s $STAGE0_HOME/github-token ]]; then
-    CP_EGRESS_GITHUB=$(cat "$STAGE0_HOME/github-token")
-  else
-    CP_EGRESS_GITHUB=$(gh auth token) || { echo "gh has no token: run gh auth login" >&2; return 1; }
-  fi
-  CP_EGRESS_GITHUB_BASIC=x-access-token:$CP_EGRESS_GITHUB
-  export CP_EGRESS_ANTHROPIC CP_EGRESS_GITHUB CP_EGRESS_GITHUB_BASIC
+  export CP_EGRESS_ANTHROPIC
 }

@@ -125,8 +125,7 @@ wait_healthy() {
 
 # secrets [partial]: one podman secret per file in $CP_HOME/secrets,
 # replaced at each start, so a changed file reaches the containers when
-# they start again. cp-github-basic is derived: the forge token as git's
-# Basic credential. Without partial, every file must be there. A file's
+# they start again. Without partial, every file must be there. A file's
 # trailing newlines are not part of its secret: a podman secret given to a
 # container as an environment variable keeps them, and a credential nono
 # injects or a password it checks must not end in one.
@@ -141,10 +140,6 @@ $missing"
     [[ $state == present ]] || continue
     printf '%s' "$(< "$CP_HOME/secrets/$name")" | podman secret create --replace "$name" - > /dev/null
   done < <(cpctl secrets)
-  if [[ -s $CP_HOME/secrets/cp-github-token ]]; then
-    printf 'x-access-token:%s' "$(tr -d '\n' < "$CP_HOME/secrets/cp-github-token")" \
-      | podman secret create --replace cp-github-basic - > /dev/null
-  fi
 }
 
 up() {

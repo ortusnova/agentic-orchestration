@@ -62,7 +62,7 @@ var liveProofPromptRules = []string{
 	"open an issue on the repository for every failure whose cause you do not know",
 	"fix it with new commits on top of the branch",
 	"comment the result on the pull request the request names",
-	"`Authorization: Bearer $SORTIE_GITHUB_TOKEN`",
+	"`Authorization: Bearer $SORTIE_GITHUB_TOKEN_<OWNER>`",
 	"first line is `" + liveProofResultMarker + "`",
 	"`Result: proven` or `Result: unproven`",
 	"`Commit: ` with the full sha of `git rev-parse HEAD`",
@@ -144,17 +144,22 @@ func TestStage0_AHomelabLiveProofRunsOnTaichi(t *testing.T) {
 	if offer.Run.Image != "homelab.smolmachine" {
 		t.Errorf("image = %q, want the homelab pack", offer.Run.Image)
 	}
-	if got := offer.Run.Env["SORTIE_GITHUB_TOKEN"]; got != credentialPlaceholder("github_api") {
-		t.Errorf("SORTIE_GITHUB_TOKEN = %q, want the github_api placeholder", got)
+	noOperatorGitHubToken(t, offer.Run)
+}
+
+// noOperatorGitHubToken checks that the workflow binds no GitHub
+// credential of its own: a live-proof job reaches GitHub only with the
+// tokens Sortie mints for its attempt, whose placeholders the seed binds
+// per owner (SORTIE_GITHUB_TOKEN_<OWNER>).
+func noOperatorGitHubToken(t *testing.T, run worker.Run) {
+	t.Helper()
+	if got, ok := run.Env["SORTIE_GITHUB_TOKEN"]; ok {
+		t.Errorf("SORTIE_GITHUB_TOKEN = %q: the operator's token is back on the job path", got)
 	}
-	var cred *worker.RunCredential
-	for i := range offer.Run.Credentials {
-		if offer.Run.Credentials[i].Name == "github_api" {
-			cred = &offer.Run.Credentials[i]
+	for _, c := range run.Credentials {
+		if slices.Contains(c.Hosts, "api.github.com") || slices.Contains(c.Hosts, "github.com") {
+			t.Errorf("the workflow binds %s on %v: only the minted tokens may reach GitHub", c.Name, c.Hosts)
 		}
-	}
-	if cred == nil || !slices.Equal(cred.Hosts, []string{"api.github.com"}) {
-		t.Errorf("credentials = %+v, want github_api for api.github.com only", offer.Run.Credentials)
 	}
 }
 
@@ -222,9 +227,7 @@ func TestStage0_ANestedLiveProofRunsOnTaichiNeverOnP1(t *testing.T) {
 	if offer.Run.Image != "live-proof.smolmachine" {
 		t.Errorf("image = %q, want the live-proof pack", offer.Run.Image)
 	}
-	if got := offer.Run.Env["SORTIE_GITHUB_TOKEN"]; got != credentialPlaceholder("github_api") {
-		t.Errorf("SORTIE_GITHUB_TOKEN = %q, want the github_api placeholder", got)
-	}
+	noOperatorGitHubToken(t, offer.Run)
 	if r := cfg.Environment.Remote.Repository; r == nil || r.Name != "agentic-orchestration" {
 		t.Errorf("the job's repository = %+v, want the story's own", r)
 	}

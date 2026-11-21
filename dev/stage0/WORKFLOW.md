@@ -257,10 +257,6 @@ environment:
       # nono holds the value and replaces it in the job's egress; Sortie reads
       # none under the remote kind (refresh-token.sh keeps nono's fresh).
       - {name: anthropic, env: CLAUDE_CODE_OAUTH_TOKEN, hosts: [api.anthropic.com]}
-      # The kit's GitHub token, for GitHub's API only: a live-proof job comments
-      # its result on the pull request and opens issues with it (README.md
-      # "Live proofs"). Git over HTTPS gets no placeholder: Sortie pushes.
-      - {name: github_api, env: SORTIE_GITHUB_TOKEN, hosts: [api.github.com]}
     # Each attempt's GitHub tokens (spec store job-scoped-github-tokens):
     # Sortie mints one per owner of the repository's .sortie/forge.yaml,
     # within the ceiling below, from the App ortus-nova-build-jobs, whose
@@ -269,7 +265,8 @@ environment:
     # attempt's requests to github.com and api.github.com through a nono
     # of the attempt's own; the machine holds only placeholders
     # (sortie-credential-github-<owner>, SORTIE_GITHUB_TOKEN_<OWNER>, and
-    # pack/git-credential-sortie-github for git).
+    # pack/git-credential-sortie-github for git). No other GitHub credential
+    # reaches a job: nono holds none (workflow/profile_test.go).
     forge_app:
       app_id: 5857256
       private_key_file: ${STAGE0_HOME}/github-app.pem
@@ -535,8 +532,12 @@ story's branch as it is in this workspace:
 3. When you are done, comment the result on the pull request the request
    names, once: POST `{"body": "..."}` to
    `https://api.github.com/repos/<owner>/<repo>/issues/<number>/comments`
-   with the header `Authorization: Bearer $SORTIE_GITHUB_TOKEN`, as you
-   open an issue with POST to `/repos/<owner>/<repo>/issues`. The comment's
+   with the header `Authorization: Bearer $SORTIE_GITHUB_TOKEN_<OWNER>`,
+   `<OWNER>` the repository's owner upper-cased with each character other
+   than a letter or a digit as `_` (`SORTIE_GITHUB_TOKEN_ORTUSNOVA`), as you
+   open an issue with POST to `/repos/<owner>/<repo>/issues`. It is a
+   placeholder: the egress gate puts in the job's own token, which reaches
+   only what the repository's `.sortie/forge.yaml` declares. The comment's
    first line is `<!-- live-proof-result -->`; then a line
    `Result: proven` or `Result: unproven`, a line `Commit: ` with the full
    sha of `git rev-parse HEAD` after your last commit, and a line

@@ -1,0 +1,11 @@
+# agentic-orchestration's GitHub access (spec store job-scoped-github-tokens,
+# design D3): what a job of this repository may do on GitHub, in the format
+# of Sortie's docs/forge.schema.json. Sortie reads it from main, within the
+# kit's forge_ceiling (dev/stage0/WORKFLOW.md), and mints the job's token
+# from it; the job's machine holds only a placeholder. Sortie pushes the
+# story's branch and opens its pull request from p1, so no job writes code.
+version: 1
+access:
+  - repository: ortusnova/agentic-orchestration
+    permissions: {contents: read, issues: write, pull_requests: write}
+    reason: "read main, and comment a live proof's result on the story's pull request or open an issue for a failure (dev/stage0/README.md \"Live proofs\")"
