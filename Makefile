@@ -4,7 +4,7 @@
 GO_MODULES := acp-broker smol-builder worker-daemon
 COMPONENTS := workbench control-plane $(GO_MODULES)
 
-.PHONY: help test lint check-latest licenses no-placeholder specs dist
+.PHONY: help test lint check-latest check-forge-rules licenses no-placeholder specs dist
 
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
@@ -16,6 +16,9 @@ test: ## Run every component's tests, and the stage-0 kit's
 lint: licenses no-placeholder specs ## Lint every component, check the license copies and placeholders, and validate the specs
 	@set -e; for c in $(COMPONENTS); do echo "== $$c: lint"; $(MAKE) -s -C $$c lint; done
 	@echo "== dev/stage0: lint"; $(MAKE) -s -C dev/stage0 lint
+
+check-forge-rules: ## Fail naming any repository a forge_ceiling grants write on whose default branch GitHub's rules do not bound (dev/stage0, GitHub API, read only)
+	@$(MAKE) -s -C dev/stage0 check-forge-rules
 
 check-latest: ## Fail when a Go component's dependency, or the control plane's Pomerium or nono, is behind its latest stable release (network)
 	@set -e; for m in $(GO_MODULES) control-plane; do echo "== $$m: check-latest"; $(MAKE) -s -C $$m check-latest; done

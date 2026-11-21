@@ -4,7 +4,7 @@
 
 SHELL := bash
 
-.PHONY: help test test-live lint check-latest
+.PHONY: help test test-live lint check-latest check-forge-rules
 
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
@@ -19,6 +19,9 @@ test: ## Run stage0-live-proofs' and the workflow's tests and the kit's script t
 
 test-live: ## On p1: the egress scenarios against the pinned nono, api.anthropic.com and mcp.firecrawl.dev, and an attempt's GitHub egress
 	./test-egress-live.sh
+
+check-forge-rules: ## Read the rulesets of each repository a forge_ceiling grants write on, and fail naming any that does not bound a minted token (GitHub API, read only)
+	./check-forge-rules.py
 
 lint: ## Lint stage0-live-proofs and the workflow's tests, and shellcheck the kit's scripts
 	cd live-proofs && golangci-lint run ./...
