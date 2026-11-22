@@ -1,6 +1,6 @@
 # The control plane's own tools: cpctl, the egress gate (cp-egress) and
 # cp-probe. Build from the repository root: make -C control-plane images.
-FROM docker.io/library/golang:1.26.10-bookworm@sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af AS build
+FROM docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS build
 ENV CGO_ENABLED=0 GOWORK=off GOFLAGS=-trimpath
 WORKDIR /src
 COPY control-plane/ control-plane/
