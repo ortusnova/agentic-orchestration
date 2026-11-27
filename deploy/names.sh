@@ -129,6 +129,26 @@ env_values() {
   return 0
 }
 
+# env_file_load ENV HOST: ENV's values for HOST, read from its environment
+# file through the loader (design D2), into this shell; refuses a file the
+# loader refuses or a HOST it does not declare. The loader is built once
+# into the user's cache. ORTUS_NOVA_ENVIRONMENTS and ORTUS_NOVA_ENVFILE, for
+# the tests, are another directory of environment files and a built loader.
+env_file_load() {
+  local kit dir loader values
+  kit=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  dir=${ORTUS_NOVA_ENVIRONMENTS:-$kit/environments}
+  loader=${ORTUS_NOVA_ENVFILE:-}
+  if [[ -z $loader ]]; then
+    loader=${XDG_CACHE_HOME:-$HOME/.cache}/ortus-nova/envfile
+    mkdir -p "${loader%/*}"
+    (cd "$kit/envfile" && go build -o "$loader" .) || { echo "names.sh: could not build the environment loader (deploy/envfile)" >&2; return 1; }
+  fi
+  values=$("$loader" values -host "$2" "$dir/$1.yml") || return 1
+  eval "$values"
+  ORTUS_NOVA_ENV_VALUES=$values
+}
+
 env_load() {
   env_names "$1" || return 1
   env_settings

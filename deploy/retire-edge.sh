@@ -30,7 +30,7 @@ retire_edge() {
 
 # carry_edge_workers DIR ADD...: give each worker host of the stage-1 edge
 # (DIR/NAME.env with WORKER_HOST, from the edge's worker-host.sh add) its
-# certificate from the control plane's CA, with ADD HOST NAME, unless the
+# certificate from the control plane's CA, with ADD NAME, unless the
 # worker list already names it. p1's own worker (LOCAL=1) has its own.
 # Prints each worker it added. DIR stays, so a revert to the edge finds it.
 carry_edge_workers() {
@@ -45,7 +45,7 @@ carry_edge_workers() {
     host=$(sed -n 's/^WORKER_HOST=//p' "$env" | tail -n 1)
     [[ -n $host ]] || continue
     grep -qx "$name" <<< "$listed" && continue
-    "$@" "$host" "$name" > /dev/null || { echo "could not add worker $name ($host)" >&2; return 1; }
+    "$@" "$name" > /dev/null || { echo "could not add worker $name ($host)" >&2; return 1; }
     echo "$name"
   done
 }

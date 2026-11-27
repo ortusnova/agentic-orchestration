@@ -58,8 +58,8 @@ front_workers() { echo "$front_list"; }
 # shellcheck disable=SC2317,SC2329 # called by carry_edge_workers
 add() { echo "add $*" >> "$fake/adds"; }
 : > "$fake/adds"
-expect "taichi is added, by its SSH destination and name" "$(carry_edge_workers "$workers" add)" taichi
-expect "with worker-host.sh add HOST NAME" "$(cat "$fake/adds")" "add brian@taichi taichi"
+expect "taichi is added, by its name" "$(carry_edge_workers "$workers" add)" taichi
+expect "with worker-host.sh add NAME, which reaches it by the environment file's destination" "$(cat "$fake/adds")" "add taichi"
 front_list=$'p1\ntaichi'
 : > "$fake/adds"
 expect "a listed worker is not added again" "$(carry_edge_workers "$workers" add)" ""
