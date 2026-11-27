@@ -1,8 +1,0 @@
-[Unit]
-Description=Ortus Nova @ORTUS_NOVA_ENV@: run what merged to the kit's main
-
-[Service]
-Type=oneshot
-Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
-Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
-ExecStart=@KIT@/follow.sh @ORTUS_NOVA_ENV@
