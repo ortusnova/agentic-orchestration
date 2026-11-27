@@ -1,9 +1,0 @@
-[Unit]
-Description=Ortus Nova @ORTUS_NOVA_ENV@: follow the kit's main, every minute
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=1min
-
-[Install]
-WantedBy=timers.target

@@ -16,7 +16,7 @@
 # once the unit runs after it. A running unit with no record is restarted:
 # what it runs is not known, as for an egress gate an earlier kit left
 # running on its own configuration (ONS-123). A deploy is applied only once
-# units_unsettled names none (follow.sh).
+# units_unsettled names none (deploy.sh, deploy_applied).
 
 # inputs_sum PATH...: one digest of the PATHs' names and contents; a
 # missing PATH counts as missing.

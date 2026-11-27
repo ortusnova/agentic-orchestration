@@ -60,7 +60,6 @@ func newKitHosts(t *testing.T) (p1, taichi kitHost) {
 			t.Fatal(err)
 		}
 	}
-	p1.run(time.Time{}, `deploy_host_add taichi taichi`)
 	return p1, taichi
 }
 
@@ -68,7 +67,7 @@ func newKitHosts(t *testing.T) (p1, taichi kitHost) {
 // ORTUS_NOVA_HOME at now (the zero time: the clock), and returns its output.
 func (h kitHost) run(now time.Time, script string, args ...string) string {
 	h.t.Helper()
-	cmd := exec.Command("bash", append([]string{"-euo", "pipefail", "-c", `. "$ORTUS_NOVA_KIT/names.sh"; env_names test-a; . "$ORTUS_NOVA_KIT/deploy-state.sh"; ` + script, "kit"}, args...)...)
+	cmd := exec.Command("bash", append([]string{"-euo", "pipefail", "-c", `. "$ORTUS_NOVA_KIT/names.sh"; env_names test-a; . "$ORTUS_NOVA_KIT/deploy-state.sh"; . "$ORTUS_NOVA_KIT/push.sh"; THIS_HOST=p1; ` + script, "kit"}, args...)...)
 	cmd.Env = append(append(os.Environ(), h.env...), "ORTUS_NOVA_HOME="+h.home)
 	if !now.IsZero() {
 		cmd.Env = append(cmd.Env, "ORTUS_NOVA_NOW="+now.UTC().Format(time.RFC3339))
@@ -80,7 +79,7 @@ func (h kitHost) run(now time.Time, script string, args ...string) string {
 	return string(out)
 }
 
-// write writes this host's deploy state as follow.sh does.
+// write writes this host's deploy state as a host's step does.
 func (h kitHost) write(now time.Time, status, commit, main, why string) {
 	h.t.Helper()
 	h.run(now, `deploy_state_write "$@"`, status, commit, main, why)
@@ -177,8 +176,8 @@ func TestStage0_SortieReadsTheKitsDeployState(t *testing.T) {
 	}
 }
 
-// The workflow names p1's file as health.deploy_state, and p1 copies
-// taichi's over SSH.
+// The workflow names p1's file as health.deploy_state, and p1's push keeps
+// taichi's beside it, read over SSH.
 func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 	p1, taichi := newKitHosts(t)
 	cfg := loadKitWorkflow(t, p1, "")
@@ -189,7 +188,7 @@ func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	taichi.write(now, "succeeded", "beef002", "beef002", "")
-	p1.run(time.Time{}, "deploy_state_pull")
+	p1.run(time.Time{}, "push_keep_state taichi > /dev/null")
 	st, err := deploystate.Read(copyOnP1)
 	if err != nil || st.Status != deploystate.StatusSucceeded || st.Commit != "beef002" {
 		t.Fatalf("taichi's copy on p1 = %+v, %v, want taichi's succeeded at beef002", st, err)
@@ -199,13 +198,9 @@ func TestStage0_P1ReadsEachHostsDeployState(t *testing.T) {
 	if err := os.RemoveAll(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(taichi.home))))); err != nil {
 		t.Fatal(err)
 	}
-	p1.run(time.Time{}, "deploy_state_pull 2> /dev/null")
+	p1.run(time.Time{}, "push_keep_state taichi > /dev/null 2>&1 || true")
 	if st, err = deploystate.Read(copyOnP1); err != nil || st.Commit != "beef002" {
 		t.Errorf("after a failed copy = %+v, %v, want the last copy", st, err)
-	}
-	p1.run(time.Time{}, "deploy_host_remove taichi")
-	if _, err := os.Stat(copyOnP1); !os.IsNotExist(err) {
-		t.Errorf("taichi's copy after worker-host.sh remove: %v, want it gone", err)
 	}
 }
 
@@ -247,7 +242,7 @@ func TestStage0_EachHostsDeployStateListsItsRepositories(t *testing.T) {
 
 	p1.write(now, "succeeded", "beef002", "beef002", "")
 	taichi.write(now, "failed", "beef001", "beef002", "deploy.sh failed at beef002")
-	p1.run(time.Time{}, "deploy_state_pull")
+	p1.run(time.Time{}, "push_keep_state taichi > /dev/null")
 	copyOnP1 := filepath.Join(p1.home, "hosts", "taichi", "deploy-state.json")
 
 	if st := p1.read(); st.Status != deploystate.StatusSucceeded || st.Commit != "beef002" || st.Main != "beef002" || !st.UpdatedAt.Equal(now) {

@@ -12,7 +12,7 @@
 #   deploy/dev-host-apply.sh ENV COMMAND...   any host: run COMMAND as the apply
 #
 # A failed apply, or a failed deploy.sh after it, exits non-zero. It holds
-# deploy.sh's lock throughout, so no deploy runs between. Like follow.sh, it
+# deploy.sh's lock throughout, so no deploy runs between. Like a host's step of a push, it
 # writes this host's deploy state (deploy-state.sh): deploying while it
 # runs, succeeded once deploy.sh ran and every unit whose configuration
 # changed has restarted, failed with its error otherwise.
@@ -31,7 +31,7 @@ LIVE=${ORTUS_NOVA_LIVE_KIT:-$ORTUS_NOVA_HOME/kit}
 . "$KIT/unit-restart.sh"
 say() { echo "dev-host-apply: $*" >&2; }
 die() { say "$*"; exit 1; }
-# The commit the live kit runs, and its main, as follow.sh last fetched it.
+# The commit the live kit runs, and its main, as the last fetch left it.
 commit() { git -C "$LIVE" rev-parse -q --verify HEAD 2> /dev/null || true; }
 main() { git -C "$LIVE" rev-parse -q --verify origin/main 2> /dev/null || commit; }
 # failed WHY: record the failed apply, and stop.
@@ -57,7 +57,7 @@ say "applying now, whatever runs: ${apply[*]}"
 say "running deploy.sh"
 log=$ORTUS_NOVA_HOME/dev-host-apply.err
 rc=0
-"$KIT/deploy.sh" "$ENV_NAME" 9>&- 2> "$log" || rc=$?
+"$KIT/deploy.sh" "$ENV_NAME" --this-host 9>&- 2> "$log" || rc=$?
 cat "$log" >&2
 (( rc == 0 )) || failed "deploy.sh failed after the apply: $(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -v '^[[:space:]]*$' | tail -n 1)"
 unsettled=$(units_unsettled | paste -sd, -)

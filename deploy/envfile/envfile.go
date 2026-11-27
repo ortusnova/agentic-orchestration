@@ -57,6 +57,17 @@ type Env struct {
 // Host is what one host of an environment runs.
 type Host struct {
 	Runs []string `json:"runs"`
+	// SSH is the destination the control host reaches the host by; the
+	// machine id when empty.
+	SSH string `json:"ssh"`
+}
+
+// Destination is the SSH destination of host name.
+func (e *Env) Destination(name string) string {
+	if d := e.Hosts[name].SSH; d != "" {
+		return d
+	}
+	return name
 }
 
 // InvalidError lists every invalid entry of a file, each by its path.
@@ -250,6 +261,16 @@ func (e *Env) HostsRunning(part string) []string {
 	return out
 }
 
+// destinations lists each host and its SSH destination, NAME=DEST, by
+// machine id.
+func (e *Env) destinations() string {
+	var out []string
+	for _, n := range e.HostNames() {
+		out = append(out, n+"="+e.Destination(n))
+	}
+	return strings.Join(out, " ")
+}
+
 // PortEntry is one port of the file, by its path.
 type PortEntry struct {
 	Path string
@@ -294,6 +315,7 @@ func (e *Env) Assignments(host string) (string, error) {
 		{"ORTUS_NOVA_ENV_HOSTS", strings.Join(e.HostNames(), " ")},
 		{"ORTUS_NOVA_ENV_CONTROL_HOST", e.HostsRunning("control")[0]},
 		{"ORTUS_NOVA_ENV_WORKER_HOSTS", strings.Join(e.HostsRunning("worker"), " ")},
+		{"ORTUS_NOVA_ENV_HOST_SSH", e.destinations()},
 		{"ORTUS_NOVA_ENV_FRONT_PORT", fmt.Sprint(e.Control.FrontPort)},
 		{"ORTUS_NOVA_ENV_SORTIE_PORT", fmt.Sprint(e.Ports.Sortie)},
 		{"ORTUS_NOVA_ENV_WORKBENCH_PORT", fmt.Sprint(e.Ports.Workbench)},

@@ -1,15 +1,14 @@
 # shellcheck shell=bash
 # Each host's deploy state (spec store agent-platform/supervisor-autonomy,
 # design D7): the file Sortie's internal/deploystate reads, which its
-# health check (health.deploy_state) reads on p1. follow.sh and dev-host-apply.sh write
-# it on every host, after every deploy and at each tick of the deploy timer;
-# on p1, follow.sh also copies each worker host's beside it, over the SSH
-# that worker-host.sh add already uses. Sourced by follow.sh,
-# dev-host-apply.sh, deploy.sh, worker-host.sh and the tests. Needs
+# health check (health.deploy_state) reads on p1. Each host's step of a push
+# (deploy.sh --this-host, bootstrap.sh) and dev-host-apply.sh write it on
+# every host; the push keeps each worker host's beside p1's (push.sh).
+# Sourced by deploy.sh, bootstrap.sh, dev-host-apply.sh, worker-host.sh and
+# the tests. Needs
 # ORTUS_NOVA_HOME.
 #
 #   $ORTUS_NOVA_HOME/deploy-state.json              this host's
-#   $ORTUS_NOVA_HOME/deploy-hosts/NAME              worker host NAME's SSH destination (worker-host.sh add)
 #   $ORTUS_NOVA_HOME/hosts/NAME/deploy-state.json   p1's copy of worker host NAME's
 #
 # The file is one JSON object, replaced whole each time:
@@ -31,10 +30,6 @@
 #
 # Sortie's deploystate knows the statuses succeeded, failed and deploying,
 # and refuses any other: an applied deploy is succeeded.
-
-# A worker host's state directory, as its own shell sees it (names.sh),
-# and, while that host still has its stage-0 names, the stage-0 one.
-DEPLOY_STATE_WORKER_HOMES=("${ORTUS_NOVA_WORKER_HOST_HOME:?names.sh}" "${ORTUS_NOVA_STAGE0_WORKER_HOST_HOME:?names.sh}")
 
 deploy_state_file() { echo "$ORTUS_NOVA_HOME/deploy-state.json"; }
 
@@ -139,54 +134,4 @@ deploy_state_refresh() {
     *) status=succeeded error='' ;;
   esac
   deploy_state_write "$status" "$1" "$2" "$error"
-}
-
-# deploy_host_add NAME DEST: p1 copies worker host NAME's deploy state
-# over ssh DEST.
-deploy_host_add() {
-  mkdir -p "$ORTUS_NOVA_HOME/deploy-hosts"
-  printf '%s\n' "$2" > "$ORTUS_NOVA_HOME/deploy-hosts/$1"
-}
-
-# deploy_host_remove NAME: p1 no longer copies NAME's deploy state.
-deploy_host_remove() {
-  rm -rf "${ORTUS_NOVA_HOME:?}/deploy-hosts/$1" "${ORTUS_NOVA_HOME:?}/hosts/$1"
-}
-
-# deploy_state_pull: on p1, copy each worker host's deploy state over SSH
-# (ssh -o BatchMode=yes, as worker-host.sh does). A host that cannot be
-# reached, or whose file is not a deploy state, keeps its last copy, which
-# Sortie reports once it is an hour old. Never fails.
-# deploy_state_fetch DEST: the worker host's deploy state over ssh DEST,
-# from its state directory, or from its stage-0 one while it has no other.
-deploy_state_fetch() {
-  local home out
-  for home in "${DEPLOY_STATE_WORKER_HOMES[@]}"; do
-    if out=$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$1" cat "$home/deploy-state.json" < /dev/null 2> /dev/null); then
-      printf '%s\n' "${out:0:65536}"
-      return 0
-    fi
-  done
-  return 1
-}
-
-deploy_state_pull() {
-  local f name dest dir
-  for f in "$ORTUS_NOVA_HOME"/deploy-hosts/*; do
-    [[ -s $f ]] || continue
-    name=${f##*/} dest=$(head -n 1 "$f") dir=$ORTUS_NOVA_HOME/hosts/${f##*/}
-    mkdir -p "$dir"
-    if ! deploy_state_fetch "$dest" > "$dir/deploy-state.json.tmp"; then
-      echo "deploy-state: could not read $name's deploy state over ssh $dest; its last copy stays" >&2
-      rm -f "$dir/deploy-state.json.tmp"
-      continue
-    fi
-    if [[ -z $(deploy_state_field "$dir/deploy-state.json.tmp" status) || -z $(deploy_state_field "$dir/deploy-state.json.tmp" updated_at) ]]; then
-      echo "deploy-state: $name's deploy state over ssh $dest is not one; its last copy stays" >&2
-      rm -f "$dir/deploy-state.json.tmp"
-      continue
-    fi
-    mv "$dir/deploy-state.json.tmp" "$dir/deploy-state.json"
-  done
-  return 0
 }

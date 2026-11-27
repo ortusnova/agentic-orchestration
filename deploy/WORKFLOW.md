@@ -154,9 +154,9 @@ supervisor:
   max_sessions_per_day: 96
   max_tokens_per_day: 3000000
 
-# Each host's deploy state (deploy-state.sh, design D7): follow.sh and the
-# dev-host apply write it on every host, and p1's follow.sh copies each
-# worker host's beside p1's over SSH. Sortie's health check reads p1's: a
+# Each host's deploy state (deploy-state.sh, design D7): each host's step of
+# a push and the dev-host apply write it on every host, and the push keeps
+# each worker host's beside p1's (push.sh). Sortie's health check reads p1's: a
 # deploy that failed, that left p1 behind main for 30 minutes, or that has
 # not written it for an hour holds dispatch, as a question for a person.
 health:
