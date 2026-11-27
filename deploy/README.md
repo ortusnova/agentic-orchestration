@@ -22,6 +22,8 @@ names (`ortus-stage0-*` units, `~/.local/share/ortus-nova/stage0/` with
 migration: `dev.yml` sets `stage0_names: true`, and the kit deploys such a
 host under those names through the same code path, saying so on every run.
 Read `ortus-nova-dev-<part>` below as `ortus-stage0-<part>` on them.
+`deploy/deploy.sh dev --migrate-stage0` migrates them
+([below](#migrating-from-the-stage-0-names)).
 
 ## Deploying (the push)
 
@@ -33,6 +35,7 @@ deploy/deploy.sh dev                   # deploy this checkout's commit to every 
 deploy/deploy.sh dev --commit SHA      # deploy SHA
 deploy/deploy.sh dev --check           # each host's running commit and status beside the target
 deploy/deploy.sh dev --update-sortie   # also move the control host's Sortie checkout to origin/plan-bench first
+deploy/deploy.sh dev --migrate-stage0  # migrate each host still under its stage-0 names first (below)
 ```
 
 `deploy.sh dev` runs on the control host only (`p1`; on another host it
@@ -72,6 +75,7 @@ deploy/test-environments.sh       # check deploy.sh <env> against throwaway envi
 deploy/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 deploy/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 deploy/test-push.sh               # check the push: its order, its stop at a failure, --check, the refusals, a host under its stage-0 names
+deploy/test-migrate-stage0.sh     # check the migration from the stage-0 names, its refusals, its rollbacks and --finish, against Sortie's own database
 deploy/test-dev-host-apply.sh     # check the dev-host apply, with no drain, and the deploy state it writes
 deploy/test-logs.sh               # check the log files' install, follower and rotation, with stubs
 deploy/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
@@ -671,6 +675,89 @@ request stays open (`supervisor.md`, rule 2).
 and the control host's copies; `test-review-gate.sh` checks the files with
 Sortie's own `deploystate`, and `WORKFLOW.md`'s deploy state with Sortie's
 loader.
+
+## Migrating from the stage-0 names
+
+A host installed under the stage-0 names (`ortus-stage0-*` units,
+`~/.local/share/ortus-nova/stage0/`) moves to its environment's names in
+one push (design D7), from the operator's checkout on the control host,
+never from the live kit, which the migration moves:
+
+```sh
+deploy/migrate-stage0.sh dev --check   # on each host first: the checks alone, nothing changes
+deploy/deploy.sh dev --migrate-stage0  # on the control host: migrate and install it, then each worker host
+```
+
+Each host still under its stage-0 names is migrated in its step of the
+push, the control host first: its `bootstrap.sh` runs the target commit's
+`migrate-stage0.sh` from a copy outside the home, and a host already under
+its environment's names is deployed as usual. On each host it:
+
+1. **Checks, and changes nothing if one fails**, naming every reason: the
+   host is declared in `dev.yml` with the `runs` its `STAGE0_PROFILE` had;
+   none of the environment's home, logs, worker host files, local-names
+   file or units exists; on the control host, each setting that moved to
+   the environment file (ports, tracker, local name) has the file's value
+   in `stage0.env`; the worker daemon records no job
+   (`$ORTUS_NOVA_HOME/worker/jobs/`, named); and no deploy of the host runs.
+   Pause dispatch and let the jobs end first.
+2. **Stops** every `ortus-stage0-*` unit and disables it, the deploy timer
+   with them, under the stage-0 lock.
+3. **Moves**, with `mv`, never a copy: the state directory to
+   `~/.local/share/ortus-nova/dev/`, the logs to
+   `~/.local/state/ortus-nova/dev/logs/`, the worker host's files to
+   `~/.config/ortus-nova/dev/`, the local-names file to
+   `ortus-nova-dev-workbench`, the pack to `agent.smolmachine`, and the
+   stage-0 unit files into the record. `stage0.env` becomes `host.env`
+   (`ORTUS_NOVA_*`, without `PROFILE`, `WORKER_NAME` and the settings the
+   environment file holds). Every path under the old home is rewritten in
+   each SQLite database (Sortie's), in one transaction after a backup beside
+   it (`.sortie.db.pre-migration`); in each git link, then `git worktree
+   repair`, so the operator's and homelab's checkouts name the moved
+   worktrees; and in every other text file and symlink. Files git tracks in
+   a work tree (the kit, homelab) are the commit's and stay as they are. A
+   binary file that names the old home, a build output (`bin/`, Python
+   caches), is moved aside into the record and built again by the install.
+   The podman secrets get their `ortus-nova-dev-` names; the old ones stay.
+4. **Records** it all in `~/.local/share/ortus-nova/dev/migration.json`, with
+   the stage-0 commit the host ran and the row count of every table of each
+   database before the move (`counts_before`); `migration/` beside it keeps
+   the stage-0 unit files, `stage0.env` and what was moved aside.
+5. **Checks the move**: the counts again (`counts_after`), which must be
+   equal, and a byte search of the new home, each database's dump included,
+   for the old home.
+6. **Installs** the host with `deploy.sh dev --this-host` from the moved
+   live kit at the push's commit, then checks that the worker daemon runs
+   and, on the control host, Sortie answers `/readyz`, the workbench
+   answers, and no row of an append-only table (`run_history`,
+   `supervisor_actions`, `platform_faults`) went missing
+   (`counts_installed`). The push then waits for the host's worker to check
+   in at the control host's Sortie.
+
+A failure in steps 3 to 6, or a worker that does not check in, rolls the
+host back at once, and the push stops with that host failed; hosts already
+migrated stay migrated. To go back by hand later, on the host:
+
+```sh
+~/.local/share/ortus-nova/dev/kit/deploy/migrate-stage0.sh dev --rollback
+```
+
+It stops and removes the new units and secrets, rewrites every path back
+(in the databases too, so what Sortie wrote under the new names comes back
+with it), moves everything back, restores the old unit files and starts the
+units that ran, with the live kit at the recorded stage-0 commit and the
+deploy timer still disabled. The record stays as
+`migration-rolled-back/` in the stage-0 home. Once both hosts have run a day
+on the new names:
+
+```sh
+~/.local/share/ortus-nova/dev/kit/deploy/migrate-stage0.sh dev --finish
+```
+
+deletes the record, the database backup and the old podman secrets; after
+it, `--rollback` refuses. `test-migrate-stage0.sh` checks every step and
+refusal against throwaway stage-0 homes and a database made by Sortie's
+own migrations.
 
 ## Credentials
 

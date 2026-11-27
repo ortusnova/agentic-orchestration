@@ -34,7 +34,25 @@ env_names() {
     fi
   fi
   if [[ -n $ORTUS_NOVA_STAGE0 ]]; then
-    ORTUS_NOVA_HOME=${ORTUS_NOVA_HOME:-$root/stage0}
+    env_names_of stage0 "$env" "${ORTUS_NOVA_HOME:-$root/stage0}"
+  else
+    env_names_of env "$env" "${ORTUS_NOVA_HOME:-$root/$env}"
+  fi
+  # A worker host's stage-0 home, which the control host's copy of its
+  # deploy state falls back to while that host is not migrated.
+  ORTUS_NOVA_STAGE0_WORKER_HOST_HOME=.local/share/ortus-nova/stage0
+  # The unit templates, units/ortus-nova-<part>, rendered as
+  # $ORTUS_NOVA_UNIT_PREFIX<part>.
+  ORTUS_NOVA_UNIT_TEMPLATE_PREFIX=ortus-nova-
+  export ORTUS_NOVA_ENV ORTUS_NOVA_HOME ORTUS_NOVA_STAGE0
+}
+
+# env_names_of stage0|env ENV HOME: the stage-0 names, or ENV's, with HOME
+# as the state directory (env_names chooses which).
+env_names_of() {
+  local env=$2
+  if [[ $1 == stage0 ]]; then
+    ORTUS_NOVA_HOME=$3
     ORTUS_NOVA_SETTINGS_FILE=stage0.env
     ORTUS_NOVA_SETTINGS_PREFIX=STAGE0_
     ORTUS_NOVA_UNIT_PREFIX=ortus-stage0-
@@ -49,7 +67,7 @@ env_names() {
     ORTUS_NOVA_MACHINE_LABEL_KEY=worker-daemon.worker
     ORTUS_NOVA_MACHINE_LABEL_ENV=''
   else
-    ORTUS_NOVA_HOME=${ORTUS_NOVA_HOME:-$root/$env}
+    ORTUS_NOVA_HOME=$3
     ORTUS_NOVA_SETTINGS_FILE=host.env
     ORTUS_NOVA_SETTINGS_PREFIX=ORTUS_NOVA_
     ORTUS_NOVA_UNIT_PREFIX=ortus-nova-$env-
@@ -64,12 +82,25 @@ env_names() {
     ORTUS_NOVA_MACHINE_LABEL_KEY=ortus-nova.worker
     ORTUS_NOVA_MACHINE_LABEL_ENV=$env/
   fi
-  # A worker host's stage-0 home, which the control host's copy of its
-  # deploy state falls back to while that host is not migrated.
-  ORTUS_NOVA_STAGE0_WORKER_HOST_HOME=.local/share/ortus-nova/stage0
-  # The unit templates, units/ortus-nova-<part>, rendered as
-  # $ORTUS_NOVA_UNIT_PREFIX<part>.
-  ORTUS_NOVA_UNIT_TEMPLATE_PREFIX=ortus-nova-
+}
+
+# migration_names ENV: both sets of names of this host, for
+# migrate-stage0.sh (design D7): MIGRATE_FROM_<X>, the stage-0 names, and
+# MIGRATE_TO_<X>, ENV's, for each X of HOME, SETTINGS_FILE, SETTINGS_PREFIX,
+# UNIT_PREFIX, PODMAN_PREFIX, LOG_DIR, WORKER_HOST_CONFIG, LOCK_FILE,
+# LOCAL_NAME_FILE and PACK_FILE, whatever this host holds now. ENV's are
+# left set as env_names sets them.
+migration_names() {
+  local env=$1 root=$HOME/.local/share/ortus-nova side x var
+  [[ $env =~ $ORTUS_NOVA_ENV_PATTERN ]] || { echo "names.sh: '$env' is not an environment name (a DNS label)" >&2; return 1; }
+  for side in FROM TO; do
+    if [[ $side == FROM ]]; then env_names_of stage0 "$env" "$root/stage0"; else env_names_of env "$env" "$root/$env"; fi
+    for x in HOME SETTINGS_FILE SETTINGS_PREFIX UNIT_PREFIX PODMAN_PREFIX LOG_DIR WORKER_HOST_CONFIG LOCK_FILE LOCAL_NAME_FILE PACK_FILE; do
+      var=ORTUS_NOVA_$x
+      printf -v "MIGRATE_${side}_$x" '%s' "${!var}"
+    done
+  done
+  ORTUS_NOVA_ENV=$env ORTUS_NOVA_STAGE0=''
   export ORTUS_NOVA_ENV ORTUS_NOVA_HOME ORTUS_NOVA_STAGE0
 }
 

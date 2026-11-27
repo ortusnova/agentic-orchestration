@@ -34,6 +34,8 @@
 #   ... --rebuild-pack                    also rebuild the smolvm packs, which are
 #                                         rebuilt by themselves when their inputs change
 #   ... --update-sortie                   also move the Sortie checkout to origin/plan-bench
+#   deploy/deploy.sh ENV --migrate-stage0 deploy every host, migrating each host still under its
+#                                         stage-0 names to ENV's first (migrate-stage0.sh)
 #
 # Every step checks first, so a second run changes nothing but a restart.
 # Settings live in $ORTUS_NOVA_HOME/stage0.env, written on the first run (edit it,
@@ -52,23 +54,26 @@ KIT=$ROOT/deploy
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'deploy.sh: %s\n' "$*" >&2; exit 1; }
 secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
-usage() { echo "usage: $0 ENV [--commit COMMIT] [--check | --this-host] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
+usage() { echo "usage: $0 ENV [--commit COMMIT] [--check | --this-host | --migrate-stage0] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
 [[ $# -gt 0 && $1 != -* ]] || usage
 ENV_NAME=$1
 shift
-REBUILD_PACK='' UPDATE_SORTIE='' THIS_HOST_ONLY='' CHECK='' COMMIT='' PASS=()
+REBUILD_PACK='' UPDATE_SORTIE='' THIS_HOST_ONLY='' CHECK='' COMMIT='' MIGRATE='' PASS=()
 while (( $# )); do
   case $1 in
     --rebuild-pack) REBUILD_PACK=1 PASS+=("$1") ;;
     --update-sortie) UPDATE_SORTIE=1 PASS+=("$1") ;;
     --this-host) THIS_HOST_ONLY=1 ;;
     --check) CHECK=1 ;;
+    --migrate-stage0) MIGRATE=1 PASS+=("$1") ;;
     --commit) [[ $# -gt 1 ]] || usage; COMMIT=$2; shift ;;
     *) usage ;;
   esac
   shift
 done
 [[ -z $CHECK || -z $THIS_HOST_ONLY ]] || usage
+# The migration is part of a host's step of the push (bootstrap.sh).
+[[ -z $MIGRATE || ( -z $CHECK && -z $THIS_HOST_ONLY ) ]] || usage
 # shellcheck source=names.sh
 . "$KIT/names.sh"
 
