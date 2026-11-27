@@ -208,6 +208,20 @@ func TestSharedLocalName(t *testing.T) {
 	}
 }
 
+func TestStage0NamesOnce(t *testing.T) {
+	a := strings.Replace(valid, "version: 1\n", "version: 1\nstage0_names: true\n", 1)
+	b := strings.NewReplacer("9", "6", "test-a", "test-b").Replace(a)
+	dir := throwaway(t, map[string]string{"test-a.yml": a, "test-b.yml": b})
+	_, err := CheckDir(dir)
+	if err == nil || !strings.Contains(err.Error(), "test-a.yml") || !strings.Contains(err.Error(), "test-b.yml") {
+		t.Fatalf("two files with stage0_names: %v", err)
+	}
+	dir = throwaway(t, map[string]string{"test-a.yml": a})
+	if v := values(t, filepath.Join(dir, "test-a.yml")); v["ORTUS_NOVA_ENV_STAGE0_NAMES"] != "true" {
+		t.Errorf("stage0_names: %q", v["ORTUS_NOVA_ENV_STAGE0_NAMES"])
+	}
+}
+
 func TestCoexisting(t *testing.T) {
 	b := strings.NewReplacer("9", "6", "test-a", "test-b").Replace(valid)
 	dir := throwaway(t, map[string]string{"test-a.yml": valid, "test-b.yml": b})

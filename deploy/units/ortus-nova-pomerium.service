@@ -1,0 +1,15 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: Pomerium, the control plane's only door for every worker
+After=network-online.target @UNIT_PREFIX@egress-gate.service
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-pomerium.sh
+ExecStop=-podman stop -t 10 @PODMAN_PREFIX@pomerium
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

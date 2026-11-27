@@ -1,0 +1,14 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: nono's proxy, the egress flow, holding the credentials
+After=network-online.target
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-nono.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

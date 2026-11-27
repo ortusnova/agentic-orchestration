@@ -1,0 +1,19 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: Sortie under plan control, for every repository (remote kind)
+After=podman-restart.service network-online.target
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-sortie.sh
+# A restart clears Sortie's pause of the supervisor; the operator's stands
+# (supervisor.sh). Its failure does not stop Sortie.
+ExecStartPost=-@KIT@/supervisor.sh @ORTUS_NOVA_ENV@ repause
+Restart=on-failure
+RestartSec=30
+# Sortie drains running sessions on SIGTERM; give it time.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

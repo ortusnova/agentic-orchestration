@@ -1,0 +1,10 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: rotate the kit's units' log files (logs-rotate.sh)
+
+[Service]
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+Environment=ORTUS_NOVA_LOGS_DIR=@LOG_DIR@
+Environment=ORTUS_NOVA_UNIT_PREFIX=@UNIT_PREFIX@
+Type=oneshot
+ExecStart=@KIT@/logs-rotate.sh

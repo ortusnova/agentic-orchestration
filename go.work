@@ -4,8 +4,8 @@ use (
 	./acp-broker
 	./control-plane
 	./deploy/envfile
-	./dev/stage0/live-proofs
-	./dev/stage0/workflow
+	./deploy/live-proofs
+	./deploy/workflow
 	./smol-builder
 	./worker-daemon
 )

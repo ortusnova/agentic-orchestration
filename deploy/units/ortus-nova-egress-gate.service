@@ -1,0 +1,14 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: the egress gate behind Pomerium's egress route
+After=network-online.target @UNIT_PREFIX@nono.service
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-egress-gate.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

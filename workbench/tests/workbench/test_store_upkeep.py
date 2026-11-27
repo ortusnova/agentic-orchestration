@@ -29,7 +29,7 @@ GITHUB_URL = "https://github.com/ortusnova/ortus-nova-specs.git"
 REPO = "ortusnova/ortus-nova-specs"
 BREAKDOWN = "openspec/schemas/planning/breakdown.schema.json"
 SHIPPED = Path(workbench.__file__).parent / "store_template" / "openspec" / "schemas" / "planning"
-STORE_SYNC = Path(__file__).resolve().parents[3] / "dev" / "stage0" / "store-sync.sh"
+STORE_SYNC = Path(__file__).resolve().parents[3] / "deploy" / "store-sync.sh"
 C = "run-homelab-through-sortie"
 
 
@@ -84,7 +84,7 @@ def store_sync(tmp_path: Path, store) -> None:
     home = tmp_path / "stage0"
     home.mkdir(exist_ok=True)
     subprocess.run([str(STORE_SYNC), str(store.root)], check=True, capture_output=True,
-                   env={**os.environ, "STAGE0_HOME": str(home)})
+                   env={**os.environ, "ORTUS_NOVA_HOME": str(home)})
 
 
 def push_to_upstream(tmp_path: Path, bare: Path, name: str) -> Path:

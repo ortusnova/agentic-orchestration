@@ -1,0 +1,16 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: the plan workbench
+After=@UNIT_PREFIX@sortie.service
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-workbench.sh
+Restart=on-failure
+RestartSec=10
+# Planning sessions run in a detached driver; ending the backend keeps them.
+KillMode=process
+
+[Install]
+WantedBy=default.target

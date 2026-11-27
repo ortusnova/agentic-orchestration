@@ -9,18 +9,16 @@ COMPONENTS := workbench control-plane $(GO_MODULES)
 help: ## Show the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-13s %s\n", $$1, $$2}'
 
-test: ## Run every component's tests, the deploy kit's and the stage-0 kit's
+test: ## Run every component's tests and the deploy kit's
 	@set -e; for c in $(COMPONENTS); do echo "== $$c: test"; $(MAKE) -s -C $$c test; done
 	@echo "== deploy: test"; $(MAKE) -s -C deploy test
-	@echo "== dev/stage0: test"; $(MAKE) -s -C dev/stage0 test
 
 lint: licenses no-placeholder specs ## Lint every component, check the license copies and placeholders, and validate the specs
 	@set -e; for c in $(COMPONENTS); do echo "== $$c: lint"; $(MAKE) -s -C $$c lint; done
 	@echo "== deploy: lint"; $(MAKE) -s -C deploy lint
-	@echo "== dev/stage0: lint"; $(MAKE) -s -C dev/stage0 lint
 
-check-forge-rules: ## Fail naming any repository a forge_ceiling grants write on whose default branch GitHub's rules do not bound (dev/stage0, GitHub API, read only)
-	@$(MAKE) -s -C dev/stage0 check-forge-rules
+check-forge-rules: ## Fail naming any repository a forge_ceiling grants write on whose default branch GitHub's rules do not bound (deploy, GitHub API, read only)
+	@$(MAKE) -s -C deploy check-forge-rules
 
 check-latest: ## Fail when a Go component's dependency, or the control plane's Pomerium or nono, is behind its latest stable release (network)
 	@set -e; for m in $(GO_MODULES) control-plane deploy; do echo "== $$m: check-latest"; $(MAKE) -s -C $$m check-latest; done

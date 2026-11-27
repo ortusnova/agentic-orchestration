@@ -160,7 +160,7 @@ def public_address(live_url: str, identifier: str) -> str | None:
     """The preview's name for people, beside the live workbench's TLS name,
     so that the same TLS setup serves it (``https://workbench.example.net``
     gives ``https://workbench-ons-93.example.net/``); None when the live
-    workbench has no name (STAGE0_WORKBENCH_URL is empty)."""
+    workbench has no name (ORTUS_NOVA_WORKBENCH_URL is empty)."""
     u = urlsplit(live_url.strip()) if live_url and live_url.strip() else None
     host = u.hostname if u else None
     if not host or _is_ip(host) or host == "localhost":

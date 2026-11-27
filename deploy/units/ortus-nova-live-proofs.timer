@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: follow the supervisor's live-proof requests, every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

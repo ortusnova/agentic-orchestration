@@ -1,0 +1,19 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: copy the kit's units' journal into rotated log files (logs-follow.sh)
+
+[Service]
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+Environment=ORTUS_NOVA_LOGS_DIR=@LOG_DIR@
+Environment=ORTUS_NOVA_UNIT_PREFIX=@UNIT_PREFIX@
+Type=exec
+ExecStart=@KIT@/logs-follow.sh
+Restart=always
+RestartSec=5
+# A stop signals logs-follow.sh only: it stops journalctl, which saves its
+# cursor, and waits for awk to write every line it read.
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

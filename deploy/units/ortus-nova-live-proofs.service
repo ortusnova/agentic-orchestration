@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: start the supervisor's live-proof jobs and hold their pull requests' merge until a job proves the criterion
+After=@UNIT_PREFIX@sortie.service
+
+[Service]
+Type=oneshot
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-live-proofs.sh

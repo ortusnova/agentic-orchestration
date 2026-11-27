@@ -6,7 +6,7 @@ and shows it under "Needs a person", unread until seen, and unread again
 every four hours while its question stays open.
 
 Every body is one Sortie's webhook backend posted
-(tests/fixtures/sortie-webhook, which dev/stage0/test-review-gate.sh checks
+(tests/fixtures/sortie-webhook, which deploy/test-review-gate.sh checks
 against Sortie itself), with the story's identifier and times of the test."""
 
 from __future__ import annotations

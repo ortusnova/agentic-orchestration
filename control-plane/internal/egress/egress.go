@@ -73,7 +73,7 @@ type LiveProof struct {
 	// profile. It takes the same credential as Config.Nono.
 	Nono string
 	// JobsFile lists the job of each live proof that runs, one issue
-	// identifier per line, as stage0-live-proofs writes it. A missing file
+	// identifier per line, as live-proofs writes it. A missing file
 	// lists none.
 	JobsFile string
 }

@@ -403,7 +403,7 @@ func TestSortieDownIsUnavailableNotRefused(t *testing.T) {
 // agent-platform/run-supervision#A live criterion a story's machine cannot
 // run becomes a live-proof job, scenario A vm chain the story's machine
 // cannot run: the story's own job is refused Let's Encrypt staging by the
-// kit's nono, and once stage0-live-proofs names its live proof as running,
+// kit's nono, and once live-proofs names its live proof as running,
 // the same job's CONNECT goes to the live-proof nono, which allows it.
 func TestALiveProofJobGetsTheLiveProofEgress(t *testing.T) {
 	const staging = "acme-staging-v02.api.letsencrypt.org:443"
