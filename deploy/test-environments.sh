@@ -90,7 +90,8 @@ sys.exit(0 if (c["deploy_env"], c["machine_prefix"], c["machine_label"], c["work
 PY
 "$daemon" check -config "$conf" > "$tmp/check" 2>&1 && ok "the worker daemon accepts it" || fail "check: $(cat "$tmp/check")"
 installed=$( (cd "$h" && find .local .config -type f -o -type d) | sort)
-if grep -i stage0 <<< "$installed" || grep -rqi stage0 "$h/.config/systemd/user" "$h/.local/share/ortus-nova/test-a/host.env"; then
+# The kit's own path is the checkout's, whatever its name: not a name.
+if grep -i stage0 <<< "$installed" || cat "$h/.config/systemd/user"/* "$h/.local/share/ortus-nova/test-a/host.env" | sed "s|$ROOT||g" | grep -qi stage0; then
   fail "a name, path or setting holds stage0"
 else ok "no installed name, path, unit or setting holds stage0"; fi
 grep -q "^ORTUS_NOVA_ENV=test-a$" "$h/.local/share/ortus-nova/test-a/environment.env" \
@@ -159,7 +160,7 @@ bad=''
 for t in "$KIT"/units/ortus-nova-*; do
   part=${t##*/units/ortus-nova-}
   out=$(HOME=$tmp/c; env_names test-a; unit "$part"; render_unit "$KIT" "$part")
-  [[ $out == ortus-nova-test-a-* ]] && ! grep -qi 'stage0' <<< "$out" && ! grep -q '@[A-Z_]*@' <<< "$out" || bad+=" $part"
+  [[ $out == ortus-nova-test-a-* ]] && ! grep -qi 'stage0' <<< "${out//"$ROOT"/}" && ! grep -q '@[A-Z_]*@' <<< "$out" || bad+=" $part"
 done
 [[ -z $bad ]] && ok "every unit template renders under the environment's names, with no stage0 and nothing left unrendered" || fail "units:$bad"
 
