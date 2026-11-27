@@ -812,19 +812,27 @@ revert to the edge finds its worker hosts again.
 On p1, once `deploy.sh` has run:
 
 ```sh
-deploy/worker-host.sh dev add brian@taichi        # the worker is named taichi
-deploy/worker-host.sh dev add mini.lan mac-mini   # or name it yourself
+deploy/worker-host.sh dev add taichi    # a worker host of dev.yml, by its machine id
 deploy/worker-host.sh dev list
 ```
 
-`add` needs `ssh -o BatchMode=yes HOST true` to work from p1. It issues the
-worker a client certificate from the control plane's CA for its name (a DNS
-label), lists it on every route, and copies to `~/.config/ortus-nova/` on
-the host the certificate (`cp-worker.crt`), its key (`cp-worker.key`, mode
+`add` runs on the control host, and takes only a host that `dev.yml`
+declares with `worker` in its `runs` (another is refused, with no SSH
+connection). It reaches the host by the destination the file gives it (its
+`ssh`, else its name), which must work without a prompt
+(`ssh -o BatchMode=yes DEST true`). It issues the worker a client
+certificate from the environment's control-plane CA for its machine id,
+lists it on every route, and copies to `~/.config/ortus-nova/dev/` on the
+host the certificate (`cp-worker.crt`), its key (`cp-worker.key`, mode
 0600, which p1 then deletes: it is the one secret a worker host keeps), the
 CA (`cp-ca.crt`), the egress CA's certificate (`egress-ca.crt`; its
 machines trust nono's interception with it, and its key stays on p1) and
-Pomerium's URL (`control-plane-url`). It restarts Pomerium onto the new
+the environment's control URL (`control-plane-url`, `https://<control
+host>:<front_port>`). A worker's deploy refuses to start its daemon when
+that file is missing or names another URL than its environment file's,
+naming both, so files copied from another environment are caught before the
+daemon dials anything; the control host's deploy warns of each declared
+worker with no certificate yet. It restarts Pomerium onto the new
 list; Sortie is not restarted. Then the next `deploy/deploy.sh dev` on p1
 points the host's daemon at Pomerium with the certificate. Adding the same
 name again gives it a new certificate and drops the old one; `remove` also
@@ -967,7 +975,7 @@ Sortie of stage 0, is retired: p1's Sortie dispatches homelab too.
 
 ```sh
 # On p1, once: the host's client certificate, and the egress CA's certificate.
-deploy/worker-host.sh dev add brian@taichi
+deploy/worker-host.sh dev add taichi
 # On the host: the first run writes host.env with the profile.
 deploy/deploy.sh dev
 deploy/deploy.sh dev            # later runs read it from host.env

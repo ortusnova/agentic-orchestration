@@ -90,6 +90,17 @@ front_workers() {
   cpctl worker list | tail -n +2 | cut -d' ' -f1
 }
 
+# front_missing_workers SELF NAME...: each NAME but SELF that the worker
+# list does not name, one per line.
+front_missing_workers() {
+  local self=$1 listed name
+  shift
+  listed=$(front_workers) || return 1
+  for name; do
+    [[ $name == "$self" ]] || grep -qx "$name" <<< "$listed" || echo "$name"
+  done
+}
+
 # issue_local_worker NAME: p1's own worker's certificate, issued once and
 # kept in $ORTUS_NOVA_CP_HOME/workers/NAME, where its daemon reads it: p1 is
 # its host, so its key stays there. Prints nothing; says when it issued.

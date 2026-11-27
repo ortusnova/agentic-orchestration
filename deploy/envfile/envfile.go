@@ -261,6 +261,13 @@ func (e *Env) HostsRunning(part string) []string {
 	return out
 }
 
+// ControlURL is the control plane's address, which every worker dials:
+// Pomerium on the control host, by the name every host of the
+// environment knows it by, its machine id.
+func (e *Env) ControlURL() string {
+	return fmt.Sprintf("https://%s:%d", e.HostsRunning("control")[0], e.Control.FrontPort)
+}
+
 // destinations lists each host and its SSH destination, NAME=DEST, by
 // machine id.
 func (e *Env) destinations() string {
@@ -317,6 +324,7 @@ func (e *Env) Assignments(host string) (string, error) {
 		{"ORTUS_NOVA_ENV_WORKER_HOSTS", strings.Join(e.HostsRunning("worker"), " ")},
 		{"ORTUS_NOVA_ENV_HOST_SSH", e.destinations()},
 		{"ORTUS_NOVA_ENV_FRONT_PORT", fmt.Sprint(e.Control.FrontPort)},
+		{"ORTUS_NOVA_ENV_CONTROL_URL", e.ControlURL()},
 		{"ORTUS_NOVA_ENV_SORTIE_PORT", fmt.Sprint(e.Ports.Sortie)},
 		{"ORTUS_NOVA_ENV_WORKBENCH_PORT", fmt.Sprint(e.Ports.Workbench)},
 		{"ORTUS_NOVA_ENV_NONO_PORT", fmt.Sprint(e.Ports.Nono)},

@@ -76,16 +76,9 @@ done
 # this host is the one hostname -s names, and must be one of its hosts.
 # ORTUS_NOVA_ENVIRONMENTS and ORTUS_NOVA_ENVFILE, for the tests, are another
 # directory of environment files and a built loader.
-ENVIRONMENTS=${ORTUS_NOVA_ENVIRONMENTS:-$KIT/environments}
-ENVFILE=${ORTUS_NOVA_ENVFILE:-}
-if [[ -z $ENVFILE ]]; then
-  ENVFILE=${XDG_CACHE_HOME:-$HOME/.cache}/ortus-nova/envfile
-  mkdir -p "${ENVFILE%/*}"
-  (cd "$KIT/envfile" && go build -o "$ENVFILE" .) || die "could not build the environment loader (deploy/envfile)"
-fi
 THIS_HOST=$(hostname -s | tr '[:upper:]' '[:lower:]')
-values=$("$ENVFILE" values -host "$THIS_HOST" "$ENVIRONMENTS/$ENV_NAME.yml") || die "$ENVIRONMENTS/$ENV_NAME.yml: see above"
-eval "$values"
+env_file_load "$ENV_NAME" "$THIS_HOST" || die "environment $ENV_NAME: see above"
+values=$ORTUS_NOVA_ENV_VALUES
 for pair in $ORTUS_NOVA_ENV_HOST_SSH; do
   dest=${pair#*=}
   getent hosts "${dest#*@}" > /dev/null \
@@ -255,33 +248,29 @@ env_settings
 env_values
 ORTUS_NOVA_PROFILE=$WANT_PROFILE
 ORTUS_NOVA_PACK=${ORTUS_NOVA_PACK:-$ORTUS_NOVA_HOME/$ORTUS_NOVA_PACK_FILE}
-# Pomerium's public URL, which every worker dials: on p1 it stays as the
-# first run that knew it wrote it to stage0.env; a worker host has it from
-# worker-host.sh add (control-plane-url), unless its stage0.env says
-# otherwise.
+# Pomerium's public URL, which every worker dials. On the control host it
+# stays as the first run that knew it wrote it to the settings. A worker
+# dials only its environment's control plane (design D5, check 2): the
+# files worker-host.sh add copied must name the environment file's control
+# URL, or the daemon is not started.
 WORKER_HOST_CONFIG=$HOME/$ORTUS_NOVA_WORKER_HOST_CONFIG
-# A worker host that the stage-1 edge served gets its certificate from p1's
-# deploy.sh, which runs from the same merge (carry_edge_workers in
-# retire-edge.sh). The live kit, which the deploy timer runs, waits for it
-# (ORTUS_NOVA_WORKER_CERT_WAIT seconds); a kit run by hand does not.
-if [[ $ORTUS_NOVA_PROFILE == worker && -z ${ORTUS_NOVA_CP_PUBLIC_URL:-} ]]; then
+add_command="on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
+if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
   cert_wait=${ORTUS_NOVA_WORKER_CERT_WAIT:-0}
-  [[ $ROOT == "$LIVE" ]] && cert_wait=${ORTUS_NOVA_WORKER_CERT_WAIT:-1800}
   [[ $cert_wait =~ ^[0-9]+$ ]] || die "ORTUS_NOVA_WORKER_CERT_WAIT is $cert_wait; want seconds"
   # shellcheck source=retire-edge.sh
   . "$KIT/retire-edge.sh"
   wait_for_worker_files "$WORKER_HOST_CONFIG" "$cert_wait" \
-    || die "p1 has not given this host its certificate in $cert_wait s ($WORKER_HOST_CONFIG): on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
-fi
-if [[ -z ${ORTUS_NOVA_CP_PUBLIC_URL:-} ]]; then
-  if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
-    ORTUS_NOVA_CP_PUBLIC_URL=$(cat "$WORKER_HOST_CONFIG/control-plane-url" 2>/dev/null || true)
-    [[ -n $ORTUS_NOVA_CP_PUBLIC_URL ]] || die "$WORKER_HOST_CONFIG/control-plane-url is missing: on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
-  else
-    ORTUS_NOVA_CP_PUBLIC_URL=https://$(hostname -f):$ORTUS_NOVA_ENV_FRONT_PORT
-    say "Pomerium's public URL is $ORTUS_NOVA_CP_PUBLIC_URL ($(setting CP_PUBLIC_URL) in $ENV_FILE); every worker host must resolve its host to $THIS_HOST"
-    printf '# Pomerium'"'"'s public URL, which every worker dials (README.md "Worker hosts").\n%s=%s\n' "$(setting CP_PUBLIC_URL)" "$ORTUS_NOVA_CP_PUBLIC_URL" >> "$ENV_FILE"
-  fi
+    || die "this host has no certificate of environment $ENV_NAME in $WORKER_HOST_CONFIG: $add_command"
+  url=$(cat "$WORKER_HOST_CONFIG/control-plane-url" 2> /dev/null || true)
+  [[ -n $url ]] || die "$WORKER_HOST_CONFIG/control-plane-url is missing: $add_command"
+  [[ $url == "$ORTUS_NOVA_ENV_CONTROL_URL" ]] \
+    || die "$WORKER_HOST_CONFIG/control-plane-url names $url, and environment $ENV_NAME's control plane is $ORTUS_NOVA_ENV_CONTROL_URL ($ORTUS_NOVA_ENV_FILE): the worker daemon is not started; $add_command"
+  ORTUS_NOVA_CP_PUBLIC_URL=$url
+elif [[ -z ${ORTUS_NOVA_CP_PUBLIC_URL:-} ]]; then
+  ORTUS_NOVA_CP_PUBLIC_URL=https://$(hostname -f):$ORTUS_NOVA_ENV_FRONT_PORT
+  say "Pomerium's public URL is $ORTUS_NOVA_CP_PUBLIC_URL ($(setting CP_PUBLIC_URL) in $ENV_FILE); every worker host must resolve its host to $THIS_HOST"
+  printf '# Pomerium'"'"'s public URL, which every worker dials (README.md "Worker hosts").\n%s=%s\n' "$(setting CP_PUBLIC_URL)" "$ORTUS_NOVA_CP_PUBLIC_URL" >> "$ENV_FILE"
 fi
 # The worker's name is the host's machine id in the environment file
 # (design D2), the name of the certificate worker-host.sh add gave it.
@@ -369,7 +358,7 @@ if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
   # CA (worker-host.sh add, on p1), which Pomerium admits this worker by.
   worker_tls=("$WORKER_HOST_CONFIG/cp-worker.crt" "$WORKER_HOST_CONFIG/cp-worker.key" "$WORKER_HOST_CONFIG/cp-ca.crt")
   for f in "$ORTUS_NOVA_EGRESS_CA" "${worker_tls[@]}"; do
-    [[ -s $f ]] || die "$f is missing: on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
+    [[ -s $f ]] || die "$f is missing: $add_command"
   done
   say "Building worker-daemon and smol-builder into $ORTUS_NOVA_HOME/bin"
   build_worker_daemon
@@ -418,7 +407,7 @@ if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
   code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "${worker_tls[2]}" --cert "${worker_tls[0]}" --key "${worker_tls[1]}" \
     "$ORTUS_NOVA_CP_PUBLIC_URL/api/v1/workers/" || true)
   [[ $code != 000 && $code != 403 && -n $code ]] \
-    || say "p1's Pomerium does not admit this worker at $ORTUS_NOVA_CP_PUBLIC_URL yet (HTTP $code): on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
+    || say "p1's Pomerium does not admit this worker at $ORTUS_NOVA_CP_PUBLIC_URL yet (HTTP $code): $add_command"
   deploy_applied
   say "Ready: worker $ORTUS_NOVA_WORKER_NAME dials p1's Pomerium at $ORTUS_NOVA_CP_PUBLIC_URL (journalctl --user -u ${ORTUS_NOVA_UNIT_PREFIX}worker)"
   exit 0
@@ -524,6 +513,12 @@ fi
 [[ -n $(pomerium_image) ]] || die "control-plane/compose.yaml pins no Pomerium image"
 front_init || die "could not set up the control plane's CA and Pomerium's configuration in $ORTUS_NOVA_CP_HOME"
 issue_local_worker "$ORTUS_NOVA_WORKER_NAME" || die "could not issue p1's own worker its certificate"
+# Each other worker host of the environment needs its certificate from
+# worker-host.sh add, which this deploy does not give (design D3).
+# shellcheck disable=SC2086 # one argument per worker host
+for name in $(front_missing_workers "$ORTUS_NOVA_WORKER_NAME" $ORTUS_NOVA_ENV_WORKER_HOSTS); do
+  say "Warning: worker host $name of environment $ENV_NAME has no certificate yet: run deploy/worker-host.sh $ENV_NAME add $name"
+done
 # Each worker host the stage-1 edge served gets its certificate now, before
 # the edge and its tunnels are retired below: a host that cannot be reached
 # stops this run with the edge still up.

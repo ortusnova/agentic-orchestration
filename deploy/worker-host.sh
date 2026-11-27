@@ -4,17 +4,17 @@
 # the control plane's CA, and Pomerium names the worker to Sortie from it;
 # no tunnel, no port of its own (design D18).
 #
-#   deploy/worker-host.sh ENV add HOST [NAME]  issue NAME a certificate and copy it to HOST;
-#                                              the worker is NAME (default: HOST without its
-#                                              user@ and domain); p1 then copies HOST's
-#                                              deploy state over SSH (deploy-state.sh)
+#   deploy/worker-host.sh ENV add HOST         issue worker host HOST of ENV a certificate from
+#                                              ENV's CA and copy it there, over the SSH
+#                                              destination ENV's file declares for HOST
 #   deploy/worker-host.sh ENV remove NAME      revoke NAME's certificate: Pomerium refuses it on
 #                                              every route from then on
 #   deploy/worker-host.sh ENV list             each listed worker, its expiry and its routes
 #   deploy/worker-host.sh ENV carry HOST       copy every merge record of HOST's Sortie
 #                                              into p1's, before HOST's Sortie stops
 #
-# HOST is an SSH destination that works without a prompt
+# HOST is a worker host of the environment file; it is reached by the SSH
+# destination the file declares for it, which must work without a prompt
 # (`ssh -o BatchMode=yes HOST true`). Run deploy.sh first: it sets up the
 # CA and Pomerium. Nothing here restarts Sortie; Pomerium restarts onto the
 # new worker list, so each worker's requests in flight are cut once and
@@ -23,13 +23,26 @@ set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
 die() { printf 'worker-host.sh: %s\n' "$*" >&2; exit 1; }
-usage() { die "usage: $0 ENV add HOST [NAME] | ENV remove NAME | ENV list | ENV carry HOST"; }
+usage() { die "usage: $0 ENV add HOST | ENV remove NAME | ENV list | ENV carry HOST"; }
 [[ $# -gt 0 ]] || usage
 ENV_NAME=$1
 shift
 # shellcheck source=names.sh
 . "$KIT/names.sh"
 env_load "$ENV_NAME"
+# The environment file, through the loader: the hosts, what each runs and
+# how this host reaches each (design D2, D3).
+THIS_HOST=$(hostname -s | tr '[:upper:]' '[:lower:]')
+env_file_load "$ENV_NAME" "$THIS_HOST" || die "environment $ENV_NAME: see above"
+[[ $THIS_HOST == "$ORTUS_NOVA_ENV_CONTROL_HOST" ]] || die "$THIS_HOST does not run control in environment $ENV_NAME: run this on $ORTUS_NOVA_ENV_CONTROL_HOST"
+# destination NAME: NAME's SSH destination in the environment file.
+destination() {
+  local pair
+  for pair in $ORTUS_NOVA_ENV_HOST_SSH; do
+    [[ ${pair%%=*} == "$1" ]] && { echo "${pair#*=}"; return 0; }
+  done
+  return 1
+}
 [[ -s $ORTUS_NOVA_HOME/$ORTUS_NOVA_SETTINGS_FILE ]] || die "$ORTUS_NOVA_HOME/$ORTUS_NOVA_SETTINGS_FILE is missing: run deploy/deploy.sh $ENV_NAME first"
 # A worker host's state directory, as its own shell sees it (names.sh).
 WORKER_HOST_HOME=$ORTUS_NOVA_WORKER_HOST_HOME
@@ -55,13 +68,14 @@ cmd=${1:-}
 [[ $# -gt 0 ]] && shift
 case $cmd in
   add)
-    [[ $# == 1 || $# == 2 ]] || usage
-    host=$1
-    name=${2:-${host#*@}}
-    name=${name%%.*}
-    [[ $host =~ ^[A-Za-z0-9._@-]+$ ]] || die "HOST must be a plain SSH destination: $host"
-    [[ $name =~ $FRONT_WORKER_NAME ]] || die "NAME must be a DNS label (lower-case letters, digits, '-'): $name"
-    [[ $name == p1 ]] && die "p1 is the control plane: deploy.sh issues its own worker's certificate"
+    [[ $# == 1 ]] || usage
+    name=$1
+    # Only a worker host the environment file declares (design D5, check 1),
+    # reached by the destination the file gives it.
+    [[ " $ORTUS_NOVA_ENV_WORKER_HOSTS " == *" $name "* ]] \
+      || die "$name is not a worker host of environment $ENV_NAME ($ORTUS_NOVA_ENV_FILE declares workers: $ORTUS_NOVA_ENV_WORKER_HOSTS)"
+    [[ $name == "$ORTUS_NOVA_ENV_CONTROL_HOST" ]] && die "$name is the control host: its deploy issues its own worker's certificate"
+    host=$(destination "$name")
     front_ready
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" true || die "ssh $host does not work without a prompt"
     cpctl worker issue "$name" > /dev/null || die "could not issue $name a certificate"
@@ -79,16 +93,18 @@ case $cmd in
     copy "$dir/worker.key" "${ORTUS_NOVA_WORKER_TLS_FILES[1]}" 600
     copy "$dir/ca.crt" "${ORTUS_NOVA_WORKER_TLS_FILES[2]}" 644
     copy "$ORTUS_NOVA_HOME/egress-ca/ca.crt" egress-ca.crt 644
-    copy <(printf '%s\n' "$ORTUS_NOVA_CP_PUBLIC_URL") control-plane-url 644
+    # The environment's control URL (design D5, check 2), which the host's
+    # deploy compares with its environment file.
+    copy <(printf '%s\n' "$ORTUS_NOVA_ENV_CONTROL_URL") control-plane-url 644
     rm -f "$dir/worker.key"
     apply
-    echo "worker $name: $host holds its certificate (~/$ORTUS_NOVA_WORKER_HOST_CONFIG); on $host, run deploy/deploy.sh $ENV_NAME to dial $ORTUS_NOVA_CP_PUBLIC_URL"
+    echo "worker $name: $host holds its certificate (~/$ORTUS_NOVA_WORKER_HOST_CONFIG); the next deploy/deploy.sh $ENV_NAME dials $ORTUS_NOVA_ENV_CONTROL_URL from it"
     ;;
   remove)
     [[ $# == 1 ]] || usage
     name=$1
     [[ $name =~ $FRONT_WORKER_NAME ]] || die "no worker $name"
-    [[ $name == p1 ]] && die "p1 is p1's own worker, which deploy.sh runs"
+    [[ $name == "$ORTUS_NOVA_ENV_CONTROL_HOST" ]] && die "$name is the control host's own worker, which its deploy runs"
     front_ready
     cpctl worker revoke "$name" > /dev/null || die "no worker $name"
     # A token the stage-1 edge's add minted for its notifications.

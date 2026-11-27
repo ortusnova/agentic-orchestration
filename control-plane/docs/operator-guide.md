@@ -244,7 +244,7 @@ list and Pomerium's configuration are `cpctl`'s, in
 Pomerium to Sortie and the gate on loopback). The next
 `deploy/deploy.sh dev` there stops and removes the edge's units
 (`ortus-stage0-edge` and each `ortus-stage0-worker-tunnel@<worker>`) and
-issues p1's own worker its certificate; `deploy/worker-host.sh dev add HOST`
+issues p1's own worker its certificate; `deploy/worker-host.sh dev add HOST` (a worker host of `deploy/environments/dev.yml`)
 issues a worker host's and copies it there, and `remove NAME` revokes it.
 
 For a worker host of a control plane run from this compose project: issue

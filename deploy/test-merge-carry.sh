@@ -72,7 +72,11 @@ record "$pdb" homelab-2 merged bbb2
 
 # On p1: ORTUS_NOVA_HOME is p1's, and taichi's Sortie is at its default home.
 printf 'ORTUS_NOVA_SORTIE_PORT=7680\n' > "$p1/host.env"
-carry() { ORTUS_NOVA_HOME=$p1 ORTUS_NOVA_UNITS=$tmp/p1-units "$KIT/worker-host.sh" test-a carry brian@taichi > "$tmp/out" 2>&1; }
+# shellcheck source=testenv.sh
+. "$KIT/testenv.sh"
+testenv_init "$tmp/env"
+testenv_file test-a 1 p1=control+worker taichi=worker
+carry() { TESTENV_HOST=p1 ORTUS_NOVA_HOME=$p1 ORTUS_NOVA_UNITS=$tmp/p1-units "$KIT/worker-host.sh" test-a carry brian@taichi > "$tmp/out" 2>&1; }
 
 # taichi, the worker profile's retire_sortie, as its deploy.sh runs it.
 retire() {

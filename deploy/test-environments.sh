@@ -58,7 +58,7 @@ worker_host() {
   local d=$1/.config/ortus-nova${3:+/}${3:-}
   mkdir -p "$d"
   for f in egress-ca.crt cp-worker.crt cp-worker.key cp-ca.crt; do echo "$f" > "$d/$f"; done
-  echo "https://control.example:$2" > "$d/control-plane-url"
+  echo "https://control:$2" > "$d/control-plane-url"
 }
 # deploy HOME ENV [ARG...]: this host's step of ENV, from this checkout.
 deploy() {
@@ -128,6 +128,29 @@ b=$(HOME=$h; env_names test-b; echo "$ORTUS_NOVA_UNIT_PREFIX $ORTUS_NOVA_PODMAN_
 : > "$h/systemctl.calls"
 deploy "$h" test-b
 if grep -q 'test-a' "$h/systemctl.calls"; then fail "test-b again touched test-a"; else ok "deploying test-b again restarts no test-a unit"; fi
+
+# --- A worker dials only its environment's control plane ----------------
+h=$tmp/crossed
+worker_host "$h" 10243 test-a
+deploy "$h" test-a
+(( rc != 0 )) && grep -q 'names https://control:10243' "$h/out" && grep -q "control plane is https://control:10143" "$h/out" \
+  && [[ ! -e $h/.config/systemd/user/ortus-nova-test-a-worker.service ]] \
+  && ok "a worker whose control-plane-url names another environment's front is refused, naming both, and its daemon is not started" \
+  || fail "crossed: exit $rc, $(cat "$h/out")"
+h=$tmp/bare
+mkdir -p "$h"
+deploy "$h" test-a
+(( rc != 0 )) && grep -q 'run deploy/worker-host.sh test-a add testhost' "$h/out" && grep -q 'on control' "$h/out" \
+  && [[ ! -e $h/.config/systemd/user/ortus-nova-test-a-worker.service ]] \
+  && ok "a worker with no files of its environment is refused, naming the worker-host.sh command to run on the control host" \
+  || fail "bare: exit $rc, $(cat "$h/out")"
+# The control host warns of each declared worker with no certificate yet.
+missing=$(ORTUS_NOVA_HOME=$tmp/c/home; . "$KIT/front-config.sh"
+  # shellcheck disable=SC2329 # front_workers calls it
+  cpctl() { printf 'NAME EXPIRES ROUTES FINGERPRINT\ncontrol x y z\nalpha x y z\n'; }
+  front_missing_workers control control alpha beta)
+[[ $missing == beta ]] && grep -q 'front_missing_workers' "$KIT/deploy.sh" && grep -q 'say "Warning: worker host $name' "$KIT/deploy.sh" \
+  && ok "the control host's deploy warns, without failing, of each declared worker with no certificate" || fail "missing: '$missing'"
 
 # --- The control host's units -------------------------------------------
 # Every unit a control host installs, rendered for test-a, is named and

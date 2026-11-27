@@ -83,6 +83,7 @@ func TestDev(t *testing.T) {
 		"ORTUS_NOVA_ENV_SORTIE_PORT":    "7680",
 		"ORTUS_NOVA_ENV_WORKBENCH_PORT": "8793",
 		"ORTUS_NOVA_ENV_FRONT_PORT":     "8443",
+		"ORTUS_NOVA_ENV_CONTROL_URL":    "https://p1:8443",
 	}
 	for k, w := range want {
 		if v[k] != w {
