@@ -331,6 +331,12 @@ type setup struct {
 	// so the daemon under test never deletes a live worker's machines as
 	// strays.
 	workerID string
+	// deployEnv, machinePrefix and machineLabel, when set, are the
+	// configuration's deploy_env, machine_prefix and machine_label.
+	deployEnv, machinePrefix, machineLabel string
+	// machines, when set, is the fake host's machines, shared with
+	// another harness: two daemons on one host.
+	machines *fakemachine.Backend
 }
 
 func defaults() setup {
@@ -381,6 +387,11 @@ func newHarness(t *testing.T, s setup) *harness {
 	if s.autoSlots {
 		delete(doc, "run_slots")
 	}
+	for k, v := range map[string]string{"deploy_env": s.deployEnv, "machine_prefix": s.machinePrefix, "machine_label": s.machineLabel} {
+		if v != "" {
+			doc[k] = v
+		}
+	}
 	if !s.noUsage {
 		doc["usage_commands"] = map[string][]string{"*": usage}
 	}
@@ -391,7 +402,10 @@ func newHarness(t *testing.T, s setup) *harness {
 	}
 	logs := &syncBuffer{}
 	probe := &fakeProbe{s: s.host}
-	backend := &fakemachine.Backend{Dir: t.TempDir()}
+	backend := s.machines
+	if backend == nil {
+		backend = &fakemachine.Backend{Dir: t.TempDir()}
+	}
 	var mb machine.Backend = backend
 	if s.backend != nil {
 		mb = s.backend
@@ -551,7 +565,7 @@ func (h *harness) reports(id string, attempt int) []protocol.Report {
 
 //nolint:unparam // every scenario names ONS-7, as the spec does
 func (h *harness) machine(id string, attempt int) *fakemachine.Machine {
-	return h.backend.Machine(daemon.MachineName(id, attempt))
+	return h.backend.Machine(h.d.MachineName(id, attempt))
 }
 
 var _ machine.Backend = (*fakemachine.Backend)(nil)

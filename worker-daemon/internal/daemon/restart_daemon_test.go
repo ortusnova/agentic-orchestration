@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/daemon"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/fakecp"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine/fakemachine"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
@@ -178,20 +178,21 @@ func TestADaemonRestartDeletesAMachineWithoutState(t *testing.T) {
 		}
 		return m
 	}
-	create(daemon.MachineName("ONS-9", 1), map[string]string{machine.LabelJob: "ONS-9", machine.LabelWorker: "taichi"})
-	create(daemon.MachineName("ONS-8", 1), map[string]string{machine.LabelJob: "ONS-8", machine.LabelWorker: "p1"})
+	create(h.d.MachineName("ONS-9", 1), map[string]string{machine.LabelJob: "ONS-9", machine.LabelWorker: "taichi"})
+	create(h.d.MachineName("ONS-8", 1), map[string]string{machine.LabelJob: "ONS-8", machine.LabelWorker: "p1"})
 	create("someone-elses", map[string]string{})
 	h.restartDaemon()
-	orphan := h.backend.Machine(daemon.MachineName("ONS-9", 1))
+	orphan := h.backend.Machine(h.d.MachineName("ONS-9", 1))
 	h.waitFor("the machine without state to be deleted", 10*time.Second, orphan.Deleted)
-	for _, name := range []string{daemon.MachineName("ONS-8", 1), "someone-elses"} {
+	for _, name := range []string{h.d.MachineName("ONS-8", 1), "someone-elses"} {
 		if h.backend.Machine(name).Deleted() {
 			t.Errorf("deleted %s, which is not this worker's", name)
 		}
 	}
 }
 
-// A new machine carries the worker's name, so the daemon knows its own.
+// A new machine carries the worker's name, so the daemon knows its own;
+// with no machine_prefix or machine_label configured, as before.
 func TestAMachineNamesItsWorker(t *testing.T) {
 	h := newHarness(t, restartSetup())
 	h.offer("ONS-7", 1, map[string]string{"AGENT_MODE": "sleep"})
@@ -199,4 +200,101 @@ func TestAMachineNamesItsWorker(t *testing.T) {
 	if got := h.machine("ONS-7", 1).Spec().Labels[machine.LabelWorker]; got != "taichi" {
 		t.Errorf("label %s = %q, want taichi", machine.LabelWorker, got)
 	}
+	if got := h.machine("ONS-7", 1).Spec().Name; got != "wd-ONS-7-1" {
+		t.Errorf("machine name %q, want wd-ONS-7-1", got)
+	}
+}
+
+// environment is a worker daemon of one environment, named as the deploy
+// kit names it (spec store deploy-environments, design D4).
+func environment(env string, machines *fakemachine.Backend) setup {
+	s := restartSetup()
+	s.deployEnv, s.machinePrefix, s.machineLabel = env, "wd-"+env+"-", "ortus-nova.worker="+env+"/taichi"
+	s.machines = machines
+	return s
+}
+
+// With deploy_env set, each check-in declares it; with none, the
+// declaration carries no deploy_env at all, as before.
+func TestTheCheckInDeclaresTheEnvironment(t *testing.T) {
+	h := newHarness(t, environment("test-a", nil))
+	h.waitFor("a check-in", 10*time.Second, func() bool { _, ok := h.fake.Declaration("taichi"); return ok })
+	if d, _ := h.fake.Declaration("taichi"); d.DeployEnv != "test-a" {
+		t.Errorf("declared deploy_env %q, want test-a", d.DeployEnv)
+	}
+	plain := newHarness(t, restartSetup())
+	plain.waitFor("a check-in", 10*time.Second, func() bool { return plain.fake.Count("checkin", "", 0) > 0 })
+	for _, e := range plain.fake.Events() {
+		if e.Kind == "checkin" && strings.Contains(string(e.Body), "deploy_env") {
+			t.Errorf("a worker with no deploy_env declared one: %s", e.Body)
+		}
+	}
+}
+
+// Scenario: two daemons on one host. The daemons of two environments, on
+// one host and with the same worker name, each run job ONS-7 and both
+// restart: each adopts its own machine and leaves the other's running,
+// and a machine with its own label that no record names is deleted.
+func TestTwoEnvironmentsOnOneHost(t *testing.T) {
+	host := &fakemachine.Backend{Dir: t.TempDir()}
+	a := newHarness(t, environment("test-a", host))
+	b := newHarness(t, environment("test-b", host))
+	holding(t, a)
+	holding(t, b)
+	ma, mb := a.machine("ONS-7", 1), b.machine("ONS-7", 1)
+	if ma == nil || mb == nil || ma == mb {
+		t.Fatalf("want one machine per environment: %s", strings.Join(machineNames(host), " "))
+	}
+	if got := ma.Spec().Name; got != "wd-test-a-ONS-7-1" {
+		t.Errorf("test-a's machine is %q", got)
+	}
+	if got := mb.Spec().Labels["ortus-nova.worker"]; got != "test-b/taichi" {
+		t.Errorf("test-b's machine is labelled %q", got)
+	}
+	stray, err := host.Create(context.Background(), machine.Spec{Name: a.d.MachineName("ONS-9", 1),
+		Labels: map[string]string{machine.LabelJob: "ONS-9", "worker-daemon.attempt": "1", "ortus-nova.worker": "test-a/taichi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.stop()
+	b.stop()
+	// test-b's daemon starts while test-a's runs its adopted job, as a
+	// deploy restarts one environment's daemon at a time.
+	a.startNewDaemon()
+	a.waitFor("test-a's stray to be deleted", 10*time.Second, stray.(*fakemachine.Machine).Deleted)
+	a.waitFor("test-a's job to resume", 20*time.Second, func() bool { return a.fake.Count("resume", "ONS-7", 1) == 1 })
+	b.startNewDaemon()
+	// A daemon that took the other's machine would end that job failed,
+	// its machine gone: each job ends once, succeeded, in its own machine.
+	for name, h := range map[string]*harness{"test-a": a, "test-b": b} {
+		h.waitFor(name+"'s report", 30*time.Second, func() bool { return h.fake.Count("report", "ONS-7", 1) > 0 })
+		if !strings.Contains(h.logs.String(), `msg="jobs left by the last start" adopted=1 not_adopted=0`) {
+			t.Errorf("%s's daemon did not adopt its own job alone:\n%s", name, h.logs.String())
+		}
+		reports := h.reports("ONS-7", 1)
+		if len(reports) != 1 || reports[0].Outcome != protocol.OutcomeSucceeded {
+			raw, _ := json.Marshal(reports)
+			t.Errorf("%s's reports %s, want one success: %s", name, raw, h.describe())
+		}
+		if n := h.fake.Streams("ONS-7", 1); n != 2 {
+			t.Errorf("%s's stdio streams %d, want the first and one after the restart", name, n)
+		}
+	}
+	if n := len(host.Machines()); n != 3 {
+		t.Errorf("machines created %d, want the two jobs' and the stray: %s", n, strings.Join(machineNames(host), " "))
+	}
+	if !strings.Contains(a.logs.String(), "deleted a machine this worker's daemon created and no job names") {
+		t.Errorf("test-a's daemon did not log the stray it deleted:\n%s", a.logs.String())
+	}
+	if strings.Contains(b.logs.String(), "deleted a machine this worker's daemon created and no job names") {
+		t.Errorf("test-b's daemon deleted a machine:\n%s", b.logs.String())
+	}
+}
+
+func machineNames(b *fakemachine.Backend) []string {
+	var out []string
+	for _, m := range b.Machines() {
+		out = append(out, m.Spec().Name)
+	}
+	return out
 }

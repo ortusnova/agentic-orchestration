@@ -320,11 +320,12 @@ func (j *job) spec(dir string) (machine.Spec, config.Image, error) {
 	if err != nil {
 		return machine.Spec{}, config.Image{}, fmt.Errorf("host folders: %w", err)
 	}
+	labelKey, labelValue := j.d.cfg.Label()
 	spec := machine.Spec{
-		Name: MachineName(j.id(), j.attempt()), Pack: pack, User: user,
+		Name: j.d.MachineName(j.id(), j.attempt()), Pack: pack, User: user,
 		CPUs: int(math.Ceil(r.CPU)), MemMiB: int(math.Ceil(r.MemGiB * 1024)), DiskGiB: int(math.Ceil(r.DiskGiB)),
 		Labels: map[string]string{machine.LabelJob: j.id(), "worker-daemon.attempt": strconv.Itoa(j.attempt()),
-			machine.LabelWorker: j.d.cfg.WorkerID},
+			labelKey: labelValue},
 		Share: filepath.Join(dir, "share"), Forwards: forwards(dir),
 		Nested: slices.Contains(r.Capabilities, CapabilityNested), Mounts: mounts,
 	}

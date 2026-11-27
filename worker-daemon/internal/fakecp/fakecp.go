@@ -524,6 +524,9 @@ func (f *Fake) checkIn(w http.ResponseWriter, id string, body []byte) {
 	if v, ok := raw["unmanaged"]; ok {
 		_ = json.Unmarshal(v, &d.Unmanaged)
 	}
+	if v, ok := raw["deploy_env"]; ok {
+		_ = json.Unmarshal(v, &d.DeployEnv)
+	}
 	if len(missing) > 0 || len(invalid) > 0 {
 		reply(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_checkin", "message": "bad declaration"},
 			"missing": append([]string{}, missing...), "invalid": append([]string{}, invalid...)})

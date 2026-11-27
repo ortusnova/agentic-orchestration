@@ -189,12 +189,15 @@ func TestSmolvmEgressEndToEnd(t *testing.T) {
 	s.workerID, id = e2eNames()
 	s.leaseMS = 30000
 	s.usage = []string{"sh", "-c", `echo '{"input_tokens":7,"output_tokens":2}'`}
+	var h *harness
 	t.Cleanup(func() {
 		// The daemon deletes the machine; this deletes it by name if a
 		// failed run left it.
-		_ = exec.Command(bin, "machine", "delete", "-f", "--name", daemon.MachineName(id, 1)).Run() // #nosec G204 -- argv, no shell
+		if h != nil {
+			_ = exec.Command(bin, "machine", "delete", "-f", "--name", h.d.MachineName(id, 1)).Run() // #nosec G204 -- argv, no shell
+		}
 	})
-	h := newHarness(t, s)
+	h = newHarness(t, s)
 	requires := protocol.Requires{CPU: 2, MemGiB: 4, DiskGiB: 10}
 	if nested != "" {
 		requires.Capabilities = []string{daemon.CapabilityNested}
