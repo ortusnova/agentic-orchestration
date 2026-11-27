@@ -71,6 +71,10 @@ type Declaration struct {
 	Used Free `json:"used"`
 	// Unmanaged lists the machines on this host that no Sortie started.
 	Unmanaged []Unmanaged `json:"unmanaged"`
+	// DeployEnv is the environment the worker serves; a control plane
+	// whose workflow names another refuses the check-in. Omitted when the
+	// worker names none.
+	DeployEnv string `json:"deploy_env,omitempty"`
 }
 
 // Unmanaged is a machine on the worker that no Sortie started: neither

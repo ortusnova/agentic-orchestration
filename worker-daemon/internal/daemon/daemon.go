@@ -225,7 +225,7 @@ func (d *Daemon) Declaration(s hostinfo.Snapshot) protocol.Declaration {
 	return protocol.Declaration{OS: s.OS, Arch: s.Arch, KVM: s.KVM, Nested: s.Nested && (d.cfg.Smolvm.Nested == nil || *d.cfg.Smolvm.Nested), Backends: backends,
 		RunSlots: d.runSlots(s), Running: running, Free: d.Free(s),
 		Used:      protocol.Free{CPU: r.CPU, MemGiB: r.MemGiB, DiskGiB: r.DiskGiB},
-		Unmanaged: d.unmanagedSeen()}
+		Unmanaged: d.unmanagedSeen(), DeployEnv: d.cfg.DeployEnv}
 }
 
 func (d *Daemon) checkIn(ctx context.Context) error {
@@ -450,7 +450,8 @@ func safeName(s string) string {
 	return string(b)
 }
 
-// MachineName is the name of a job attempt's machine.
-func MachineName(id string, attempt int) string {
-	return "wd-" + safeName(id) + "-" + fmt.Sprint(attempt)
+// MachineName is the name of a job attempt's machine: the configured
+// machine prefix, the job and the attempt.
+func (d *Daemon) MachineName(id string, attempt int) string {
+	return d.cfg.MachinePrefix + safeName(id) + "-" + fmt.Sprint(attempt)
 }

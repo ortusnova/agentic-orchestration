@@ -218,7 +218,7 @@ func TestAnAdoptedMachineKeepsItsRefusals(t *testing.T) {
 	h.waitFor("the agent to hold its turn", 20*time.Second, func() bool {
 		return strings.Contains(h.fake.StdioOutput("ONS-7", 1), "holding")
 	})
-	h.backend.Refuse(daemon.MachineName("ONS-7", 1), "pastebin.com")
+	h.backend.Refuse(h.d.MachineName("ONS-7", 1), "pastebin.com")
 	h.stop()
 	h.fake.NoResume = true
 	h.startNewDaemon()
@@ -236,7 +236,7 @@ func TestAnAdoptedMachineKeepsItsRefusals(t *testing.T) {
 // daemon's state directory after its machine is deleted.
 func TestRefusalsAreKeptWithTheRun(t *testing.T) {
 	h := newHarness(t, defaults())
-	h.backend.Refuse(daemon.MachineName("ONS-30", 1), "pastebin.com")
+	h.backend.Refuse(h.d.MachineName("ONS-30", 1), "pastebin.com")
 	h.offerJob("ONS-30", 1, nil, func(j *fakecp.Job) { j.Egress = scenarioEgress() })
 	h.waitFor("the report", 20*time.Second, func() bool { return h.fake.Count("report", "ONS-30", 1) > 0 })
 	if !h.machine("ONS-30", 1).Deleted() {

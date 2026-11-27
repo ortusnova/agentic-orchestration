@@ -94,6 +94,9 @@ the start instead of being ignored.
 | `smolvm.images` | no | | Maps an image reference to what this host gives each of its jobs beyond the pack. See [Host inputs of an image](#host-inputs-of-an-image). |
 | `usage_commands` | no | | Maps an agent kind, the base name of `run.command`, to the command run in the machine after each run to read its token usage; `*` covers every other kind. See [Token usage](#token-usage). |
 | `log_level` | no | `info` | `debug`, `info`, `warn` or `error`. Logs go to standard error and never carry a token. |
+| `deploy_env` | no | | The environment this worker serves, a DNS label such as `dev`, declared at every check-in. A control plane whose workflow names another environment refuses the check-in. Unset, the daemon declares none. |
+| `machine_prefix` | no | `wd-` | Starts the name of every machine the daemon creates for a job: `<machine_prefix><job>-<attempt>`. |
+| `machine_label` | no | `worker-daemon.worker=<worker_id>` | The `key=value` label on every machine the daemon creates for a job. At start the daemon adopts or deletes only machines that carry it, so the daemons of two environments on one host leave each other's machines alone. |
 
 ### Reserve, floor and the smallest job
 
@@ -196,7 +199,7 @@ carries `X-Sortie-Worker-Protocol: 1`. For an offer whose `run.backend` is
    directory: **egress**, an HTTP proxy, and **mcp**, the tool server.
 2. It fetches the workspace seed from `{bundles}{run.seed_path}`, which
    is `/jobs/{job}/attempts/{attempt}/seed`.
-3. It creates the machine `wd-<job>-<attempt>` from the image's pack, with
+3. It creates the machine `<machine_prefix><job>-<attempt>` (`wd-<job>-<attempt>` by default) from the image's pack, with
    the job's CPUs, memory and disk, the job's `share` directory at
    `/run/worker`, the two sockets mounted with `--mount-socket`, and the
    image's host inputs, if this host configures any. It gives no
@@ -286,10 +289,11 @@ left, and logs `jobs left by the last start` with how many it
   Sortie that cannot resume (`404`), a job whose machine is gone, as
   after a host reboot, and a job whose agent had not started yet are
   reported `failed`, their machines deleted.
-- A machine labelled `worker-daemon.worker=<worker_id>` and
-  `worker-daemon.job` that no job directory names, as when `state_dir`
-  was removed, is deleted. A machine of another worker or of no daemon
-  is left alone.
+- A machine labelled with `machine_label` (`worker-daemon.worker=<worker_id>`
+  by default) and `worker-daemon.job`, and named with `machine_prefix`,
+  that no job directory names, as when `state_dir` was removed, is
+  deleted. A machine of another worker, of another environment's daemon
+  or of no daemon is left alone.
 
 The machines must outlive the daemon's process: under systemd, run it
 with `KillMode=process` (see [Run as a service](#run-as-a-service)), or

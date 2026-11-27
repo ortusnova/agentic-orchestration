@@ -93,7 +93,7 @@ func (d *Daemon) adopt(ctx context.Context) {
 			_ = os.RemoveAll(dir)
 			continue
 		}
-		known[MachineName(rec.Offer.Job.ID, rec.Offer.Job.Attempt)] = true
+		known[d.MachineName(rec.Offer.Job.ID, rec.Offer.Job.Attempt)] = true
 		if d.adoptJob(ctx, dir, rec) {
 			adopted++
 		} else {
@@ -223,8 +223,9 @@ func (j *job) resume() error {
 }
 
 // deleteStrays deletes each machine this worker's daemon created that
-// no job record names, as when its state directory was removed. A
-// machine of another worker or of no daemon is left alone.
+// no job record names, as when its state directory was removed: one
+// with its machine label and its machine name. A machine of another
+// worker, of another environment's daemon or of no daemon is left alone.
 func (d *Daemon) deleteStrays(ctx context.Context, known map[string]bool) {
 	lister, ok := d.backend.(machine.Lister)
 	if !ok {
@@ -239,13 +240,14 @@ func (d *Daemon) deleteStrays(ctx context.Context, known map[string]bool) {
 		d.log.Warn("listing the host's machines failed", slog.String("error", err.Error()))
 		return
 	}
+	labelKey, labelValue := d.cfg.Label()
 	for _, l := range listed {
 		job := l.Labels[machine.LabelJob]
 		attempt, aerr := strconv.Atoi(l.Labels["worker-daemon.attempt"])
-		if job == "" || l.Labels[machine.LabelWorker] != d.cfg.WorkerID || known[l.Name] {
+		if v, ok := l.Labels[labelKey]; job == "" || !ok || v != labelValue || known[l.Name] {
 			continue
 		}
-		if aerr == nil && l.Name != MachineName(job, attempt) {
+		if aerr == nil && l.Name != d.MachineName(job, attempt) {
 			continue
 		}
 		m, err := reopener.Reopen(ctx, machine.Spec{Name: l.Name})

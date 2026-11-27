@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/machine"
 	"github.com/ortusnova/agentic-orchestration/worker-daemon/internal/protocol"
 )
 
@@ -59,6 +60,21 @@ type Config struct {
 
 	// LogLevel is debug, info, warn or error.
 	LogLevel string `json:"log_level"`
+
+	// DeployEnv is the environment this worker serves, declared at each
+	// check-in, so that the control plane of another environment refuses
+	// it. Empty declares none.
+	DeployEnv string `json:"deploy_env"`
+
+	// MachinePrefix starts the name of every machine the daemon creates
+	// for a job. Default: [DefaultMachinePrefix].
+	MachinePrefix string `json:"machine_prefix"`
+
+	// MachineLabel, key=value, is on every machine the daemon creates for
+	// a job; at start it adopts or deletes only machines that carry it,
+	// so the daemons of two environments on one host leave each other's
+	// machines alone. Default: [machine.LabelWorker]=<worker_id>.
+	MachineLabel string `json:"machine_label"`
 }
 
 // ControlPlane is where and how the daemon dials the control plane.
@@ -169,9 +185,24 @@ type Mount struct {
 // Defaults.
 const (
 	DefaultLogLevel = "info"
+	// DefaultMachinePrefix starts a job's machine name when the
+	// configuration names no prefix.
+	DefaultMachinePrefix = "wd-"
 )
 
-var workerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var (
+	workerIDPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	deployEnvPattern     = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	machinePrefixPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	labelKeyPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	labelValuePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+)
+
+// Label returns the machine label's key and value.
+func (c Config) Label() (key, value string) {
+	key, value, _ = strings.Cut(c.MachineLabel, "=")
+	return key, value
+}
 
 // Load reads and validates the file at path.
 func Load(path string) (Config, error) {
@@ -274,6 +305,19 @@ func (c *Config) normalize() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fieldError("log_level", "must be debug, info, warn or error")
+	}
+	if c.DeployEnv != "" && !deployEnvPattern.MatchString(c.DeployEnv) {
+		return fieldError("deploy_env", fmt.Sprintf("must be a DNS label ([a-z][a-z0-9-]*), got %q", c.DeployEnv))
+	}
+	if c.MachinePrefix == "" {
+		c.MachinePrefix = DefaultMachinePrefix
+	} else if !machinePrefixPattern.MatchString(c.MachinePrefix) {
+		return fieldError("machine_prefix", fmt.Sprintf("must be letters, digits, '.', '_' or '-', got %q", c.MachinePrefix))
+	}
+	if c.MachineLabel == "" {
+		c.MachineLabel = machine.LabelWorker + "=" + c.WorkerID
+	} else if k, v, ok := strings.Cut(c.MachineLabel, "="); !ok || !labelKeyPattern.MatchString(k) || !labelValuePattern.MatchString(v) {
+		return fieldError("machine_label", fmt.Sprintf("must be key=value, the key lower-case letters, digits, '.', '_' or '-', the value also '/', got %q", c.MachineLabel))
 	}
 	return nil
 }

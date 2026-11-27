@@ -18,6 +18,23 @@ func TestParseDefaults(t *testing.T) {
 		c.ReserveMemGiB() != 16 || c.FloorDiskGiB() != 50 {
 		t.Errorf("defaults: %+v", c)
 	}
+	// With no deploy_env, machine_prefix or machine_label, the daemon
+	// declares no environment and names and labels machines as before.
+	if k, v := c.Label(); c.DeployEnv != "" || c.MachinePrefix != "wd-" || k != "worker-daemon.worker" || v != "taichi" {
+		t.Errorf("environment defaults: deploy_env %q, machine_prefix %q, machine_label %s=%s", c.DeployEnv, c.MachinePrefix, k, v)
+	}
+}
+
+func TestParseEnvironment(t *testing.T) {
+	doc := strings.Replace(minimal, `"worker_id":"taichi"`,
+		`"worker_id":"taichi","deploy_env":"test-a","machine_prefix":"wd-test-a-","machine_label":"ortus-nova.worker=test-a/taichi"`, 1)
+	c, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, v := c.Label(); c.DeployEnv != "test-a" || c.MachinePrefix != "wd-test-a-" || k != "ortus-nova.worker" || v != "test-a/taichi" {
+		t.Errorf("deploy_env %q, machine_prefix %q, machine_label %s=%s", c.DeployEnv, c.MachinePrefix, k, v)
+	}
 }
 
 // Scenario: run_slots follows the host. Without run_slots, a worker
@@ -70,6 +87,10 @@ func TestParseRefuses(t *testing.T) {
 		"negative":       {`{"worker_id":"w","control_plane":{"url":"http://h"},"reserve":{"mem_gib":-1},"floor":{"disk_gib":1},"state_dir":"/s"}`, "reserve"},
 		"unknown field":  {`{"worker_id":"w","model_key":"x"}`, "model_key"},
 		"bad worker id":  {`{"worker_id":"a b"}`, "worker_id"},
+		"bad deploy_env": {strings.Replace(minimal, `"worker_id":"taichi"`, `"worker_id":"taichi","deploy_env":"Dev_1"`, 1), "deploy_env"},
+		"bad prefix":     {strings.Replace(minimal, `"worker_id":"taichi"`, `"worker_id":"taichi","machine_prefix":"wd dev"`, 1), "machine_prefix"},
+		"label, no '='":  {strings.Replace(minimal, `"worker_id":"taichi"`, `"worker_id":"taichi","machine_label":"ortus-nova.worker"`, 1), "machine_label"},
+		"label, empty":   {strings.Replace(minimal, `"worker_id":"taichi"`, `"worker_id":"taichi","machine_label":"ortus-nova.worker="`, 1), "machine_label"},
 		"relative state": {`{"worker_id":"w","control_plane":{"url":"http://h"},"reserve":{"mem_gib":1},"floor":{"disk_gib":1},"state_dir":"s"}`, "state_dir"},
 	} {
 		t.Run(name, func(t *testing.T) {
