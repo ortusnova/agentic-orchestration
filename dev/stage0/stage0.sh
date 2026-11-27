@@ -243,6 +243,8 @@ for cmd in "${needed[@]}"; do
 done
 # shellcheck source=smolvm-version.sh
 . "$KIT/smolvm-version.sh"
+# shellcheck source=local-name.sh
+. "$KIT/local-name.sh"
 # shellcheck source=huly-restart-policy.sh
 . "$KIT/huly-restart-policy.sh"
 smolvm_version_ok > /dev/null || die "the kit needs smolvm $SMOLVM_MIN or later; found: $(smolvm --version 2>&1 | head -1)"
@@ -576,6 +578,11 @@ restart_worker
 systemctl --user restart ortus-stage0-workbench.service
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$STAGE0_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ortus-stage0-workbench"
+# Its local name, for homelab's workstation-setup.sh (local-name.sh).
+workbench_name=${STAGE0_WORKBENCH_LOCAL_NAME:-workbench.homelab.dev}
+if [[ $(write_local_name "$HOME/$STAGE0_LOCAL_NAMES_REL" "$workbench_name" "$STAGE0_WORKBENCH_PORT") == changed ]]; then
+  say "Declared $workbench_name -> 127.0.0.1:$STAGE0_WORKBENCH_PORT in ~/$STAGE0_LOCAL_NAMES_REL; run \`sudo ./workstation-setup.sh\` in homelab to name it"
+fi
 for unit in ortus-stage0-nono ortus-stage0-nono-live-proof ortus-stage0-egress-gate ortus-stage0-pomerium ortus-stage0-worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
