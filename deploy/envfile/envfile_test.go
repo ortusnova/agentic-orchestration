@@ -118,6 +118,19 @@ func TestValues(t *testing.T) {
 	}
 }
 
+func TestDestinations(t *testing.T) {
+	body := strings.Replace(valid, "beta:  {runs: [worker]}", "beta:  {runs: [worker], ssh: brian@beta.lan}", 1)
+	dir := throwaway(t, map[string]string{"test-a.yml": body})
+	if v := values(t, filepath.Join(dir, "test-a.yml")); v["ORTUS_NOVA_ENV_HOST_SSH"] != "alpha=alpha beta=brian@beta.lan" {
+		t.Errorf("destinations: %q", v["ORTUS_NOVA_ENV_HOST_SSH"])
+	}
+	bad := strings.Replace(valid, "beta:  {runs: [worker]}", "beta:  {runs: [worker], ssh: 'beta; rm -rf /'}", 1)
+	dir = throwaway(t, map[string]string{"test-a.yml": bad})
+	if _, err := Load(filepath.Join(dir, "test-a.yml")); err == nil || !strings.Contains(err.Error(), "/hosts/beta/ssh") {
+		t.Errorf("a destination that is not one: %v", err)
+	}
+}
+
 func TestUndeclaredHost(t *testing.T) {
 	dir := throwaway(t, map[string]string{"test-a.yml": valid})
 	err := run([]string{"values", "-host", "mini", filepath.Join(dir, "test-a.yml")}, &bytes.Buffer{})

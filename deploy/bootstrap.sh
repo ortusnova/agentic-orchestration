@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# One host's step of a push (spec store deploy-environments, design D3).
+# deploy.sh <env> on the control host runs it there, and over
+# `ssh <destination> bash -s` on each other host, from the kit of the target
+# commit; it needs nothing of the host's own kit.
+#
+#   bootstrap.sh ENV COMMIT ORIGIN STAGE0_NAMES [ARG...]
+#
+# STAGE0_NAMES is the environment file's stage0_names (true or false), which
+# the control host's loader read.
+#
+# It fetches exactly COMMIT from ORIGIN into the host's live kit, a detached
+# checkout in the environment's state directory (made at the first deploy;
+# a host still under its stage-0 names keeps its stage-0 one when the
+# environment holds the stage-0 installs, D6), checks
+# that the kit holds COMMIT, and runs its `deploy/deploy.sh ENV --this-host
+# --commit COMMIT ARG...`. A failed deploy goes back to the commit the kit
+# ran and runs that commit's deploy again, so what the failed run changed is
+# the earlier commit's, and records the failure in the host's deploy state.
+# It exits non-zero when the deploy at COMMIT failed. Only standard tools:
+# bash, git, sed.
+set -euo pipefail
+# Over ssh the script arrives on standard input: the whole of main is read
+# before it runs, and nothing it starts reads the rest.
+main() {
+  [[ $# -ge 4 ]] || { echo "usage: bootstrap.sh ENV COMMIT ORIGIN STAGE0_NAMES [ARG...]" >&2; exit 2; }
+  env=$1 commit=$2 origin=$3 stage0_names=$4
+  shift 4
+  say() { echo "bootstrap: $*" >&2; }
+  [[ $env =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { say "'$env' is not an environment name"; exit 2; }
+  [[ $commit =~ ^[0-9a-f]{40}$ ]] || { say "'$commit' is not a full commit id"; exit 2; }
+
+  # The state directory the host's names give: the environment's, unless
+  # the host is still under its stage-0 names. It runs before the host has
+  # the kit, so it cannot ask names.sh; env_names gives the same
+  # (test-push.sh).
+  root=$HOME/.local/share/ortus-nova
+  home=$root/$env
+  [[ $stage0_names == true && ! -e $root/$env/host.env && -e $root/stage0/stage0.env ]] && home=$root/stage0
+  kit=$home/kit
+  mkdir -p "$home"
+  if [[ ! -e $kit/.git ]]; then
+    say "making the live kit $kit from $origin"
+    git clone -q --no-checkout "$origin" "$kit"
+  fi
+  old=$(git -C "$kit" rev-parse -q --verify HEAD 2> /dev/null || true)
+  git -C "$kit" fetch -q "$origin" "$commit" || { say "could not fetch $commit from $origin"; exit 1; }
+  git -C "$kit" checkout -q --force --detach "$commit"
+  [[ $(git -C "$kit" rev-parse HEAD) == "$commit" ]] || { say "the live kit does not hold $commit"; exit 1; }
+  say "$(hostname -s): deploying $env at ${commit:0:12} (was ${old:0:12})"
+
+  log=$home/deploy.err
+  rc=0
+  "$kit/deploy/deploy.sh" "$env" --this-host --commit "$commit" "$@" 2> >(tee "$log" >&2) || rc=$?
+  wait
+  (( rc == 0 )) && exit 0
+
+  why=$(sed 's/\x1b\[[0-9;]*m//g' "$log" 2> /dev/null | grep -v '^[[:space:]]*$' | tail -n 1 || true)
+  error="deploy.sh failed at ${commit:0:12}: $why"
+  # The deploy state, with the target commit's functions, before the kit
+  # goes back.
+  states=$(mktemp -d)
+  cp "$kit/deploy/names.sh" "$kit/deploy/deploy-state.sh" "$states/"
+  if [[ -n $old && $old != "$commit" ]]; then
+    say "back on ${old:0:12}, and its deploy again, to undo what ${commit:0:12} left"
+    git -C "$kit" checkout -q --force --detach "$old"
+    back=0
+    if grep -q -- '--this-host' "$kit/deploy/deploy.sh" 2> /dev/null; then
+      "$kit/deploy/deploy.sh" "$env" --this-host --commit "$old" > /dev/null 2> "$log.back" || back=$?
+    elif [[ -x $kit/deploy/deploy.sh ]]; then
+      ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$kit/deploy/deploy.sh" "$env" > /dev/null 2> "$log.back" || back=$?
+    else
+      STAGE0_HOME=$home "$kit/dev/stage0/stage0.sh" > /dev/null 2> "$log.back" || back=$?
+    fi
+    (( back == 0 )) || error+="; its deploy on ${old:0:12} failed too: $(sed 's/\x1b\[[0-9;]*m//g' "$log.back" | grep -v '^[[:space:]]*$' | tail -n 1)"
+  fi
+  (
+    # shellcheck source=names.sh
+    . "$states/names.sh"
+    export ORTUS_NOVA_HOME=$home
+    env_names "$env"
+    # shellcheck source=deploy-state.sh
+    . "$states/deploy-state.sh"
+    deploy_state_write failed "$(git -C "$kit" rev-parse HEAD)" "$commit" "$error"
+  )
+  rm -rf "$states"
+  # shellcheck disable=SC2031 # error is this function's; the subshell only reads it
+  say "$error"
+  exit 1
+}
+main "$@" < /dev/null

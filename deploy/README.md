@@ -17,14 +17,41 @@ spelled.
 
 `dev` is the one environment now (`environments/dev.yml`): p1 runs control
 and a worker, taichi a worker. Both are still installed under the stage-0
-names (`ortus-nova-dev-*` units, `~/.local/share/ortus-nova/dev/` with
-`host.env`, `~/.config/ortus-nova/`), and keep them until their
+names (`ortus-stage0-*` units, `~/.local/share/ortus-nova/stage0/` with
+`stage0.env`, `~/.config/ortus-nova/`), and keep them until their
 migration: `dev.yml` sets `stage0_names: true`, and the kit deploys such a
 host under those names through the same code path, saying so on every run.
-Read `ortus-nova-dev-<part>` below as `ortus-nova-dev-<part>` on them. The old
-paths `dev/stage0/stage0.sh` and `dev/stage0/deploy.sh` run
-`deploy/deploy.sh dev` and `deploy/follow.sh dev`, for the deploy units an
-earlier kit installed.
+Read `ortus-nova-dev-<part>` below as `ortus-stage0-<part>` on them.
+
+## Deploying (the push)
+
+No host follows `main` by itself. A person deploys the environment from
+the control host (design D3):
+
+```sh
+deploy/deploy.sh dev                   # deploy this checkout's commit to every host of dev
+deploy/deploy.sh dev --commit SHA      # deploy SHA
+deploy/deploy.sh dev --check           # each host's running commit and status beside the target
+deploy/deploy.sh dev --update-sortie   # also move the control host's Sortie checkout to origin/plan-bench first
+```
+
+`deploy.sh dev` runs on the control host only (`p1`; on another host it
+refuses, naming it). It refuses a commit no branch of `origin` holds, and a
+host whose SSH destination does not resolve. It deploys the control host
+first, then each other host by machine id, one at a time: each host's step
+is `bootstrap.sh`, run locally for the control host and over
+`ssh -o BatchMode=yes <destination> bash -s` for another (the destination
+is the host's `ssh` in `dev.yml`, else its name; the same SSH that
+`worker-host.sh add` uses, and no other credential). The step fetches
+exactly that commit from `origin` into the host's live kit and runs its
+`deploy/deploy.sh dev --this-host --commit <sha>`, which installs what the
+host's `runs` lists. The push stops at the first host that fails and prints
+every host's outcome (succeeded, failed with its error, not deployed); the
+failed host goes back to the commit it ran and runs that commit's deploy
+again. The control host keeps each other host's deploy state in
+`$ORTUS_NOVA_HOME/hosts/<host>/deploy-state.json`. A host that was off shows
+in `--check`, and the next `deploy.sh dev` catches it up. A deploy never
+drains (below).
 
 On the control host it runs the one Sortie, under plan control,
 which dispatches every repository under the `remote` kind, with the plan
@@ -44,7 +71,8 @@ deploy/deploy.sh dev --update-sortie  # also move the Sortie checkout to origin/
 deploy/test-environments.sh       # check deploy.sh <env> against throwaway environments: names, coexistence, refusals, the stage-0 names
 deploy/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 deploy/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
-deploy/test-follow.sh             # check what each kind of merge does to the live kit, with no drain, and the deploy state each host writes
+deploy/test-push.sh               # check the push: its order, its stop at a failure, --check, the refusals, a host under its stage-0 names
+deploy/test-dev-host-apply.sh     # check the dev-host apply, with no drain, and the deploy state it writes
 deploy/test-logs.sh               # check the log files' install, follower and rotation, with stubs
 deploy/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
 deploy/test-worker-restart.sh     # check that a test-only change under worker-daemon/ leaves the daemon running and a code change restarts it
@@ -82,7 +110,7 @@ The kit needs smolvm 1.32.4 or later (`SMOLVM_MIN` in `smolvm-version.sh`); `dep
 | Huly | `http://localhost:8087`, workspace `sortie`, project `ONS`, the huly-selfhost compose project in `HULY_COMPOSE_DIR` (`~/dev/huly-selfhost`); `podman-restart.service` brings it back after a reboot. huly-selfhost gives redpanda, its queue, no restart policy, so the kit installs `huly-compose.override.yml` beside its `compose.yml` as `compose.override.yml` (excluded from that checkout's git status), which every `compose up` merges, by `deploy.sh` or by hand. The override also starts the services that read the queue after redpanda: one started while it was down never creates its topics and runs broken. `deploy.sh` starts the stack whenever any of its containers is down (with redpanda down the front end still answers while every workspace call fails), restarts a queue service that started before redpanda, and restarts nginx when it started before a service it serves, as it keeps a recreated service's old address (`huly-restart-policy.sh`) |
 | Pack | `agent.smolmachine`, from `pack/`: Go, Node, opencode and Claude Code (`claude-agent-acp`); each worker builds its own |
 | p1's worker | unit `ortus-nova-dev-worker`, `$ORTUS_NOVA_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$ORTUS_NOVA_HOME/worker.json` (rendered by `worker-config.sh`); it dials Pomerium at `ORTUS_NOVA_CP_PUBLIC_URL` with its own client certificate (`$ORTUS_NOVA_HOME/control-plane/workers/p1`), as every worker host does, and Pomerium names it `p1` |
-| Live kit | `$ORTUS_NOVA_HOME/kit`, the kit's own detached worktree of `origin/main`: `deploy.sh` runs from it, whichever checkout you start it from, and the units run it. `ortus-nova-dev-deploy.timer` moves it to each merge within a minute (`follow.sh`): a workbench change is rebuilt and the workbench restarted; a change to the rest of the kit, `worker-daemon/` included, runs `deploy.sh` again at once, and so does a merge to Sortie's `plan-bench` (`deploy.sh --update-sortie`; a Sortie checkout that is not behind `plan-bench` stays put). No change drains the host (see [A deploy never drains](#a-deploy-never-drains)); a failed build goes back to the running commit. One `deploy.sh` or deploy runs at a time (`$ORTUS_NOVA_HOME/deploy.lock`): a second `deploy.sh` waits, and the timer tries again a minute later. `ORTUS_NOVA_KIT_FROM_CHECKOUT=1 deploy/deploy.sh dev` runs your checkout instead, to try a branch, and stops the timer |
+| Live kit | `$ORTUS_NOVA_HOME/kit`, a detached checkout at the commit the last push chose: each host's step runs from it, and the units run it. No change drains the host (see [A deploy never drains](#a-deploy-never-drains)); a failed deploy goes back to the running commit. One step runs at a time on a host (`$ORTUS_NOVA_HOME/deploy.lock`), and one push of an environment (`push.lock` on the control host). `ORTUS_NOVA_KIT_FROM_CHECKOUT=1 deploy/deploy.sh dev --this-host` runs your checkout on this host instead, to try a branch |
 | Previews | unit `ortus-nova-dev-previews.timer` every minute, and one `ortus-nova-dev-preview@<identifier>` per ui story's pull request; see [Previews of ui stories](#previews-of-ui-stories) |
 | Live proofs | unit `ortus-nova-dev-live-proofs.timer` every minute (`run-live-proofs.sh`, `$ORTUS_NOVA_HOME/bin/live-proofs` built from `live-proofs/`), and the live-proof nono, unit `ortus-nova-dev-nono-live-proof`; see [Live proofs](#live-proofs) |
 | Spec store | `ORTUS_NOVA_STORE`; `ortus-nova-dev-store.timer` fast-forwards it to its upstream every minute (`store-sync.sh`), and leaves it alone, saying why in its journal, when that could lose work: tracked changes, local commits, a detached HEAD |
@@ -573,10 +601,8 @@ of the daemon ends no job either"). A credential `gh auth token` gives nono
 changes none of these: `systemctl --user restart ortus-nova-dev-nono` picks
 it up.
 
-- **Deploys.** `follow.sh` runs `deploy.sh` within the minute of a kit or
-  Sortie merge, whatever runs, on p1 and on a worker host alike.
-  `~/.local/state/ortus-nova/dev/logs/ortus-nova-dev-deploy.log` shows each one: the commit it
-  applies, then `running <commit>`, or why it went back.
+- **Deploys.** `deploy.sh dev` on the control host deploys every host at
+  once, whatever runs; its output shows each host's step and outcome.
 - **Host setup changes**, such as a smolvm bump. Run
   `deploy/dev-host-apply.sh` on the host instead of applying the change
   by hand: it runs the apply, then `deploy.sh` so that the pack and Sortie
@@ -587,7 +613,7 @@ it up.
 
 ### Each host's deploy state
 
-`follow.sh` and `dev-host-apply.sh` write the host's deploy state to
+Each host's step and `dev-host-apply.sh` write the host's deploy state to
 `$ORTUS_NOVA_HOME/deploy-state.json` (`deploy-state.sh`, design D7), the file
 Sortie's `internal/deploystate` reads: `status`, `commit` (the kit's commit
 that runs), `main` (the newest `origin/main` seen), `behind_since` (when
@@ -628,30 +654,23 @@ keeps it.
   error line of `deploy.sh`. The host runs the previous commit, so the
   state is behind `main` until another merge applies.
 
-Each minute's tick writes it again, so a commit left behind shows: Sortie's
-health check reads p1's file (`health.deploy_state` in `WORKFLOW.md`) and
-holds dispatch, as a question for a person, while the last deploy failed,
-while p1 has been behind `main` for 30 minutes, or once the file is an hour
-old. On p1, `follow.sh` then copies each worker host's file to
-`$ORTUS_NOVA_HOME/hosts/<name>/deploy-state.json`, over the SSH that
-`worker-host.sh add` uses (`ssh -o BatchMode=yes <host> cat
-.local/share/ortus-nova/dev/deploy-state.json`; the destination is in
-`$ORTUS_NOVA_HOME/deploy-hosts/<name>`, written by `worker-host.sh add`, or the
-worker's name for a worker host listed before). A host it cannot reach keeps
-its last copy, and the journal says so. Nothing reads the copies since
+Sortie's health check reads p1's file (`health.deploy_state` in
+`WORKFLOW.md`) and holds dispatch, as a question for a person, while the
+last deploy failed, while p1 has been behind `main` for 30 minutes, or once
+the file is an hour old. The push keeps each other host's file in
+`$ORTUS_NOVA_HOME/hosts/<name>/deploy-state.json` on the control host, read
+over the host's SSH destination when its step ends (from its stage-0 home
+while it has its stage-0 names). Nothing reads the copies since
 merge-and-prove was removed (design D19): a story whose only unmet
 criteria are after-deploy live criteria (the review records them
 `live-proof` with the reason `after-deploy`) is not merged, and its pull
 request stays open (`supervisor.md`, rule 2).
 
-`test-follow.sh` checks what each kind of deploy writes (applied, failed,
-behind, a unit whose configuration changed, the apply) and p1's copy from a
-stubbed worker host; `test-review-gate.sh` checks the files with Sortie's
-own `deploystate`, and `WORKFLOW.md`'s deploy state with Sortie's loader.
-
-An earlier kit paused Sortie's dispatch while a change waited, and recorded
-it in `$ORTUS_NOVA_HOME/dispatch.paused`; `follow.sh` resumes such a pause once
-(`POST /api/v1/dispatch/resume`, with the control token) and forgets it.
+`test-push.sh` and `test-dev-host-apply.sh` check what each deploy writes
+(applied, failed, behind, a unit whose configuration changed, the apply)
+and the control host's copies; `test-review-gate.sh` checks the files with
+Sortie's own `deploystate`, and `WORKFLOW.md`'s deploy state with Sortie's
+loader.
 
 ## Credentials
 
@@ -784,10 +803,8 @@ has them (`retire-edge.sh`): `ortus-nova-dev-edge` and each
 host the edge served (`$ORTUS_NOVA_HOME/workers/<worker>.env` with its SSH
 destination) its certificate with `worker-host.sh add`, unless the worker
 list names it already; a host it cannot reach stops the run with the edge
-still up. On the worker host, the deploy timer's `deploy.sh` from the same
-merge waits for the files `add` copies, up to `ORTUS_NOVA_WORKER_CERT_WAIT`
-seconds (default 1800; a `deploy.sh` run by hand does not wait), then dials
-Pomerium. The edge's state (`edge.json`, `workers/`) stays, unread, so a
+still up. On the worker host, its step waits for the files `add` copies,
+up to `ORTUS_NOVA_WORKER_CERT_WAIT` seconds, then dials Pomerium. The edge's state (`edge.json`, `workers/`) stays, unread, so a
 revert to the edge finds its worker hosts again.
 
 ### Add a worker host
@@ -808,12 +825,10 @@ the host the certificate (`cp-worker.crt`), its key (`cp-worker.key`, mode
 CA (`cp-ca.crt`), the egress CA's certificate (`egress-ca.crt`; its
 machines trust nono's interception with it, and its key stays on p1) and
 Pomerium's URL (`control-plane-url`). It restarts Pomerium onto the new
-list; Sortie is not restarted. Then, on the host, `ORTUS_NOVA_PROFILE=worker
-deploy/deploy.sh dev` points its daemon at Pomerium with the certificate.
-Adding the same name again gives it a new certificate and drops the old one.
-`add` also records HOST in `$ORTUS_NOVA_HOME/deploy-hosts/<name>`: p1's deploy
-copies the host's deploy state over that SSH every minute
-([Each host's deploy state](#each-hosts-deploy-state)); `remove` drops both.
+list; Sortie is not restarted. Then the next `deploy/deploy.sh dev` on p1
+points the host's daemon at Pomerium with the certificate. Adding the same
+name again gives it a new certificate and drops the old one; `remove` also
+drops p1's copy of the host's deploy state.
 p1's own worker gets its certificate from `deploy.sh`, in
 `$ORTUS_NOVA_HOME/control-plane/workers/p1`.
 
@@ -961,7 +976,7 @@ deploy/deploy.sh dev            # later runs read it from host.env
 | Part | Where |
 | --- | --- |
 | Worker | unit `ortus-nova-dev-worker`, `$ORTUS_NOVA_HOME/bin/worker-daemon` built from `worker-daemon/`, configured by `$ORTUS_NOVA_HOME/worker.json` (`worker-config.sh`), state in `$ORTUS_NOVA_HOME/worker`. It dials p1's Pomerium at `control-plane-url` with its client certificate (`cp-worker.crt`, `cp-worker.key`, `cp-ca.crt` in `~/.config/ortus-nova`, from `worker-host.sh add`), and Pomerium names it by that certificate |
-| Live kit | as on p1, `$ORTUS_NOVA_HOME/kit` follows `origin/main` (`ortus-nova-dev-deploy.timer`); a change to the kit runs `deploy.sh` (the worker profile) at once, which restarts the worker daemon only when what it runs changed. A worker host builds no Sortie, follows no `plan-bench` merge and asks no Sortie to pause or resume, whatever Sortie or Huly settings its `host.env` kept from the retired homelab profile; nothing on it reads them |
+| Live kit | as on p1, `$ORTUS_NOVA_HOME/kit`, at the commit of the last push; its step restarts the worker daemon only when what it runs changed. A worker host builds no Sortie, follows no `plan-bench` merge and asks no Sortie to pause or resume, whatever Sortie or Huly settings its `host.env` kept from the retired homelab profile; nothing on it reads them |
 | Packs | `agent.smolmachine` from `pack/`, as on p1, for sortie and agentic-orchestration jobs; on a host that offers nested virtualization, `$ORTUS_NOVA_HOME/packs/live-proof-<hash>.smolmachine`, the pack of the `nested` live-proof profile ("Live proofs"); and, with homelab's dev host, `$ORTUS_NOVA_HOME/packs/homelab-<hash>.smolmachine` (below) |
 | Egress CA | `~/.config/ortus-nova/egress-ca.crt`, from `worker-host.sh add`. Each machine's setup puts it in the guest's trust store and `NODE_EXTRA_CA_CERTS`, so nono's interception of the credential hosts is trusted |
 | Previews | nothing of its own: a review job on taichi opens a ui story's preview at the commented `http://<identifier>.preview.<Pomerium's host>/` through its machine's proxy, on the egress route to p1's Pomerium with taichi's certificate and the job's token, as a job on p1's worker does ([Previews of ui stories](#previews-of-ui-stories)); no preview port on p1 is open to taichi |
@@ -1001,7 +1016,7 @@ evidence is no longer needed.
 ### From the homelab profile
 
 A host on the retired homelab profile keeps its Sortie until a person moves
-it: `deploy.sh`, the deploy timer's too, refuses the homelab profile and
+it: `deploy.sh` refuses the homelab profile and
 says how. Once p1 runs this kit's `main` (its Sortie lists homelab open to
 dispatch, and p1 has closed the Huly tunnel taichi's Sortie polled through,
 `ortus-nova-dev-huly-tunnel@taichi`, so that Sortie dispatches nothing more)
@@ -1032,7 +1047,7 @@ run it again. The homelab Sortie's database and workspaces stay in
 and revoke the tokens.
 
 To remove a worker host: on the host, `systemctl --user disable --now
-ortus-nova-dev-worker ortus-nova-dev-deploy.timer ortus-nova-dev-logs
+ortus-nova-dev-worker ortus-nova-dev-logs
 ortus-nova-dev-logs-rotate.timer`, then
 `git -C ~/dev/homelab worktree remove ~/.local/share/ortus-nova/dev/homelab`
 and `rm -rf ~/.local/share/ortus-nova/dev`. On p1:
@@ -1069,7 +1084,7 @@ and the size cap (`logs-rotate.sh`). To remove only the log files: `systemctl --
 ortus-nova-dev-logs ortus-nova-dev-logs-rotate.timer`, `rm
 ~/.config/systemd/user/ortus-nova-dev-logs{.service,-rotate.service,-rotate.timer}`,
 `systemctl --user daemon-reload`, and `rm -rf ~/.local/state/ortus-nova/dev/logs`;
-the next `deploy.sh`, which the deploy timer runs, installs them again.
+the next push installs them again.
 `test-logs.sh` checks the install, the follower against a stubbed
 `journalctl` and the rotation.
 

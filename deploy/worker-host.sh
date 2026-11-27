@@ -81,8 +81,6 @@ case $cmd in
     copy "$ORTUS_NOVA_HOME/egress-ca/ca.crt" egress-ca.crt 644
     copy <(printf '%s\n' "$ORTUS_NOVA_CP_PUBLIC_URL") control-plane-url 644
     rm -f "$dir/worker.key"
-    # p1 copies its deploy state over the same SSH (deploy-state.sh).
-    deploy_host_add "$name" "$host"
     apply
     echo "worker $name: $host holds its certificate (~/$ORTUS_NOVA_WORKER_HOST_CONFIG); on $host, run deploy/deploy.sh $ENV_NAME to dial $ORTUS_NOVA_CP_PUBLIC_URL"
     ;;
@@ -95,7 +93,7 @@ case $cmd in
     cpctl worker revoke "$name" > /dev/null || die "no worker $name"
     # A token the stage-1 edge's add minted for its notifications.
     rm -f "$ORTUS_NOVA_HOME/notify-tokens/$name.token"
-    deploy_host_remove "$name"
+    rm -rf "${ORTUS_NOVA_HOME:?}/hosts/$name"
     apply
     echo "revoked worker $name: Pomerium refuses its certificate on every route"
     ;;

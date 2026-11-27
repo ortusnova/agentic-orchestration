@@ -3,10 +3,10 @@
 # Checks deploy.sh <env> against throwaway environment files (spec store
 # deploy-environments, design D1-D4, D6, D8), each run with a throwaway
 # HOME and systemctl, smolvm, curl, go, hostname and getent stubbed: what a
-# worker host installs and under which names, that two environments on one
-# host share nothing, the refusals, that no script branches on an
+# worker host's step installs and under which names, that two environments
+# on one host share nothing, the refusals, that no script branches on an
 # environment's name, and that a host under its stage-0 names keeps them,
-# through the old path, as dev.
+# as dev.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -60,12 +60,14 @@ worker_host() {
   for f in egress-ca.crt cp-worker.crt cp-worker.key cp-ca.crt; do echo "$f" > "$d/$f"; done
   echo "https://control.example:$2" > "$d/control-plane-url"
 }
-# deploy HOME ENV [ARG...]: deploy.sh ENV on this host, from this checkout.
+# deploy HOME ENV [ARG...]: this host's step of ENV, from this checkout.
 deploy() {
   local home=$1
   shift
   rc=0
-  HOME=$home ORTUS_NOVA_KIT_FROM_CHECKOUT=1 ORTUS_NOVA_HOST_ROOT=$tmp/nohost "$KIT/deploy.sh" "$@" > "$home/out" 2>&1 || rc=$?
+  local env=$1
+  shift
+  HOME=$home ORTUS_NOVA_KIT_FROM_CHECKOUT=1 ORTUS_NOVA_HOST_ROOT=$tmp/nohost "$KIT/deploy.sh" "$env" --this-host "$@" > "$home/out" 2>&1 || rc=$?
 }
 units() { (cd "$1/.config/systemd/user" 2> /dev/null && ls) | tr '\n' ' '; }
 
@@ -174,7 +176,7 @@ found=$(names_compared "$KIT")
 mkdir -p "$tmp/branch"; printf 'if [[ $env == prod ]]; then :; fi\n' > "$tmp/branch/x.sh"
 [[ $(names_compared "$tmp/branch") == *"x.sh:1:"* ]] && ok "and the check finds one, naming the file and line" || fail "the check missed a branch"
 
-# --- The control host's copy of a worker's deploy state ----------------
+# --- The control host's copy of a worker's deploy state (push.sh) ------
 # From the worker's state directory under the environment's names, and
 # from its stage-0 one while it has no other, so a half-migrated
 # environment keeps its copies.
@@ -184,23 +186,22 @@ chmod +x "$tmp/env/bin/ssh"
 mkdir -p "$w/.local/share/ortus-nova/stage0" "$w/.local/share/ortus-nova/test-a"
 state() { printf '{\n  "status": "%s",\n  "updated_at": "2026-11-27T00:00:00Z"\n}\n' "$1"; }
 state from-stage0 > "$w/.local/share/ortus-nova/stage0/deploy-state.json"
-pulled=$(HOME=$tmp/c ORTUS_NOVA_HOME=$tmp/c/home; env_names test-a; . "$KIT/deploy-state.sh"
-  deploy_host_add taichi taichi; deploy_state_pull; deploy_state_field "$ORTUS_NOVA_HOME/hosts/taichi/deploy-state.json" status)
+keep() { (HOME=$tmp/c ORTUS_NOVA_HOME=$tmp/c/home THIS_HOST=control; env_names test-a; . "$KIT/deploy-state.sh"; . "$KIT/push.sh"
+  push_keep_state taichi > /dev/null; deploy_state_field "$ORTUS_NOVA_HOME/hosts/taichi/deploy-state.json" status); }
+pulled=$(keep)
 state from-test-a > "$w/.local/share/ortus-nova/test-a/deploy-state.json"
-pulled+=" $(HOME=$tmp/c ORTUS_NOVA_HOME=$tmp/c/home; env_names test-a; . "$KIT/deploy-state.sh"
-  deploy_state_pull; deploy_state_field "$ORTUS_NOVA_HOME/hosts/taichi/deploy-state.json" status)"
+pulled+=" $(keep)"
 [[ $pulled == "from-stage0 from-test-a" ]] && ok "the control host copies a worker's deploy state from its new home, else its stage-0 one" || fail "pulled: $pulled"
 rm -f "$tmp/env/bin/ssh"
 
 # --- names.sh is the only place a name is spelled ----------------------
 spelled=$(cd "$KIT" && grep -nE 'ortus-stage0-|ortus-nova-[a-z]|\.local/share/ortus-nova|\.local/state/ortus-nova|\.config/ortus-nova|stage0\.env|host\.env|stage0\.lock|deploy\.lock' ./*.sh ./*.py \
-  | grep -v '^./names.sh:\|^./test-\|^./testenv.sh:' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v 'ortus-nova-specs' || true)
+  | grep -v '^./names.sh:\|^./test-\|^./testenv.sh:\|^./bootstrap.sh:' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v 'ortus-nova-specs' || true)
 [[ -z $spelled ]] && ok "no script but names.sh spells an installed name" || fail "spelled outside names.sh: $spelled"
 
 # --- A host under its stage-0 names -------------------------------------
-# taichi's deploy unit runs its live kit's dev/stage0/deploy.sh; after the
-# move, that runs the shim, and the follower runs dev/stage0/stage0.sh, the
-# other shim: deploy.sh dev, from dev.yml, under the stage-0 names.
+# taichi is still installed under its stage-0 names: its step of a push of
+# dev, from dev.yml, deploys it under them.
 h=$tmp/taichi
 s0=$h/.local/share/ortus-nova/stage0
 mkdir -p "$s0" "$h/.config/systemd/user"
@@ -208,10 +209,10 @@ printf 'STAGE0_PROFILE=worker\nSTAGE0_KIT_ROOT=%s\nSTAGE0_WORKER_NAME=taichi\n' 
 worker_host "$h" 8443
 echo https://p1:8443 > "$h/.config/ortus-nova/control-plane-url"
 rc=0
-(export HOME=$h STAGE0_HOME=$s0 STAGE0_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 ORTUS_NOVA_HOST_ROOT=$tmp/nohost TESTENV_HOST=taichi
+(export HOME=$h ORTUS_NOVA_KIT_FROM_CHECKOUT=1 ORTUS_NOVA_HOST_ROOT=$tmp/nohost TESTENV_HOST=taichi
   unset ORTUS_NOVA_ENVIRONMENTS
-  "$ROOT/dev/stage0/stage0.sh") > "$h/out" 2>&1 || rc=$?
-(( rc == 0 )) && ok "the old path deploys taichi as dev" || fail "taichi: exit $rc, $(cat "$h/out")"
+  "$KIT/deploy.sh" dev --this-host) > "$h/out" 2>&1 || rc=$?
+(( rc == 0 )) && ok "taichi's step deploys it as dev" || fail "taichi: exit $rc, $(cat "$h/out")"
 [[ $(units "$h") == "ortus-stage0-logs-rotate.service ortus-stage0-logs-rotate.timer ortus-stage0-logs.service ortus-stage0-worker.service " ]] \
   && [[ ! -e $h/.local/share/ortus-nova/dev ]] \
   && ok "under its stage-0 units and state directory" || fail "taichi units: $(units "$h"), $(ls "$h/.local/share/ortus-nova")"
@@ -232,9 +233,9 @@ s0=$h/.local/share/ortus-nova/stage0
 mkdir -p "$s0"
 printf 'STAGE0_PROFILE=worker\nSTAGE0_KIT_ROOT=%s\n' "$ROOT" > "$s0/stage0.env"
 rc=0
-(export HOME=$h STAGE0_HOME=$s0 STAGE0_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 TESTENV_HOST=p1
+(export HOME=$h ORTUS_NOVA_KIT_FROM_CHECKOUT=1 TESTENV_HOST=p1
   unset ORTUS_NOVA_ENVIRONMENTS
-  "$ROOT/dev/stage0/stage0.sh") > "$tmp/p1.out" 2>&1 || rc=$?
+  "$KIT/deploy.sh" dev --this-host) > "$tmp/p1.out" 2>&1 || rc=$?
 (( rc != 0 )) && grep -q 'STAGE0_PROFILE=worker' "$tmp/p1.out" && grep -q 'control' "$tmp/p1.out" && [[ ! -e $h/.config/systemd ]] \
   && [[ $(ls -A "$s0") == stage0.env ]] && grep -qx 'STAGE0_PROFILE=worker' "$s0/stage0.env" \
   && ok "a stage-0 profile the environment file contradicts is refused, naming both, and no unit is written" || fail "p1: exit $rc, $(cat "$tmp/p1.out")"

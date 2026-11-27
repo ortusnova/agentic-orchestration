@@ -228,18 +228,18 @@ legacy=$tmp/fakehome/.local/share/ortus-nova/stage0
 mkdir -p "$legacy"
 printf 'STAGE0_PROFILE=homelab\nSTAGE0_KIT_ROOT=%s\n' "$KIT/.." > "$legacy/stage0.env"
 rc=0
-env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-b > "$tmp/out" 2>&1 || rc=$?
+env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-b --this-host > "$tmp/out" 2>&1 || rc=$?
 grep -qx 'STAGE0_PROFILE=homelab' "$legacy/stage0.env" && [[ -s $tmp/fakehome/.local/share/ortus-nova/test-b/host.env ]] \
   && ! grep -q 'stage-0 names' "$tmp/out" \
   && ok "an environment without stage0_names installs under its own names and leaves a stage-0 install alone" || fail "test-b: exit $rc, $(cat "$tmp/out")"
 sed -i 's/testhost=worker/x/; s/  testhost: {runs: \[worker\]}/  testhost: {runs: [control, worker]}/; s/  other: {runs: \[control, worker\]}/  other: {runs: [worker]}/' "$tmp/env/environments/test-a.yml"
 rc=0
-env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-a > "$tmp/out" 2>&1 || rc=$?
+env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-a --this-host > "$tmp/out" 2>&1 || rc=$?
 (( rc != 0 )) && grep -q 'homelab profile is retired' "$tmp/out" && grep -qx 'STAGE0_PROFILE=homelab' "$legacy/stage0.env" \
   && ok "deploy.sh refuses the homelab profile on a host the environment file says runs control, changing nothing" || fail "homelab profile: exit $rc, $(cat "$tmp/out")"
 testenv_file test-a 1 other=control+worker testhost=worker stage0_names:\ true
 rc=0
-env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-a > "$tmp/out" 2>&1 || rc=$?
+env -u ORTUS_NOVA_HOME HOME="$tmp/fakehome" ORTUS_NOVA_UNITS="$tmp/units" ORTUS_NOVA_LOCKED=1 ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$KIT/deploy.sh" test-a --this-host > "$tmp/out" 2>&1 || rc=$?
 grep -qx 'STAGE0_PROFILE=worker' "$legacy/stage0.env" && grep -q 'still has its stage-0 names' "$tmp/out" \
   && ok "a worker in the environment file moves the host to the worker profile, under its stage-0 names" \
   || fail "the move: exit $rc, $(cat "$tmp/out"), $(cat "$legacy/stage0.env")"

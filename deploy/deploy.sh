@@ -25,11 +25,15 @@
 #                      ORTUS_NOVA_PROFILE=worker, which stops its Sortie and
 #                      removes its unit.
 #
-#   deploy/deploy.sh                  set up or update, then (re)start the units
-#   deploy/deploy.sh --rebuild-pack   also rebuild the smolvm packs, which are
+#   deploy/deploy.sh ENV                  on the control host: deploy this checkout's
+#                                         commit to every host of ENV (push.sh)
+#   deploy/deploy.sh ENV --commit SHA     deploy SHA
+#   deploy/deploy.sh ENV --check          each host's commit and status beside the target
+#   deploy/deploy.sh ENV --this-host      one host's step, from its live kit (bootstrap.sh
+#                                         runs it); with --commit, refuses another commit
+#   ... --rebuild-pack                    also rebuild the smolvm packs, which are
 #                                         rebuilt by themselves when their inputs change
-#   deploy/deploy.sh --update-sortie  also move the Sortie checkout to origin/plan-bench
-#                                         (follow.sh does this once plan-bench moves)
+#   ... --update-sortie                   also move the Sortie checkout to origin/plan-bench
 #
 # Every step checks first, so a second run changes nothing but a restart.
 # Settings live in $ORTUS_NOVA_HOME/stage0.env, written on the first run (edit it,
@@ -48,18 +52,23 @@ KIT=$ROOT/deploy
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'deploy.sh: %s\n' "$*" >&2; exit 1; }
 secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
-usage() { echo "usage: $0 ENV [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
+usage() { echo "usage: $0 ENV [--commit COMMIT] [--check | --this-host] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
 [[ $# -gt 0 && $1 != -* ]] || usage
 ENV_NAME=$1
 shift
-REBUILD_PACK='' UPDATE_SORTIE=''
-for arg; do
-  case $arg in
-    --rebuild-pack) REBUILD_PACK=1 ;;
-    --update-sortie) UPDATE_SORTIE=1 ;;
+REBUILD_PACK='' UPDATE_SORTIE='' THIS_HOST_ONLY='' CHECK='' COMMIT='' PASS=()
+while (( $# )); do
+  case $1 in
+    --rebuild-pack) REBUILD_PACK=1 PASS+=("$1") ;;
+    --update-sortie) UPDATE_SORTIE=1 PASS+=("$1") ;;
+    --this-host) THIS_HOST_ONLY=1 ;;
+    --check) CHECK=1 ;;
+    --commit) [[ $# -gt 1 ]] || usage; COMMIT=$2; shift ;;
     *) usage ;;
   esac
+  shift
 done
+[[ -z $CHECK || -z $THIS_HOST_ONLY ]] || usage
 # shellcheck source=names.sh
 . "$KIT/names.sh"
 
@@ -77,8 +86,10 @@ fi
 THIS_HOST=$(hostname -s | tr '[:upper:]' '[:lower:]')
 values=$("$ENVFILE" values -host "$THIS_HOST" "$ENVIRONMENTS/$ENV_NAME.yml") || die "$ENVIRONMENTS/$ENV_NAME.yml: see above"
 eval "$values"
-for h in $ORTUS_NOVA_ENV_HOSTS; do
-  getent hosts "$h" > /dev/null || die "the host $h of environment $ENV_NAME ($ORTUS_NOVA_ENV_FILE) does not resolve on $THIS_HOST: a typo, or a retired host"
+for pair in $ORTUS_NOVA_ENV_HOST_SSH; do
+  dest=${pair#*=}
+  getent hosts "${dest#*@}" > /dev/null \
+    || die "the host ${pair%%=*} of environment $ENV_NAME ($ORTUS_NOVA_ENV_FILE) does not resolve on $THIS_HOST (${dest#*@}): a typo, or a retired host"
 done
 [[ " $ORTUS_NOVA_ENV_HOST_RUNS " == *" worker "* ]] \
   || die "$THIS_HOST runs control without worker in $ORTUS_NOVA_ENV_FILE: the kit runs a worker on its control host"
@@ -95,10 +106,28 @@ if [[ -n $ORTUS_NOVA_STAGE0 ]]; then
 fi
 [[ -n $ORTUS_NOVA_STAGE0 ]] \
   && say "This host still has its stage-0 names ($ORTUS_NOVA_HOME); deploy/deploy.sh $ENV_NAME --migrate-stage0 on the control host migrates it"
+# shellcheck source=deploy-state.sh
+. "$KIT/deploy-state.sh"
 
-# One run at a time: a second deploy.sh, or follow.sh moving the live kit,
-# waits for this one. follow.sh takes the lock itself and runs this under it
-# (ORTUS_NOVA_LOCKED=1); the lock goes with the exec below.
+# The control host deploys the environment (design D3): one commit, to
+# itself first and then to each other host, each by its own --this-host.
+if [[ -z $THIS_HOST_ONLY ]]; then
+  [[ " $ORTUS_NOVA_ENV_HOST_RUNS " == *" control "* ]] \
+    || die "$THIS_HOST does not run control in environment $ENV_NAME: run deploy/deploy.sh $ENV_NAME on $ORTUS_NOVA_ENV_CONTROL_HOST"
+  # shellcheck source=push.sh
+  . "$KIT/push.sh"
+  COMMIT=$(push_commit "$COMMIT") || die "the commit to deploy: see above"
+  if [[ -n $CHECK ]]; then
+    push_check "$COMMIT"
+    exit
+  fi
+  push_deploy "$COMMIT" "${PASS[@]}"
+  exit
+fi
+
+# One step at a time on a host: a second one, or the dev-host apply, waits
+# for this one. The apply takes the lock itself and runs this under it
+# (ORTUS_NOVA_LOCKED=1).
 if [[ ${ORTUS_NOVA_LOCKED:-} != 1 ]]; then
   mkdir -p "$ORTUS_NOVA_HOME"
   exec 9> "$ORTUS_NOVA_HOME/$ORTUS_NOVA_LOCK_FILE"
@@ -109,29 +138,45 @@ if [[ ${ORTUS_NOVA_LOCKED:-} != 1 ]]; then
   export ORTUS_NOVA_LOCKED=1
 fi
 
-# The live kit is the kit's own detached worktree of origin/main, never the
-# checkout this runs from: what runs is what merged, whatever a developer
-# has checked out (the deploy timer keeps it current, follow.sh).
-# ORTUS_NOVA_KIT_FROM_CHECKOUT=1 runs this checkout instead, to try a branch.
+# A host's step (--this-host) runs from its live kit, which bootstrap.sh
+# moved to the commit of the push; what runs is what the push chose,
+# whatever a developer has checked out. ORTUS_NOVA_KIT_FROM_CHECKOUT=1 runs
+# this checkout instead, to try a branch on one host.
 LIVE=$ORTUS_NOVA_HOME/kit
 if [[ ${ORTUS_NOVA_KIT_FROM_CHECKOUT:-} != 1 && $ROOT != "$LIVE" ]]; then
-  git -C "$ROOT" fetch -q origin main
-  if [[ -e $LIVE ]]; then
-    git -C "$LIVE" checkout -q --detach origin/main
-  else
-    git -C "$ROOT" worktree add -q --detach "$LIVE" origin/main
-  fi
-  say "Running the kit from $LIVE (origin/main at $(git -C "$LIVE" rev-parse --short HEAD))"
-  exec "$LIVE/deploy/deploy.sh" "$ENV_NAME" "$@"
+  die "--this-host runs from the live kit ($LIVE): run deploy/deploy.sh $ENV_NAME on $ORTUS_NOVA_ENV_CONTROL_HOST, which deploys every host"
 fi
+HEAD_COMMIT=$(git -C "$ROOT" rev-parse -q --verify HEAD 2> /dev/null || true)
+[[ -z $COMMIT || $COMMIT == "$HEAD_COMMIT" ]] || die "the kit at $ROOT holds ${HEAD_COMMIT:0:12}, not ${COMMIT:0:12}"
+deploy_state_write deploying "$HEAD_COMMIT" "${COMMIT:-$HEAD_COMMIT}"
+# deploy_applied: the deploy applied once every unit whose configuration
+# changed has restarted and runs (unit-restart.sh), the egress gate among
+# them (ONS-123); the host's deploy state says succeeded then.
+deploy_applied() {
+  local unsettled
+  unsettled=$(units_unsettled | paste -sd, -)
+  [[ -z $unsettled ]] || die "$unsettled did not run after its restart"
+  deploy_state_write succeeded "$HEAD_COMMIT" "$HEAD_COMMIT"
+}
+# retire_deploy_timer: no host follows main by itself any more (design D3):
+# the deploy timer and service an earlier kit installed go, under either
+# set of names.
+retire_deploy_timer() {
+  local part
+  for part in deploy.timer deploy.service; do
+    [[ -e $UNITS/$(unit "$part") ]] || continue
+    systemctl --user disable -q --now "$(unit "$part")" 2> /dev/null || true
+    rm -f "$UNITS/$(unit "$part")"
+    say "Retired $(unit "$part"): the control host deploys this host now"
+  done
+}
 
 mkdir -p "$ORTUS_NOVA_HOME"/bin
 chmod 700 "$ORTUS_NOVA_HOME"
 # The environment's values, for the scripts the units run (names.sh
 # env_values), and the record of which environment this home is.
 printf '%s\n' "$values" > "$ORTUS_NOVA_HOME/environment.env"
-# follow.sh runs this again from a systemd unit, whose PATH lacks the tools
-# below; it uses the PATH of the last run, recorded here.
+# The units' scripts run with the PATH of the last run, recorded here.
 printf '%s\n' "$PATH" > "$ORTUS_NOVA_HOME/path"
 ENV_FILE=$ORTUS_NOVA_HOME/$ORTUS_NOVA_SETTINGS_FILE
 # The homelab profile, a second Sortie on taichi, is retired (spec store
@@ -296,7 +341,7 @@ UNITS=${ORTUS_NOVA_UNITS:-$HOME/.config/systemd/user}
 
 # The pack is built again when its inputs change (the kit's pack/,
 # smol-builder's source, which embeds its layers, and smolvm), so a merged
-# change to the agent's config reaches the next machine through follow.sh.
+# change to the agent's config reaches the next machine with the next push.
 # Not the smol-builder binary: Go stamps it with the kit's commit.
 build_pack() {
   local pack_inputs
@@ -359,18 +404,9 @@ if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
   deploy_sortie_retired
   say "Installing the user units"
   mkdir -p "$UNITS"
-  parts=(worker.service)
-  deploy=''
-  [[ $ROOT == "$LIVE" ]] && deploy=1 && parts+=(deploy.service deploy.timer)
-  for part in "${parts[@]}"; do
-    render_unit "$KIT" "$part" > "$UNITS/$(unit "$part")"
-  done
+  render_unit "$KIT" worker.service > "$UNITS/$(unit worker.service)"
+  retire_deploy_timer
   systemctl --user daemon-reload
-  if [[ $deploy ]]; then
-    systemctl --user enable -q --now "${ORTUS_NOVA_UNIT_PREFIX}deploy.timer"
-  else
-    systemctl --user disable -q --now "${ORTUS_NOVA_UNIT_PREFIX}deploy.timer" 2>/dev/null || true
-  fi
   systemctl --user enable -q "${ORTUS_NOVA_UNIT_PREFIX}worker.service"
   # Every stage-0 unit's journal, into rotated files (logs.sh).
   logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ${ORTUS_NOVA_UNIT_PREFIX}logs"
@@ -383,6 +419,7 @@ if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
     "$ORTUS_NOVA_CP_PUBLIC_URL/api/v1/workers/" || true)
   [[ $code != 000 && $code != 403 && -n $code ]] \
     || say "p1's Pomerium does not admit this worker at $ORTUS_NOVA_CP_PUBLIC_URL yet (HTTP $code): on $ORTUS_NOVA_ENV_CONTROL_HOST, run deploy/worker-host.sh $ENV_NAME add $THIS_HOST"
+  deploy_applied
   say "Ready: worker $ORTUS_NOVA_WORKER_NAME dials p1's Pomerium at $ORTUS_NOVA_CP_PUBLIC_URL (journalctl --user -u ${ORTUS_NOVA_UNIT_PREFIX}worker)"
   exit 0
 fi
@@ -495,16 +532,10 @@ issue_local_worker "$ORTUS_NOVA_WORKER_NAME" || die "could not issue p1's own wo
 carried=$(carry_edge_workers "$ORTUS_NOVA_HOME/workers" "$KIT/worker-host.sh" "$ENV_NAME" add) \
   || die "could not give each worker host of the stage-1 edge its certificate; the edge stays until it can"
 for name in $carried; do say "Gave worker host $name its certificate: it dials Pomerium from its next deploy.sh"; done
-# Sortie's health check reads p1's deploy state (deploy-state.sh); follow.sh
-# also fetches a copy of each worker host's over SSH every minute, which
-# nothing reads since merge-and-prove was removed (design D19). A worker
-# host listed before worker-host.sh add recorded its SSH destination is
-# reached by its name.
-for name in $(front_workers); do
-  [[ $name == "$ORTUS_NOVA_WORKER_NAME" || -s $ORTUS_NOVA_HOME/deploy-hosts/$name ]] && continue
-  deploy_host_add "$name" "$name"
-  say "p1 reads worker host $name's deploy state over ssh $name ($ORTUS_NOVA_HOME/deploy-hosts/$name names another destination)"
-done
+# Sortie's health check reads this host's deploy state (deploy-state.sh);
+# the push keeps each other host's beside it (push.sh). The minute copy's
+# list of hosts is gone.
+rm -rf "$ORTUS_NOVA_HOME/deploy-hosts"
 mkdir -p "$ORTUS_NOVA_LIVE_PROOFS"
 
 build_pack
@@ -543,22 +574,14 @@ mkdir -p "$UNITS"
 parts=(sortie.service workbench.service token.service token.timer store.service store.timer
   preview@.service previews.service previews.timer nono.service nono-live-proof.service live-proofs.service live-proofs.timer
   egress-gate.service pomerium.service worker.service)
-# The live kit follows origin/main on its own; a kit run from a checkout
-# (ORTUS_NOVA_KIT_FROM_CHECKOUT=1) stays where it is.
-deploy=''
-[[ $ROOT == "$LIVE" ]] && deploy=1 && parts+=(deploy.service deploy.timer)
 for part in "${parts[@]}"; do
   render_unit "$KIT" "$part" > "$UNITS/$(unit "$part")"
 done
 # The stage-1 edge and its tunnels are gone: every worker reaches Sortie
 # through Pomerium (retire-edge.sh, design D18).
 for unit in $(retire_edge "$UNITS"); do say "Retired $unit: every worker reaches Sortie through Pomerium now"; done
+retire_deploy_timer
 systemctl --user daemon-reload
-if [[ $deploy ]]; then
-  systemctl --user enable -q --now "${ORTUS_NOVA_UNIT_PREFIX}deploy.timer"
-else
-  systemctl --user disable -q --now "${ORTUS_NOVA_UNIT_PREFIX}deploy.timer" 2>/dev/null || true
-fi
 systemctl --user enable -q "${ORTUS_NOVA_UNIT_PREFIX}sortie.service" "${ORTUS_NOVA_UNIT_PREFIX}workbench.service" "${ORTUS_NOVA_UNIT_PREFIX}nono.service" \
   "${ORTUS_NOVA_UNIT_PREFIX}nono-live-proof.service" "${ORTUS_NOVA_UNIT_PREFIX}egress-gate.service" "${ORTUS_NOVA_UNIT_PREFIX}pomerium.service" "${ORTUS_NOVA_UNIT_PREFIX}worker.service"
 # Every stage-0 unit's journal, into rotated files (logs.sh).
@@ -611,4 +634,5 @@ fi
 for unit in "${ORTUS_NOVA_UNIT_PREFIX}nono" "${ORTUS_NOVA_UNIT_PREFIX}nono-live-proof" "${ORTUS_NOVA_UNIT_PREFIX}egress-gate" "${ORTUS_NOVA_UNIT_PREFIX}pomerium" ${ORTUS_NOVA_UNIT_PREFIX}worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done
+deploy_applied
 say "Ready: workbench http://127.0.0.1:$ORTUS_NOVA_WORKBENCH_PORT (password in $ORTUS_NOVA_HOME/workbench-password), Sortie 127.0.0.1:$ORTUS_NOVA_SORTIE_PORT, Huly $ORTUS_NOVA_HULY_URL/workbench/$ORTUS_NOVA_HULY_WORKSPACE/tracker, Pomerium $ORTUS_NOVA_CP_PUBLIC_URL for $(front_workers | wc -l) worker(s), p1's own and each worker host's (deploy/worker-host.sh list)"
