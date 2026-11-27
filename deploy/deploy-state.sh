@@ -26,6 +26,8 @@
 #                 on a host that builds and runs a Sortie (the control
 #                 profile, p1), ortusnova/sortie at the plan-bench commit
 #                 of the Sortie it runs (deploy_state_sortie)
+#   started       "no" when the deploy installed and started nothing
+#                 (deploy.sh --no-start); absent otherwise
 #   updated_at    when the kit last wrote it
 #
 # Sortie's deploystate knows the statuses succeeded, failed and deploying,
@@ -78,10 +80,11 @@ deploy_state_field() {
   sed -n "s/^  \"$2\": \"\\(.*\\)\",\\{0,1\\}\$/\\1/p" "$1" | head -n 1 | sed 's/\\"/"/g; s/\\\\/\\/g'
 }
 
-# deploy_state_write STATUS COMMIT MAIN [ERROR]: replace this host's file.
+# deploy_state_write STATUS COMMIT MAIN [ERROR [STARTED]]: replace this
+# host's file; STARTED no records an install that started nothing.
 # behind_since stays what it was while the same commit stays behind main.
 deploy_state_write() {
-  local status=$1 commit=$2 main=$3 error=${4:-} file now behind=null prev sortie repos=()
+  local status=$1 commit=$2 main=$3 error=${4:-} started=${5:-} file now behind=null prev sortie repos=()
   file=$(deploy_state_file)
   [[ -n $commit ]] && repos+=("$(deploy_state_repo_line "$DEPLOY_STATE_KIT_REPO" main "$commit")")
   sortie=$(deploy_state_sortie)
@@ -110,6 +113,7 @@ deploy_state_write() {
     else
       echo '  "repositories": {},'
     fi
+    [[ $started != no ]] || echo '  "started": "no",'
     printf '  "updated_at": %s\n' "$(json_string "$now")"
     echo '}'
   } > "$file.tmp" && mv "$file.tmp" "$file"

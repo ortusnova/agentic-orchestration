@@ -2,7 +2,8 @@
 """The file and database steps of migrate-stage0.sh (spec store
 deploy-environments, design D7). Standard library only.
 
-  counts DB                      every table's row count, as JSON
+  counts DB                      every table's row count, as JSON, the
+                                 database opened read-only
   rewrite-db DB OLD NEW [BACKUP] rewrite OLD to NEW in every text value of
                                  DB, in one transaction, after a backup
                                  copy at BACKUP; fails when a count differs
@@ -19,6 +20,10 @@ deploy-environments, design D7). Standard library only.
                                  the counts (JSON, by database) that differ,
                                  or with TABLEs those that went down; fails
                                  on any
+  lost BEFORE AFTER              the rows of the tables only ever appended
+                                 to that are gone; fails on any
+  record-counts RECORD HOME      the counts now of each database the
+                                 record lists, under HOME, as JSON
   scan HOME OLD [EXCLUDE...]     list every file under HOME naming OLD, a
                                  database's dump included; fails on any
   record FILE set KEY JSON | append KEY JSON | get KEY | lines KEY
@@ -36,12 +41,16 @@ SQLite, never as bytes.
 import json
 import mmap
 import os
+import pathlib
 import re
 import sqlite3
 import subprocess
 import sys
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
+# Sortie's tables only ever appended to: an install or a start may add
+# rows, never remove one.
+APPEND_ONLY = ("run_history", "supervisor_actions", "platform_faults")
 
 
 def pattern(old):
@@ -75,7 +84,7 @@ def tables(db):
 
 
 def counts(path):
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(pathlib.Path(os.path.abspath(path)).as_uri() + "?mode=ro", uri=True)
     try:
         return {t: db.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0] for t in tables(db)}
     finally:
@@ -309,8 +318,9 @@ def main(argv):
             path = os.path.join(args[0], rel)
             if not os.path.islink(path) and os.path.isfile(path) and is_sqlite(path):
                 print(rel)
-    elif cmd == "diff-counts":
-        before, after, only = json.loads(args[0]), json.loads(args[1]), args[2:]
+    elif cmd in ("diff-counts", "lost"):
+        before, after = json.loads(args[0]), json.loads(args[1])
+        only = APPEND_ONLY if cmd == "lost" else args[2:]
         out = []
         for db in sorted(set(before) | set(after)):
             b, a = before.get(db, {}), after.get(db, {})
@@ -322,6 +332,10 @@ def main(argv):
                     out.append(f"{db} {t}: {b.get(t)} -> {a.get(t)}")
         print("; ".join(out))
         return 1 if out else 0
+    elif cmd == "record-counts":
+        with open(args[0]) as f:
+            dbs = json.load(f).get("databases") or []
+        print(json.dumps({db: counts(os.path.join(args[1], db)) for db in dbs}, sort_keys=True))
     elif cmd == "scan":
         hits = scan(args[0], args[1], args[2:])
         for h in hits:

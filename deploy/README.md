@@ -36,7 +36,22 @@ deploy/deploy.sh dev --commit SHA      # deploy SHA
 deploy/deploy.sh dev --check           # each host's running commit and status beside the target
 deploy/deploy.sh dev --update-sortie   # also move the control host's Sortie checkout to origin/plan-bench first
 deploy/deploy.sh dev --migrate-stage0  # migrate each host still under its stage-0 names first (below)
+deploy/deploy.sh dev --no-start        # install every host's files and units, and start, enable and restart nothing
+deploy/deploy.sh dev --start           # deploy and start every host, then check it runs (below)
 ```
+
+`--no-start` (with or without `--migrate-stage0`) installs what each host
+runs, units and files, and leaves every `ortus-nova-dev-*` unit disabled
+and stopped: no Sortie, workbench, worker daemon, Pomerium, egress gate,
+nono, logs unit or timer, and Huly as it is (not started, its project not
+prepared). Each host's deploy state then says `"started": "no"`, and
+`--check` reports `installed, nothing started` and fails. `--start` is the
+push without it, which enables and starts what it installs, followed, host
+by host, by the checks a start needs: Sortie answers `/readyz` and the
+workbench answers on the control host, no row of an append-only table that
+a migration record counted is gone, and each host's worker checks in at
+the control host's Sortie. A failed check stops the push and rolls nothing
+back.
 
 `deploy.sh dev` runs on the control host only (`p1`; on another host it
 refuses, naming it). It refuses a commit no branch of `origin` holds, and a
@@ -75,7 +90,7 @@ deploy/test-environments.sh       # check deploy.sh <env> against throwaway envi
 deploy/test-smolvm-version.sh     # check the smolvm version check against fake binaries
 deploy/test-store-sync.sh         # check the store's fast-forward against throwaway repositories
 deploy/test-push.sh               # check the push: its order, its stop at a failure, --check, the refusals, a host under its stage-0 names
-deploy/test-migrate-stage0.sh     # check the migration from the stage-0 names, its refusals, its rollbacks and --finish, against Sortie's own database
+deploy/test-migrate-stage0.sh     # check the migration from the stage-0 names, its refusals, its rollbacks and --finish, with and without --no-start, and --start, against Sortie's own database
 deploy/test-dev-host-apply.sh     # check the dev-host apply, with no drain, and the deploy state it writes
 deploy/test-logs.sh               # check the log files' install, follower and rotation, with stubs
 deploy/test-unit-restart.sh       # check that nono, the egress gate, Pomerium and the worker daemon restart only when what they run changed
@@ -686,6 +701,7 @@ never from the live kit, which the migration moves:
 ```sh
 deploy/migrate-stage0.sh dev --check   # on each host first: the checks alone, nothing changes
 deploy/deploy.sh dev --migrate-stage0  # on the control host: migrate and install it, then each worker host
+deploy/deploy.sh dev --migrate-stage0 --no-start  # the same, starting nothing; deploy.sh dev --start later
 ```
 
 Each host still under its stage-0 names is migrated in its step of the
@@ -733,6 +749,17 @@ its environment's names is deployed as usual. On each host it:
    `supervisor_actions`, `platform_faults`) went missing
    (`counts_installed`). The push then waits for the host's worker to check
    in at the control host's Sortie.
+
+With `--no-start`, step 2 stops the stage-0 units as always and nothing is
+started, enabled or restarted after it. Step 6 installs with `deploy.sh dev
+--this-host --no-start` and checks files only: the environment's unit files
+are there, none is enabled or runs, no stage-0 unit runs, and every count
+of each database, opened read-only, equals `counts_before`. The record
+says `"status": "installed"` and `"no_start": true`, and the push waits for
+no check-in. `deploy.sh dev --start` later starts the environment and runs
+the checks of a start (above). A rollback of such a migration, by itself or
+by hand, starts and enables nothing either, and names the stage-0 units
+that ran and were enabled before.
 
 A failure in steps 3 to 6, or a worker that does not check in, rolls the
 host back at once, and the push stops with that host failed; hosts already

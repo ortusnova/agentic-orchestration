@@ -26,6 +26,10 @@
 # installs COMMIT there and rolls the host back by itself on a failure; the
 # kit is not moved before. A host already under ENV's names is deployed as
 # without the flag. Only standard tools: bash, git, sed, tar.
+#
+# With --no-start (passed on to deploy.sh and migrate-stage0.sh), nothing
+# may start: a failed deploy's kit still goes back, and the earlier
+# commit's deploy runs again only with --no-start, when that kit has it.
 set -euo pipefail
 # Over ssh the script arrives on standard input: the whole of main is read
 # before it runs, and nothing it starts reads the rest.
@@ -36,9 +40,10 @@ main() {
   say() { echo "bootstrap: $*" >&2; }
   [[ $env =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { say "'$env' is not an environment name"; exit 2; }
   [[ $commit =~ ^[0-9a-f]{40}$ ]] || { say "'$commit' is not a full commit id"; exit 2; }
-  migrate='' args=()
+  migrate='' no_start='' args=()
   for a; do
     if [[ $a == --migrate-stage0 ]]; then migrate=1; else args+=("$a"); fi
+    [[ $a == --no-start ]] && no_start=1
   done
 
   # The state directory the host's names give: the environment's, unless
@@ -104,7 +109,11 @@ main() {
     say "back on ${old:0:12}, and its deploy again, to undo what ${commit:0:12} left"
     git -C "$kit" checkout -q --force --detach "$old"
     back=0
-    if grep -q -- '--this-host' "$kit/deploy/deploy.sh" 2> /dev/null; then
+    if [[ -n $no_start ]] && ! grep -q -- '--no-start' "$kit/deploy/deploy.sh" 2> /dev/null; then
+      error+="; ${old:0:12}'s deploy not run again: its kit has no --no-start, and nothing may start"
+    elif [[ -n $no_start ]]; then
+      "$kit/deploy/deploy.sh" "$env" --this-host --commit "$old" --no-start > /dev/null 2> "$log.back" || back=$?
+    elif grep -q -- '--this-host' "$kit/deploy/deploy.sh" 2> /dev/null; then
       "$kit/deploy/deploy.sh" "$env" --this-host --commit "$old" > /dev/null 2> "$log.back" || back=$?
     elif [[ -x $kit/deploy/deploy.sh ]]; then
       ORTUS_NOVA_KIT_FROM_CHECKOUT=1 "$kit/deploy/deploy.sh" "$env" > /dev/null 2> "$log.back" || back=$?
