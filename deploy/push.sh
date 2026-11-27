@@ -14,6 +14,11 @@
 #   push_commit [COMMIT]       the commit to deploy: COMMIT, else this
 #                              checkout's; refuses one no branch of origin holds
 #
+# With --migrate-stage0, each host still under its stage-0 names is migrated
+# in its step (bootstrap.sh, migrate-stage0.sh); once its step succeeded,
+# its worker must check in at this host's Sortie, or the host is rolled
+# back (migrate-stage0.sh --rollback) and the push stops (design D7).
+#
 # Each host's step is bootstrap.sh, run here for this host and over
 # `ssh -o BatchMode=yes DEST bash -s` for another, DEST its destination in
 # the environment file. The push holds the environment's push lock here,
@@ -98,9 +103,61 @@ push_keep_state() {
   return 1
 }
 
+# push_checked_in HOST SINCE: HOST's worker checked in at this host's
+# Sortie at SINCE (epoch seconds) or later, within ORTUS_NOVA_CHECKIN_WAIT
+# seconds (120).
+push_checked_in() {
+  local i
+  for (( i = 0; i < ${ORTUS_NOVA_CHECKIN_WAIT:-120}; i += 2 )); do
+    curl -sf "http://127.0.0.1:$ORTUS_NOVA_ENV_SORTIE_PORT/api/v1/state" 2> /dev/null | python3 -c '
+import datetime, json, re, sys
+host, since = sys.argv[1], int(sys.argv[2])
+workers = ((json.load(sys.stdin).get("workers") or {}).get("workers")) or []
+def at(t):
+    t = re.sub(r"(\.\d{6})\d*", r"\1", t).replace("Z", "+00:00")
+    return datetime.datetime.fromisoformat(t).timestamp()
+sys.exit(0 if any(w.get("id") == host and at(w.get("last_check_in", "")) >= since for w in workers) else 1)
+' "$1" "$2" && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# push_rollback HOST: HOST back on its stage-0 names, by the
+# migrate-stage0.sh of its live kit under the environment's names.
+push_rollback() {
+  local home
+  home=$(migration_names "$ENV_NAME" && echo "$MIGRATE_TO_HOME")
+  if [[ $1 == "$THIS_HOST" ]]; then
+    bash "$home/kit/deploy/migrate-stage0.sh" "$ENV_NAME" --rollback 8>&-
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$(push_dest "$1")" bash "${home#"$HOME"/}/kit/deploy/migrate-stage0.sh" "$ENV_NAME" --rollback < /dev/null 8>&-
+  fi
+}
+
+# push_unmigrated HOST: HOST still has its stage-0 install and none of the
+# environment's.
+push_unmigrated() {
+  local from to
+  from=$(migration_names "$ENV_NAME" && echo "${MIGRATE_FROM_HOME#"$HOME"/}/$MIGRATE_FROM_SETTINGS_FILE")
+  to=$(migration_names "$ENV_NAME" && echo "${MIGRATE_TO_HOME#"$HOME"/}/$MIGRATE_TO_SETTINGS_FILE")
+  if [[ $1 == "$THIS_HOST" ]]; then
+    [[ -e $HOME/$from && ! -e $HOME/$to ]]
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$(push_dest "$1")" test -e "$from" -a ! -e "$to" < /dev/null
+  fi
+}
+
+# push_names: this host's names again, after its step moved its home.
+push_names() {
+  unset ORTUS_NOVA_HOME
+  env_names "$ENV_NAME"
+}
+
 push_deploy() {
-  local commit=$1 origin host rc outcome state stopped='' out=() failed=0
+  local commit=$1 origin host rc outcome state stopped='' out=() failed=0 migrating='' was_stage0 since why
   shift
+  [[ " $* " == *" --migrate-stage0 "* ]] && migrating=1
   origin=$(push_origin)
   mkdir -p "$ORTUS_NOVA_HOME"
   exec 8> "$ORTUS_NOVA_HOME/push.lock"
@@ -111,12 +168,22 @@ push_deploy() {
       continue
     fi
     say "Deploying $host at ${commit:0:12}"
+    was_stage0=''
+    [[ -n $migrating ]] && push_unmigrated "$host" 2> /dev/null && was_stage0=1
+    since=$(date +%s) why=''
     rc=0
     if [[ $host == "$THIS_HOST" ]]; then
       bash "$KIT/bootstrap.sh" "$ENV_NAME" "$commit" "$origin" "$ORTUS_NOVA_ENV_STAGE0_NAMES" "$@" 8>&- || rc=$?
     else
       ssh -o BatchMode=yes -o ConnectTimeout=10 "$(push_dest "$host")" bash -s -- "$ENV_NAME" "$commit" "$origin" "$ORTUS_NOVA_ENV_STAGE0_NAMES" "$@" \
         < "$KIT/bootstrap.sh" 8>&- || rc=$?
+    fi
+    [[ -z $migrating || $host != "$THIS_HOST" ]] || push_names
+    if (( rc == 0 )) && [[ -n $was_stage0 ]] && ! push_checked_in "$host" "$since"; then
+      why="its worker did not check in at $THIS_HOST's Sortie after its migration"
+      rc=1
+      if push_rollback "$host"; then why+="; rolled back to its stage-0 names"; else why+="; and its rollback failed: run deploy/migrate-stage0.sh $ENV_NAME --rollback on $host"; fi
+      [[ $host != "$THIS_HOST" ]] || push_names
     fi
     state=''
     push_keep_state "$host" > "$ORTUS_NOVA_HOME/.push-state" 2> /dev/null && state=$(cat "$ORTUS_NOVA_HOME/.push-state")
@@ -125,6 +192,7 @@ push_deploy() {
     else
       outcome="$host: failed: $(deploy_state_field <(printf '%s\n' "$state") error)"
       [[ -n $state ]] || outcome="$host: failed: unreachable or no deploy state (exit $rc)"
+      [[ -z $why ]] || outcome="$host: failed: $why"
       stopped=1 failed=1
     fi
     out+=("$outcome")

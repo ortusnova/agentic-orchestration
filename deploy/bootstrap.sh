@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2031 # the subshells that write the deploy state only read main's variables
 # One host's step of a push (spec store deploy-environments, design D3).
 # deploy.sh <env> on the control host runs it there, and over
 # `ssh <destination> bash -s` on each other host, from the kit of the target
 # commit; it needs nothing of the host's own kit.
 #
-#   bootstrap.sh ENV COMMIT ORIGIN STAGE0_NAMES [ARG...]
+#   bootstrap.sh ENV COMMIT ORIGIN STAGE0_NAMES [--migrate-stage0] [ARG...]
 #
 # STAGE0_NAMES is the environment file's stage0_names (true or false), which
 # the control host's loader read.
@@ -17,8 +18,14 @@
 # --commit COMMIT ARG...`. A failed deploy goes back to the commit the kit
 # ran and runs that commit's deploy again, so what the failed run changed is
 # the earlier commit's, and records the failure in the host's deploy state.
-# It exits non-zero when the deploy at COMMIT failed. Only standard tools:
-# bash, git, sed.
+# It exits non-zero when the deploy at COMMIT failed.
+#
+# With --migrate-stage0, a host still under its stage-0 names is migrated
+# instead (design D7): the target commit's deploy/migrate-stage0.sh, from a
+# copy outside the home it moves, checks, moves the host to ENV's names,
+# installs COMMIT there and rolls the host back by itself on a failure; the
+# kit is not moved before. A host already under ENV's names is deployed as
+# without the flag. Only standard tools: bash, git, sed, tar.
 set -euo pipefail
 # Over ssh the script arrives on standard input: the whole of main is read
 # before it runs, and nothing it starts reads the rest.
@@ -29,6 +36,10 @@ main() {
   say() { echo "bootstrap: $*" >&2; }
   [[ $env =~ ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { say "'$env' is not an environment name"; exit 2; }
   [[ $commit =~ ^[0-9a-f]{40}$ ]] || { say "'$commit' is not a full commit id"; exit 2; }
+  migrate='' args=()
+  for a; do
+    if [[ $a == --migrate-stage0 ]]; then migrate=1; else args+=("$a"); fi
+  done
 
   # The state directory the host's names give: the environment's, unless
   # the host is still under its stage-0 names. It runs before the host has
@@ -45,13 +56,41 @@ main() {
   fi
   old=$(git -C "$kit" rev-parse -q --verify HEAD 2> /dev/null || true)
   git -C "$kit" fetch -q "$origin" "$commit" || { say "could not fetch $commit from $origin"; exit 1; }
+  if [[ -n $migrate && $home == "$root/stage0" ]]; then
+    say "$(hostname -s): migrating from its stage-0 names to $env's, at ${commit:0:12}"
+    m=$(mktemp -d)
+    git -C "$kit" archive "$commit" deploy | tar -x -C "$m"
+    rc=0
+    bash "$m/deploy/migrate-stage0.sh" "$env" --commit "$commit" "${args[@]}" 2> >(tee "$m/migrate.err" >&2) || rc=$?
+    wait
+    if (( rc == 0 )); then
+      rm -rf "$m"
+      exit 0
+    fi
+    error="the migration to $env's names failed at ${commit:0:12}: $(sed 's/\x1b\[[0-9;]*m//g' "$m/migrate.err" | grep -v '^[[:space:]]*$' | tail -n 1 || true)"
+    # Where the host is now: back in its stage-0 home, unless the rollback
+    # failed too.
+    [[ -e $home ]] || home=$root/$env
+    (
+      # shellcheck source=names.sh
+      . "$m/deploy/names.sh"
+      export ORTUS_NOVA_HOME=$home
+      env_names "$env"
+      # shellcheck source=deploy-state.sh
+      . "$m/deploy/deploy-state.sh"
+      deploy_state_write failed "$(git -C "$home/kit" rev-parse -q --verify HEAD 2> /dev/null || true)" "$commit" "$error"
+    )
+    rm -rf "$m"
+    say "$error"
+    exit 1
+  fi
   git -C "$kit" checkout -q --force --detach "$commit"
   [[ $(git -C "$kit" rev-parse HEAD) == "$commit" ]] || { say "the live kit does not hold $commit"; exit 1; }
   say "$(hostname -s): deploying $env at ${commit:0:12} (was ${old:0:12})"
 
   log=$home/deploy.err
   rc=0
-  "$kit/deploy/deploy.sh" "$env" --this-host --commit "$commit" "$@" 2> >(tee "$log" >&2) || rc=$?
+  "$kit/deploy/deploy.sh" "$env" --this-host --commit "$commit" "${args[@]}" 2> >(tee "$log" >&2) || rc=$?
   wait
   (( rc == 0 )) && exit 0
 
@@ -84,7 +123,6 @@ main() {
     deploy_state_write failed "$(git -C "$kit" rev-parse HEAD)" "$commit" "$error"
   )
   rm -rf "$states"
-  # shellcheck disable=SC2031 # error is this function's; the subshell only reads it
   say "$error"
   exit 1
 }
