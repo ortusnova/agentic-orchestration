@@ -24,12 +24,12 @@ import (
 // nono with the control plane's egress profile (../../nono) and the real
 // credentials, through the gate, with a fake Sortie for introspection. It
 // reaches api.anthropic.com and mcp.firecrawl.dev, so it runs only from
-// dev/stage0/test-egress-live.sh on p1, which sets CP_EGRESS_LIVE_NONO to
+// deploy/test-egress-live.sh on p1, which sets CP_EGRESS_LIVE_NONO to
 // the nono binary and the CP_EGRESS_* credentials as run-nono.sh does.
 func TestLiveNono(t *testing.T) {
 	bin := os.Getenv("CP_EGRESS_LIVE_NONO")
 	if bin == "" {
-		t.Skip("CP_EGRESS_LIVE_NONO is unset; dev/stage0/test-egress-live.sh runs this on p1")
+		t.Skip("CP_EGRESS_LIVE_NONO is unset; deploy/test-egress-live.sh runs this on p1")
 	}
 	for _, v := range []string{"CP_EGRESS_ANTHROPIC"} {
 		if os.Getenv(v) == "" {
@@ -87,7 +87,7 @@ func TestLiveNono(t *testing.T) {
 		}
 	})
 
-	// opencode's websearch (dev/stage0/pack/opencode.json) calls
+	// opencode's websearch (deploy/pack/opencode.json) calls
 	// Firecrawl's keyless MCP; nono tunnels it without a credential.
 	t.Run("Web search", func(t *testing.T) {
 		call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"firecrawl_search","arguments":{"query":"smolvm","limit":2}}}`
@@ -146,7 +146,7 @@ func (ca *testCA) files(t *testing.T) (certFile, keyFile string) {
 func TestLiveForgeNono(t *testing.T) {
 	bin := os.Getenv("CP_EGRESS_LIVE_NONO")
 	if bin == "" {
-		t.Skip("CP_EGRESS_LIVE_NONO is unset; dev/stage0/test-egress-live.sh runs this on p1")
+		t.Skip("CP_EGRESS_LIVE_NONO is unset; deploy/test-egress-live.sh runs this on p1")
 	}
 	exe := filepath.Join(t.TempDir(), "cp-egress")
 	if out, err := exec.Command("go", "build", "-o", exe, "../../cmd/cp-egress").CombinedOutput(); err != nil {

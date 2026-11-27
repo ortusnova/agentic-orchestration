@@ -1,0 +1,8 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: fast-forward the spec store to what its upstream merged
+
+[Service]
+Type=oneshot
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/store-sync.sh

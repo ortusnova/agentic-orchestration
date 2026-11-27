@@ -2,6 +2,9 @@
 # agentic-orchestration is developed (deploy/README.md; spec store
 # deploy-environments, design D2). Checked against environment.schema.json.
 version: 1
+# p1 and taichi are still installed under the stage-0 names: they keep
+# them, as this environment, until their migration (design D6).
+stage0_names: true
 hosts:
   p1:     {runs: [control, worker]}
   taichi: {runs: [worker]}

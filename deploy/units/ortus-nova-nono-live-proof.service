@@ -1,0 +1,14 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: the live-proof nono, the egress of live-proof jobs
+After=network-online.target
+
+[Service]
+Type=exec
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-nono.sh live-proof
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

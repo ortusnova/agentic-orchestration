@@ -26,7 +26,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 if [[ -f $ROOT/dev/.env ]]; then set -a; source "$ROOT/dev/.env"; set +a; fi
 # shellcheck source=stage0/huly-restart-policy.sh
-. "$ROOT/dev/stage0/huly-restart-policy.sh"
+. "$ROOT/deploy/huly-restart-policy.sh"
 WB=$ROOT/workbench
 SORTIE_SRC=${SORTIE_SRC:-$ROOT/sortie}
 BROKER_SRC=${BROKER_SRC:-$ROOT/acp-broker}

@@ -317,7 +317,7 @@ def test_sortie_unreachable_changes_nothing(tmp_path):
 
 
 # The address a job's machine on any worker opens: a name under the
-# control plane's front, with STAGE0_WORKBENCH_URL or without it, and never
+# control plane's front, with ORTUS_NOVA_WORKBENCH_URL or without it, and never
 # a loopback one; people get a name beside the live workbench when it has
 # one.
 @pytest.mark.parametrize("live,public", [
@@ -342,7 +342,7 @@ def test_a_front_with_no_domain_name_gives_no_address(front):
         preview_address(front, "ONS-93")
 
 
-def test_without_STAGE0_WORKBENCH_URL_the_comment_holds_the_fronts_address(tmp_path):
+def test_without_ORTUS_NOVA_WORKBENCH_URL_the_comment_holds_the_fronts_address(tmp_path):
     kit = Kit(tmp_path)
     kit.settings = Settings(repo=REPO, record=kit.record, front_url=FRONT, live_url="", first_port=8800)
     kit.open_pull()

@@ -62,7 +62,7 @@ environment:
   # workbench, in this container's network namespace, can watch and steer it.
   host_prefix: [acp-broker, -http, 127.0.0.1:0, -viewer-token-file, /run/secrets/cp-viewer-token, --]
   remote:
-    image: stage0.smolmachine
+    image: agent.smolmachine
     backend: smolvm
     requires: {cpu: 4, mem_gib: 8, disk_gib: 20}
     # The machine sees only placeholders; nono, behind the egress route,

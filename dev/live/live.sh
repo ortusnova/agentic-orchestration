@@ -28,7 +28,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 # shellcheck source=../stage0/huly-restart-policy.sh
-. "$ROOT/dev/stage0/huly-restart-policy.sh"
+. "$ROOT/deploy/huly-restart-policy.sh"
 WB=$ROOT/workbench
 KIT=$ROOT/dev/live
 FORGE=$ROOT/dev/forge

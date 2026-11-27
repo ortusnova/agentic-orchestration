@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: keep the spec store on its upstream, every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

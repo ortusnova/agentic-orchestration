@@ -1,0 +1,10 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: rotate the kit's units' log files daily, and by size every 10 minutes
+
+[Timer]
+OnCalendar=*-*-* 00:00:05 UTC
+OnCalendar=*:0/10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,4 +1,0 @@
-# The stage-0 pack: Go and Node, with opencode (base layer) and Claude Code
-# behind ACP. Built by dev/stage0/stage0.sh with smol-builder --repo dev/stage0/pack.
-layers = ["go", "node"]
-project_layer = "agent.Dockerfile"

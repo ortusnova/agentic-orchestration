@@ -89,7 +89,7 @@ type Settings struct {
 // Upstreams are where Pomerium listens and where its routes go, when not
 // where the compose project has them (pomerium.Defaults). The stage-0
 // kit on p1 runs Pomerium on the host's network, in front of its own
-// Sortie and egress gate on loopback (dev/stage0/README.md).
+// Sortie and egress gate on loopback (deploy/README.md).
 type Upstreams struct {
 	// Address is where Pomerium listens, such as :8443.
 	Address string `json:"address,omitempty"`

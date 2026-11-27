@@ -1,0 +1,19 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: the worker daemon, which runs the control plane's jobs on this host
+After=network-online.target @UNIT_PREFIX@pomerium.service
+
+[Service]
+Type=exec
+# smolvm, from homelab's dev host or the operator's ~/.local/bin.
+Environment=PATH=@ORTUS_NOVA_HOME@/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@ORTUS_NOVA_HOME@/bin/worker-daemon run -config @ORTUS_NOVA_HOME@/worker.json
+Restart=on-failure
+RestartSec=10
+# The daemon leaves its running jobs to its next start, which adopts them.
+TimeoutStopSec=150
+# The jobs' machines run in this unit's control group: a stop signals the
+# daemon only, so they outlive it.
+KillMode=process
+
+[Install]
+WantedBy=default.target

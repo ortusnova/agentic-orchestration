@@ -1,0 +1,9 @@
+[Unit]
+Description=Ortus Nova @ORTUS_NOVA_ENV@: deploy, follow and remove the previews of the ui stories' pull requests
+After=@UNIT_PREFIX@sortie.service
+
+[Service]
+Type=oneshot
+Environment=ORTUS_NOVA_HOME=@ORTUS_NOVA_HOME@
+Environment=ORTUS_NOVA_ENV=@ORTUS_NOVA_ENV@
+ExecStart=@KIT@/run-previews.sh

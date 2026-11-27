@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "ortus-cp-egress",
-    "description": "The egress flow of the control plane (control-plane/docs/operator-guide.md), behind Pomerium's egress route: the hosts a job of any repository may reach, and the credentials nono holds, from the podman secrets cp.sh creates, or on p1 from run-nono.sh (dev/stage0/README.md). It holds no GitHub credential: each attempt's GitHub requests get that attempt's own tokens from the egress gate's nono for the attempt (operator-guide.md, \"GitHub tokens per attempt\")"
+    "description": "The egress flow of the control plane (control-plane/docs/operator-guide.md), behind Pomerium's egress route: the hosts a job of any repository may reach, and the credentials nono holds, from the podman secrets cp.sh creates, or on p1 from run-nono.sh (deploy/README.md). It holds no GitHub credential: each attempt's GitHub requests get that attempt's own tokens from the egress gate's nono for the attempt (operator-guide.md, \"GitHub tokens per attempt\")"
   },
   "network": {
     "allow_domain": [

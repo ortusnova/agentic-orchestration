@@ -6,7 +6,7 @@ Pomerium, with a client certificate from the control plane's CA. This
 guide sets it up, issues and revokes worker certificates, and says where
 each secret file goes.
 
-It replaces the stage-1 edge of the stage-0 kit and its SSH tunnels
+It replaces the stage-1 edge of the deploy kit and its SSH tunnels
 (spec store `agent-platform-workers`, design D18). The worker daemon and
 the runs are unchanged: a worker host gets an `https` control-plane URL and
 its certificate instead of a tunnel (see
@@ -236,15 +236,15 @@ check-latest` fails when Pomerium or nono has a newer release.
 
 The stage-1 edge (the edge and the SSH tunnels on p1) is gone. On p1 the
 stage-0 kit runs this front in front of its own Sortie, as user units rather
-than the whole compose project (`dev/stage0/README.md`, "Worker hosts"):
+than the whole compose project (`deploy/README.md`, "Worker hosts"):
 Pomerium, the image `compose.yaml` pins, on the host's network; the egress
 gate, `cp-egress`; and nono, with `nono/egress-profile.json`. Its CA, worker
 list and Pomerium's configuration are `cpctl`'s, in
-`$STAGE0_HOME/control-plane` (`cpctl init -address -sortie -egress` routes
+`$ORTUS_NOVA_HOME/control-plane` (`cpctl init -address -sortie -egress` routes
 Pomerium to Sortie and the gate on loopback). The next
-`dev/stage0/stage0.sh` there stops and removes the edge's units
+`deploy/deploy.sh dev` there stops and removes the edge's units
 (`ortus-stage0-edge` and each `ortus-stage0-worker-tunnel@<worker>`) and
-issues p1's own worker its certificate; `dev/stage0/worker-host.sh add HOST`
+issues p1's own worker its certificate; `deploy/worker-host.sh dev add HOST`
 issues a worker host's and copies it there, and `remove NAME` revokes it.
 
 For a worker host of a control plane run from this compose project: issue
@@ -258,7 +258,7 @@ instead of the tunnel's loopback end.
 
 Spec store `job-scoped-github-tokens`, story `egress-replaces-forge-tokens`,
 measured first, on p1, 2026-11-20, with the pinned nono 0.81.0
-(`dev/stage0/nono-version.sh`). The upstreams were two local HTTPS echo
+(`deploy/nono-version.sh`). The upstreams were two local HTTPS echo
 servers that record each request's path and `Authorization` header:
 `localhost:9443` in place of `api.github.com` (header mode, `Bearer {}`) and
 `localhost:9444` in place of `github.com` (`basic_auth` mode). A test CA
@@ -288,8 +288,8 @@ design's fallback (spec store `job-scoped-github-tokens`, design D6).
 The gate does this only with its `-forge-*` flags: `-forge-nono` (the nono
 binary), `-forge-ca-cert` and `-forge-ca-key` (the CA the shared nono
 intercepts with, which every machine trusts) and `-forge-dir` (the token
-files, best on a tmpfs). The stage-0 kit on p1 sets them
-(`dev/stage0/run-egress-gate.sh`). This compose project does not: its gate
+files, best on a tmpfs). The deploy kit on p1 sets them
+(`deploy/run-egress-gate.sh`). This compose project does not: its gate
 image holds no nono, so a Sortie here must not set
 `environment.remote.forge_gate`. Its jobs get no GitHub credential at all:
 nono holds none (`nono/egress-profile.json`), so a job's GitHub request

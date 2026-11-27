@@ -26,11 +26,14 @@ var dnsLabel = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Env is one environment file, valid against its schema.
 type Env struct {
-	Name    string          `json:"-"`
-	Path    string          `json:"-"`
-	Version int             `json:"version"`
-	Hosts   map[string]Host `json:"hosts"`
-	Control struct {
+	Name    string `json:"-"`
+	Path    string `json:"-"`
+	Version int    `json:"version"`
+	// Stage0Names binds the hosts installed under the stage-0 names to
+	// this environment until they are migrated.
+	Stage0Names bool            `json:"stage0_names"`
+	Hosts       map[string]Host `json:"hosts"`
+	Control     struct {
 		FrontPort int `json:"front_port"`
 	} `json:"control"`
 	Ports struct {
@@ -302,6 +305,7 @@ func (e *Env) Assignments(host string) (string, error) {
 		{"ORTUS_NOVA_ENV_TRACKER_WORKSPACE", e.Tracker.Workspace},
 		{"ORTUS_NOVA_ENV_TRACKER_PROJECT", e.Tracker.Project},
 		{"ORTUS_NOVA_ENV_WORKBENCH_LOCAL_NAME", e.LocalNames.Workbench},
+		{"ORTUS_NOVA_ENV_STAGE0_NAMES", fmt.Sprint(e.Stage0Names)},
 	}
 	if host != "" {
 		h, ok := e.Hosts[host]
@@ -350,6 +354,7 @@ func CheckDir(dir string) ([]*Env, error) {
 	}
 	type owner struct{ file, path string }
 	ports := map[int]owner{}
+	stage0 := ""
 	names := map[string]owner{}
 	for _, env := range envs {
 		for _, p := range env.PortEntries() {
@@ -358,6 +363,12 @@ func CheckDir(dir string) ([]*Env, error) {
 				continue
 			}
 			ports[p.Port] = owner{env.Path, p.Path}
+		}
+		if env.Stage0Names {
+			if stage0 != "" {
+				problems = append(problems, fmt.Sprintf("/stage0_names is set in %s and %s; at most one environment holds the stage-0 installs", stage0, env.Path))
+			}
+			stage0 = env.Path
 		}
 		if n := env.LocalNames.Workbench; n != "" {
 			if o, ok := names[n]; ok {

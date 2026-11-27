@@ -8,6 +8,10 @@
   "required": ["version", "hosts", "control", "ports", "tracker"],
   "properties": {
     "version": { "const": 1 },
+    "stage0_names": {
+      "description": "A host installed under the stage-0 names deploys as this environment, under those names, until it is migrated (design D6). At most one environment sets it; drop-stage0-names removes the key.",
+      "type": "boolean"
+    },
     "hosts": {
       "description": "Each machine id, the host's lower-case short host name (hostname -s), and what it runs. Exactly one host runs control.",
       "type": "object",

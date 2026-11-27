@@ -144,7 +144,7 @@ guest kernel. The control plane names none of it; it names the image, and
       { "host": "/home/brian/.local/state/homelab/sortie-recorder", "guest": "/var/log/homelab-recorder", "per_job": true }
     ],
     "env": { "NODE_EXTRA_CA_CERTS": "/usr/local/share/ca-certificates/ortus-egress.crt" },
-    "env_files": { "HOMELAB_VM_AGE_KEY": "/home/brian/.local/share/ortus-nova/stage0/inputs/vm-age/keys.txt" },
+    "env_files": { "HOMELAB_VM_AGE_KEY": "/home/brian/.local/share/ortus-nova/dev/inputs/vm-age/keys.txt" },
     "setup": ["sudo /opt/homelab-sandbox/guest-start.sh \"$(id -u)\""]
   }
 }
