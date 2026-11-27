@@ -1,0 +1,22 @@
+# The dev environment: the platform's control plane on the box where
+# agentic-orchestration is developed (deploy/README.md; spec store
+# deploy-environments, design D2). Checked against environment.schema.json.
+version: 1
+hosts:
+  p1:     {runs: [control, worker]}
+  taichi: {runs: [worker]}
+control:
+  front_port: 8443          # Pomerium; the URL is https://<control host's FQDN>:<front_port>
+ports:                      # loopback ports on the hosts of this environment
+  sortie: 7680
+  workbench: 8793
+  nono: 7690
+  nono_live_proof: 7691
+  egress_gate: 7692
+  previews_from: 8800
+tracker:
+  url: http://localhost:8087
+  workspace: sortie
+  project: ONS
+local_names:
+  workbench: workbench.homelab.dev
