@@ -36,6 +36,14 @@
 #   ... --update-sortie                   also move the Sortie checkout to origin/plan-bench
 #   deploy/deploy.sh ENV --migrate-stage0 deploy every host, migrating each host still under its
 #                                         stage-0 names to ENV's first (migrate-stage0.sh)
+#   ... --no-start                        install every host's files and units, but start,
+#                                         enable and restart nothing: no Sortie, workbench,
+#                                         worker, front, Huly, logs unit or timer; every unit
+#                                         of ENV stays disabled and stopped
+#   deploy/deploy.sh ENV --start          deploy every host as without --no-start, which starts
+#                                         what it installs, then check that Sortie answers
+#                                         /readyz, the workbench answers, each host's worker
+#                                         checks in, and no row a migration recorded is gone
 #
 # Every step checks first, so a second run changes nothing but a restart.
 # Settings live in $ORTUS_NOVA_HOME/stage0.env, written on the first run (edit it,
@@ -54,11 +62,11 @@ KIT=$ROOT/deploy
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'deploy.sh: %s\n' "$*" >&2; exit 1; }
 secret() { [[ -s $1 ]] || { (umask 077; openssl rand -hex 24 > "$1"); }; }
-usage() { echo "usage: $0 ENV [--commit COMMIT] [--check | --this-host | --migrate-stage0] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
+usage() { echo "usage: $0 ENV [--commit COMMIT] [--check | --this-host | --migrate-stage0 | --start] [--no-start] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
 [[ $# -gt 0 && $1 != -* ]] || usage
 ENV_NAME=$1
 shift
-REBUILD_PACK='' UPDATE_SORTIE='' THIS_HOST_ONLY='' CHECK='' COMMIT='' MIGRATE='' PASS=()
+REBUILD_PACK='' UPDATE_SORTIE='' THIS_HOST_ONLY='' CHECK='' COMMIT='' MIGRATE='' NO_START='' START='' PASS=()
 while (( $# )); do
   case $1 in
     --rebuild-pack) REBUILD_PACK=1 PASS+=("$1") ;;
@@ -66,6 +74,8 @@ while (( $# )); do
     --this-host) THIS_HOST_ONLY=1 ;;
     --check) CHECK=1 ;;
     --migrate-stage0) MIGRATE=1 PASS+=("$1") ;;
+    --no-start) NO_START=1 PASS+=("$1") ;;
+    --start) START=1 ;;
     --commit) [[ $# -gt 1 ]] || usage; COMMIT=$2; shift ;;
     *) usage ;;
   esac
@@ -74,6 +84,9 @@ done
 [[ -z $CHECK || -z $THIS_HOST_ONLY ]] || usage
 # The migration is part of a host's step of the push (bootstrap.sh).
 [[ -z $MIGRATE || ( -z $CHECK && -z $THIS_HOST_ONLY ) ]] || usage
+# --no-start installs; --start is a push that starts, then checks.
+[[ -z $NO_START || -z $CHECK ]] || usage
+[[ -z $START || ( -z $CHECK && -z $THIS_HOST_ONLY && -z $MIGRATE && -z $NO_START ) ]] || usage
 # shellcheck source=names.sh
 . "$KIT/names.sh"
 
@@ -119,7 +132,7 @@ if [[ -z $THIS_HOST_ONLY ]]; then
     push_check "$COMMIT"
     exit
   fi
-  push_deploy "$COMMIT" "${PASS[@]}"
+  PUSH_START=$START push_deploy "$COMMIT" "${PASS[@]}"
   exit
 fi
 
@@ -152,6 +165,10 @@ deploy_state_write deploying "$HEAD_COMMIT" "${COMMIT:-$HEAD_COMMIT}"
 # them (ONS-123); the host's deploy state says succeeded then.
 deploy_applied() {
   local unsettled
+  if [[ -n $NO_START ]]; then
+    deploy_state_write succeeded "$HEAD_COMMIT" "$HEAD_COMMIT" '' no
+    return
+  fi
   unsettled=$(units_unsettled | paste -sd, -)
   [[ -z $unsettled ]] || die "$unsettled did not run after its restart"
   deploy_state_write succeeded "$HEAD_COMMIT" "$HEAD_COMMIT"
@@ -401,6 +418,12 @@ if [[ $ORTUS_NOVA_PROFILE == worker ]]; then
   render_unit "$KIT" worker.service > "$UNITS/$(unit worker.service)"
   retire_deploy_timer
   systemctl --user daemon-reload
+  if [[ -n $NO_START ]]; then
+    logs_render "$UNITS"
+    deploy_applied
+    say "Installed, nothing started (--no-start): worker $ORTUS_NOVA_WORKER_NAME's units are disabled and stopped; deploy/deploy.sh $ENV_NAME --start on $ORTUS_NOVA_ENV_CONTROL_HOST starts them"
+    exit 0
+  fi
   systemctl --user enable -q "${ORTUS_NOVA_UNIT_PREFIX}worker.service"
   # Every stage-0 unit's journal, into rotated files (logs.sh).
   logs_install "$UNITS" || die "the log files' units did not start: systemctl --user status ${ORTUS_NOVA_UNIT_PREFIX}logs"
@@ -461,20 +484,24 @@ say "Installing workbench dependencies and building the frontend"
 (cd "$ROOT/workbench/frontend" && { [[ -d node_modules ]] || npm install --silent; } && npx vite build --logLevel warn)
 
 HULY_DIR=${HULY_COMPOSE_DIR:-$HOME/dev/huly-selfhost}
-# Every Huly container runs and restarts unless stopped, the policy in the
-# compose files themselves, so a `compose up` by anyone keeps it; a front
-# end that answers is not enough (huly-restart-policy.sh).
-if [[ -f $HULY_DIR/compose.yml ]]; then
-  huly_ensure "$HULY_DIR" || die "could not start Huly in $HULY_DIR"
-elif ! curl -sf -o /dev/null "$ORTUS_NOVA_HULY_URL/config.json"; then
-  die "Huly is not running and $HULY_DIR holds no compose project; set HULY_COMPOSE_DIR"
+if [[ -n $NO_START ]]; then
+  say "Huly: not started, and its project not prepared (--no-start)"
+else
+  # Every Huly container runs and restarts unless stopped, the policy in the
+  # compose files themselves, so a `compose up` by anyone keeps it; a front
+  # end that answers is not enough (huly-restart-policy.sh).
+  if [[ -f $HULY_DIR/compose.yml ]]; then
+    huly_ensure "$HULY_DIR" || die "could not start Huly in $HULY_DIR"
+  elif ! curl -sf -o /dev/null "$ORTUS_NOVA_HULY_URL/config.json"; then
+    die "Huly is not running and $HULY_DIR holds no compose project; set HULY_COMPOSE_DIR"
+  fi
+  for _ in $(seq 60); do curl -sf -o /dev/null "$ORTUS_NOVA_HULY_URL/config.json" && break; sleep 2; done
+  # podman honors the restart policy after a reboot only through this user unit.
+  systemctl --user is-enabled -q podman-restart.service || { say "Enabling podman-restart.service"; systemctl --user enable -q podman-restart.service; }
+  say "Preparing Huly project $ORTUS_NOVA_HULY_PROJECT"
+  python3 "$ROOT/dev/huly_project.py" "$ORTUS_NOVA_HULY_URL" "$ORTUS_NOVA_HULY_WORKSPACE" "$ORTUS_NOVA_HULY_EMAIL" \
+    "$ORTUS_NOVA_HULY_PASSWORD" "$ORTUS_NOVA_HULY_PROJECT" >/dev/null || die "could not prepare Huly project $ORTUS_NOVA_HULY_PROJECT"
 fi
-for _ in $(seq 60); do curl -sf -o /dev/null "$ORTUS_NOVA_HULY_URL/config.json" && break; sleep 2; done
-# podman honors the restart policy after a reboot only through this user unit.
-systemctl --user is-enabled -q podman-restart.service || { say "Enabling podman-restart.service"; systemctl --user enable -q podman-restart.service; }
-say "Preparing Huly project $ORTUS_NOVA_HULY_PROJECT"
-python3 "$ROOT/dev/huly_project.py" "$ORTUS_NOVA_HULY_URL" "$ORTUS_NOVA_HULY_WORKSPACE" "$ORTUS_NOVA_HULY_EMAIL" \
-  "$ORTUS_NOVA_HULY_PASSWORD" "$ORTUS_NOVA_HULY_PROJECT" >/dev/null || die "could not prepare Huly project $ORTUS_NOVA_HULY_PROJECT"
 
 secret "$ORTUS_NOVA_HOME/workbench-secret"
 if [[ ! -s $ORTUS_NOVA_HOME/workbench-password-hash ]]; then
@@ -561,11 +588,15 @@ export ORTUS_NOVA_EGRESS_GATE_PORT
 ORTUS_NOVA_SORTIE_MAX_AGENTS=$(sortie_agent_cap) || die "the Sortie-wide agent cap is wrong ($ENV_FILE)"
 export ORTUS_NOVA_SORTIE_MAX_AGENTS
 ORTUS_NOVA_KIT=$KIT python3 "$ROOT/dev/forge/render.py" "$KIT/WORKFLOW.md" "$ORTUS_NOVA_HOME/sortie/WORKFLOW.md"
-validated=$("$KIT/run-sortie.sh" validate 2>&1) || die "Sortie refused the workflow ($KIT/run-sortie.sh validate): $validated"
-# A key Sortie does not know is one it ignores: the workflow would not do
-# what it says, as when the remote kind ignored every repository but one.
-if unknown=$(grep -iE 'unknown_[a-z_]*key' <<< "$validated"); then
-  die "Sortie ignores a key of the workflow ($KIT/run-sortie.sh validate): $unknown"
+# The check logs in to Huly, which --no-start leaves as it is: --start
+# checks the workflow before Sortie starts.
+if [[ -z $NO_START ]]; then
+  validated=$("$KIT/run-sortie.sh" validate 2>&1) || die "Sortie refused the workflow ($KIT/run-sortie.sh validate): $validated"
+  # A key Sortie does not know is one it ignores: the workflow would not do
+  # what it says, as when the remote kind ignored every repository but one.
+  if unknown=$(grep -iE 'unknown_[a-z_]*key' <<< "$validated"); then
+    die "Sortie ignores a key of the workflow ($KIT/run-sortie.sh validate): $unknown"
+  fi
 fi
 
 say "Installing the user units"
@@ -582,6 +613,20 @@ done
 for unit in $(retire_edge "$UNITS"); do say "Retired $unit: every worker reaches Sortie through Pomerium now"; done
 retire_deploy_timer
 systemctl --user daemon-reload
+# The workbench's local name, for homelab's workstation-setup.sh (local-name.sh).
+declare_local_name() {
+  local workbench_name=${ORTUS_NOVA_WORKBENCH_LOCAL_NAME:-workbench.homelab.dev}
+  if [[ $(write_local_name "$HOME/$ORTUS_NOVA_LOCAL_NAMES_REL" "$workbench_name" "$ORTUS_NOVA_WORKBENCH_PORT") == changed ]]; then
+    say "Declared $workbench_name -> 127.0.0.1:$ORTUS_NOVA_WORKBENCH_PORT in ~/$ORTUS_NOVA_LOCAL_NAMES_REL; run \`sudo ./workstation-setup.sh\` in homelab to name it"
+  fi
+}
+if [[ -n $NO_START ]]; then
+  logs_render "$UNITS"
+  declare_local_name
+  deploy_applied
+  say "Installed, nothing started (--no-start): Sortie, the workbench, the front, the worker, the logs and the timers are disabled and stopped, Huly as it was; deploy/deploy.sh $ENV_NAME --start starts them"
+  exit 0
+fi
 systemctl --user enable -q "${ORTUS_NOVA_UNIT_PREFIX}sortie.service" "${ORTUS_NOVA_UNIT_PREFIX}workbench.service" "${ORTUS_NOVA_UNIT_PREFIX}nono.service" \
   "${ORTUS_NOVA_UNIT_PREFIX}nono-live-proof.service" "${ORTUS_NOVA_UNIT_PREFIX}egress-gate.service" "${ORTUS_NOVA_UNIT_PREFIX}pomerium.service" "${ORTUS_NOVA_UNIT_PREFIX}worker.service"
 # Every stage-0 unit's journal, into rotated files (logs.sh).
@@ -626,11 +671,7 @@ restart_worker
 systemctl --user restart "${ORTUS_NOVA_UNIT_PREFIX}workbench.service"
 for _ in $(seq 60); do curl -sf -o /dev/null "http://127.0.0.1:$ORTUS_NOVA_WORKBENCH_PORT/api/auth/mode" && break; sleep 1; done
 curl -sf -o /dev/null "http://127.0.0.1:$ORTUS_NOVA_WORKBENCH_PORT/api/auth/mode" || die "the workbench did not start: journalctl --user -u ${ORTUS_NOVA_UNIT_PREFIX}workbench"
-# Its local name, for homelab's workstation-setup.sh (local-name.sh).
-workbench_name=${ORTUS_NOVA_WORKBENCH_LOCAL_NAME:-workbench.homelab.dev}
-if [[ $(write_local_name "$HOME/$ORTUS_NOVA_LOCAL_NAMES_REL" "$workbench_name" "$ORTUS_NOVA_WORKBENCH_PORT") == changed ]]; then
-  say "Declared $workbench_name -> 127.0.0.1:$ORTUS_NOVA_WORKBENCH_PORT in ~/$ORTUS_NOVA_LOCAL_NAMES_REL; run \`sudo ./workstation-setup.sh\` in homelab to name it"
-fi
+declare_local_name
 for unit in "${ORTUS_NOVA_UNIT_PREFIX}nono" "${ORTUS_NOVA_UNIT_PREFIX}nono-live-proof" "${ORTUS_NOVA_UNIT_PREFIX}egress-gate" "${ORTUS_NOVA_UNIT_PREFIX}pomerium" ${ORTUS_NOVA_UNIT_PREFIX}worker; do
   systemctl --user is-active -q "$unit.service" || die "$unit did not start: journalctl --user -u $unit"
 done

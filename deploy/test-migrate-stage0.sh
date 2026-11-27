@@ -85,9 +85,11 @@ case $cmd in
   *) echo "systemctl stub: $cmd" >&2; exit 1 ;;
 esac
 EOF
-# podman secret: one file per secret in $HOME/.podman/secrets.
+# podman secret: one file per secret in $HOME/.podman/secrets. Every call
+# is logged in $HOME/podman.calls.
 cat > "$bin/podman" <<'EOF'
 #!/usr/bin/env bash
+echo "podman $*" >> "$HOME/podman.calls"
 d=$HOME/.podman/secrets
 mkdir -p "$d"
 [[ $1 == secret ]] || { echo "podman stub: $*" >&2; exit 1; }
@@ -128,8 +130,8 @@ chmod +x "$bin/ssh" "$bin/systemctl" "$bin/podman" "$bin/curl"
 
 # The origin: the kit's own names, deploy state and migration, and a
 # deploy.sh that installs the host under the names env_names gives: its
-# units started, a worker.json and a binary naming its home. It fails with
-# $HOME/fail-install. A tracked file names the control host's old home: the
+# units started (with --no-start, written only), a worker.json and a binary
+# naming its home. It fails with $HOME/fail-install. A tracked file names the control host's old home: the
 # commit's source, which the migration leaves alone.
 origin=$tmp/origin.git up=$tmp/up
 g init -q --bare "$origin"
@@ -151,16 +153,19 @@ echo "${HOME##*/} deploy.sh $* at $head in $ORTUS_NOVA_HOME" >> "$HOME/calls"
 [[ ! -e $HOME/fail-install ]] || { echo "deploy.sh: the pack did not build" >&2; exit 1; }
 u=${ORTUS_NOVA_UNITS:-$HOME/.config/systemd/user}
 mkdir -p "$u" "$ORTUS_NOVA_HOME/bin"
+no_start=''
+for a; do [[ $a == --no-start ]] && no_start=1; done
 parts=(worker.service logs.service)
 [[ $(cat "$HOME/runs") == control ]] && parts+=(sortie.service workbench.service)
 for p in "${parts[@]}"; do
   printf '[Service]\nEnvironment=ORTUS_NOVA_HOME=%s\nExecStart=%s/deploy/run\n' "$ORTUS_NOVA_HOME" "$d" > "$u/$(unit "$p")"
+  [[ -n $no_start ]] && continue
   systemctl --user enable -q "$(unit "$p")"
   systemctl --user restart "$(unit "$p")"
 done
 printf '{"state_dir": "%s/worker"}\n' "$ORTUS_NOVA_HOME" > "$ORTUS_NOVA_HOME/worker.json"
 printf 'ELF\0%s\0' "$ORTUS_NOVA_HOME" > "$ORTUS_NOVA_HOME/bin/worker-daemon"
-deploy_state_write succeeded "$head" "$head"
+deploy_state_write succeeded "$head" "$head" '' "${no_start:+no}"
 EOF
 chmod +x "$up/deploy/deploy.sh"
 commit() { echo "$1" >> "$up/x"; g -C "$up" add -A; g -C "$up" commit -qm "$1"; g -C "$up" push -q origin HEAD:main 2> /dev/null; g -C "$up" rev-parse HEAD; }
@@ -384,6 +389,103 @@ was=$(snapshot control)
 on control bash "$nc/kit/deploy/migrate-stage0.sh" test-a --rollback
 (( rc != 0 )) && grep -q 'the record is gone' "$tmp/out" && [[ $(snapshot control) == "$was" ]] \
   && ok "--rollback after --finish refuses, saying the record is gone, and changes nothing" || fail "rollback after finish: exit $rc, $(cat "$tmp/out")"
+
+# --- --no-start: migrated, nothing started -------------------------------
+# starts FILE...: each call in the stubs' logs that starts, enables or
+# restarts a unit, or starts a container; stopping and disabling are fine.
+starts() {
+  cat "$@" 2> /dev/null | grep -E '^systemctl .*\b(start|restart|reload-or-restart|try-restart|enable|reenable)\b|^podman .*\b(start|restart|run|up|compose|create [^-]*--start)\b' \
+    | grep -vE '^podman secret ' || true
+}
+# started_on HOST...: starts in the stubs' logs of each HOST.
+started_on() {
+  local h files=()
+  for h; do files+=("$hosts/$h/systemctl.calls" "$hosts/$h/podman.calls"); done
+  starts "${files[@]}"
+}
+# none_in DIR...: no file in any DIR.
+none_in() {
+  local d
+  for d; do ! compgen -G "$d/*" > /dev/null || return 1; done
+}
+clear_calls() { rm -f "$hosts"/*/systemctl.calls "$hosts"/*/podman.calls; }
+# The check itself: a log with a start, an enable, a restart or a container
+# start is caught; one with only stops, disables and secrets is not.
+printf 'systemctl --user stop ortus-stage0-*\nsystemctl --user disable -q x.service\npodman secret create a -\n' > "$tmp/quiet.calls"
+for planted in 'systemctl --user start ortus-nova-test-a-sortie.service' 'systemctl --user enable -q ortus-nova-test-a-worker.service' \
+  'systemctl --user restart ortus-nova-test-a-workbench.service' 'systemctl --user enable -q --now ortus-nova-test-a-token.timer' 'podman start huly_v7_front_1' 'podman compose up -d'; do
+  { cat "$tmp/quiet.calls"; echo "$planted"; } > "$tmp/planted.calls"
+  [[ -z $(starts "$tmp/quiet.calls") && $(starts "$tmp/planted.calls") == "$planted" ]] \
+    && ok "the no-start check catches: $planted" || fail "the no-start check misses: $planted"
+done
+
+fresh
+: > "$tmp/checkins"
+clear_calls
+before=$(counts "$c/sortie/.sortie.db")
+push --commit "$c1" --migrate-stage0 --no-start
+(( rc == 0 )) && grep -q "control: installed at ${c1:0:12}, nothing started" "$tmp/out" && grep -q "alpha: installed at ${c1:0:12}, nothing started" "$tmp/out" \
+  && ok "--no-start migrates both hosts, waiting for no worker to check in" || fail "no-start push: exit $rc, $(cat "$tmp/out")"
+[[ -z $(started_on control alpha) ]] && grep -q 'stop' "$hosts/control/systemctl.calls" \
+  && ok "--no-start starts, enables and restarts no unit and starts no container on either host, and stops the stage-0 units" \
+  || fail "--no-start started: $(started_on control alpha)"
+none_in "$hosts"/{control,alpha}/.systemd/{active,enabled} \
+  && ok "no unit runs and none is enabled on either host, the stage-0 units that ran among them" \
+  || fail "units: $(ls "$hosts"/*/.systemd/active "$hosts"/*/.systemd/enabled)"
+[[ -e $hosts/control/.config/systemd/user/ortus-nova-test-a-sortie.service && -e $hosts/alpha/.config/systemd/user/ortus-nova-test-a-worker.service ]] \
+  && ! compgen -G "$hosts/*/.config/systemd/user/*stage0*" > /dev/null \
+  && ok "the environment's unit files are installed, the stage-0 ones kept in the record" || fail "unit files: $(ls "$hosts"/*/.config/systemd/user)"
+[[ $(record status) == installed && $(record no_start) == true && $(counts "$nc/sortie/.sortie.db") == "$before" ]] \
+  && python3 -c 'import json, sys; sys.exit(json.loads(sys.argv[1]) != json.loads(sys.argv[2]))' "$(record counts_before)" "$(record counts_installed)" \
+  && ok "the record says installed, not started, and every count is as before" || fail "record: $(cat "$nc/migration.json")"
+[[ -z $(names_old control) && -z $(names_old alpha) && -e $lnd/ortus-nova-test-a-workbench ]] \
+  && ok "after --no-start no file names the old home, and the local name has its new name" || fail "old home named: $(names_old control) $(names_old alpha)"
+push --commit "$c1" --check
+(( rc != 0 )) && grep -q "control: at ${c1:0:12}, installed, nothing started" "$tmp/out" && grep -q "alpha: at ${c1:0:12}, installed, nothing started" "$tmp/out" \
+  && ok "--check says each host is installed and not started, and fails" || fail "check after no-start: exit $rc, $(cat "$tmp/out")"
+
+# --start: each host started, and its checks.
+echo "control alpha" > "$tmp/checkins"
+python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("DELETE FROM run_history WHERE identifier = ?", ("ONS-1",)); c.commit()' "$nc/sortie/.sortie.db"
+push --commit "$c1" --start
+(( rc != 0 )) && grep -q "control: failed: rows the migration counted are gone" "$tmp/out" && grep -q 'run_history: 3 -> 2' "$tmp/out" && grep -q "alpha: not deployed" "$tmp/out" && [[ -d $nc ]] \
+  && ok "--start fails, rolling nothing back, when a row the migration counted is gone" || fail "start, lost row: exit $rc, $(cat "$tmp/out")"
+python3 -c 'import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status) VALUES (?, ?, 1, ?, ?, ?, ?, ?)", ("i1", "ONS-1", "acp", "w", "t", "t", "succeeded")); c.commit()' "$nc/sortie/.sortie.db"
+echo control > "$tmp/checkins"
+push --commit "$c1" --start
+(( rc != 0 )) && grep -q "control: succeeded" "$tmp/out" && grep -q "alpha: failed: its worker did not check in" "$tmp/out" && [[ -d $na ]] \
+  && ok "--start fails a host whose worker does not check in, rolling nothing back" || fail "start, no check-in: exit $rc, $(cat "$tmp/out")"
+echo "control alpha" > "$tmp/checkins"
+push --commit "$c1" --start
+(( rc == 0 )) && grep -q "control: succeeded at ${c1:0:12}" "$tmp/out" && grep -q "alpha: succeeded at ${c1:0:12}" "$tmp/out" \
+  && active control ortus-nova-test-a-sortie.service && active alpha ortus-nova-test-a-worker.service \
+  && ok "--start starts each host and its checks pass" || fail "start: exit $rc, $(cat "$tmp/out")"
+push --commit "$c1" --check
+(( rc == 0 )) && ok "--check passes once started" || fail "check after start: exit $rc, $(cat "$tmp/out")"
+
+# --rollback and --finish from the no-start state.
+fresh
+push --commit "$c1" --migrate-stage0 --no-start
+clear_calls
+on control bash "$nc/kit/deploy/migrate-stage0.sh" test-a --rollback
+(( rc == 0 )) && [[ -d $c && ! -e $nc && $(git -C "$c/kit" rev-parse HEAD) == "$c0" && $(counts "$c/sortie/.sortie.db") == "$before" ]] \
+  && [[ -z $(started_on control) ]] && ! active control ortus-stage0-sortie.service && ! enabled control ortus-stage0-sortie.service \
+  && [[ -e $hosts/control/.config/systemd/user/ortus-stage0-sortie.service ]] && grep -q 'ortus-stage0-sortie.service' "$tmp/out" \
+  && ok "--rollback after --no-start returns the stage-0 home and starts and enables nothing, naming what ran before" \
+  || fail "rollback after no-start: exit $rc, $(cat "$tmp/out"); $(started_on control)"
+fresh
+push --commit "$c1" --migrate-stage0 --no-start
+on control bash "$nc/kit/deploy/migrate-stage0.sh" test-a --finish
+(( rc == 0 )) && [[ ! -e $nc/migration.json && ! -e $nc/migration && ! -e $c ]] && ok "--finish after --no-start ends the migration" || fail "finish after no-start: exit $rc, $(cat "$tmp/out")"
+
+# A failed install with --no-start rolls back and starts nothing.
+fresh
+touch "$hosts/control/fail-install"
+clear_calls
+push --commit "$c1" --migrate-stage0 --no-start
+(( rc != 0 )) && grep -q "control: failed: the migration to test-a's names failed" "$tmp/out" && [[ -d $c && ! -e $nc ]] \
+  && [[ -z $(started_on control) ]] && ! active control ortus-stage0-sortie.service && ! active control ortus-stage0-worker.service \
+  && ok "a failed install with --no-start rolls back, and the stage-0 units stay stopped" || fail "failed no-start install: exit $rc, $(cat "$tmp/out"); $(started_on control)"
 
 # --- A failed install rolls the host back --------------------------------
 fresh

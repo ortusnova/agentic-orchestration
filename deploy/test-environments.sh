@@ -99,6 +99,22 @@ grep -q "^ORTUS_NOVA_ENV=test-a$" "$h/.local/share/ortus-nova/test-a/environment
   && grep -qx "Environment=ORTUS_NOVA_LOGS_DIR=$h/.local/state/ortus-nova/test-a/logs" "$h/.config/systemd/user/ortus-nova-test-a-logs.service" \
   && ok "the units carry the environment and its log directory" || fail "unit environment: $(cat "$h/.config/systemd/user/ortus-nova-test-a-logs.service")"
 
+# --- --no-start: the units installed, nothing started --------------------
+h=$tmp/ns
+worker_host "$h" 10143 test-a
+deploy "$h" test-a --no-start
+(( rc == 0 )) && [[ $(units "$h") == "ortus-nova-test-a-logs-rotate.service ortus-nova-test-a-logs-rotate.timer ortus-nova-test-a-logs.service ortus-nova-test-a-worker.service " ]] \
+  && ok "deploy.sh test-a --this-host --no-start installs a worker host's units" || fail "no-start: exit $rc, $(cat "$h/out"), $(units "$h")"
+if grep -E '\b(start|restart|enable|reenable)\b' "$h/systemctl.calls"; then fail "--no-start started or enabled a unit"
+else ok "and starts, enables and restarts none"; fi
+grep -q '"started": "no"' "$h/.local/share/ortus-nova/test-a/deploy-state.json" \
+  && ok "its deploy state says nothing started" || fail "deploy state: $(cat "$h/.local/share/ortus-nova/test-a/deploy-state.json")"
+: > "$h/systemctl.calls"
+deploy "$h" test-a
+(( rc == 0 )) && grep -q 'enable -q ortus-nova-test-a-worker.service' "$h/systemctl.calls" && grep -q 'restart ortus-nova-test-a-worker.service' "$h/systemctl.calls" \
+  && ! grep -q '"started"' "$h/.local/share/ortus-nova/test-a/deploy-state.json" \
+  && ok "a deploy without --no-start then enables and starts the worker" || fail "start after no-start: exit $rc, $(cat "$h/systemctl.calls")"
+
 # --- test-b beside it, on the same host ---------------------------------
 worker_host "$h" 10243 test-b
 cp -r "$h/.config/systemd/user" "$tmp/a-units-before"

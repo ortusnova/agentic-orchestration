@@ -7,6 +7,9 @@
 #
 #   migrate-stage0.sh ENV --commit SHA [ARG...]  migrate this host, then install
 #                                                SHA under ENV's names (ARG to deploy.sh)
+#   ... --no-start                               install, but start, enable and restart
+#                                                nothing: every unit of ENV stays disabled
+#                                                and stopped (deploy.sh ENV --start, later)
 #   migrate-stage0.sh ENV --check                the checks of step 1 only; changes nothing
 #   migrate-stage0.sh ENV --rollback             back to the stage-0 names, from the record
 #   migrate-stage0.sh ENV --finish               delete the record, the database backups
@@ -31,16 +34,25 @@
 # --this-host, from the moved live kit at SHA, then the units, Sortie's
 # /readyz, the workbench and the append-only counts. Any failure in 3 to 6
 # rolls the host back at once, and exits non-zero.
+#
+# With --no-start the stage-0 units are stopped as in (2), and nothing is
+# started, enabled or restarted after: the install (deploy.sh --this-host
+# --no-start) writes the units and files only, and (6) checks files only:
+# ENV's unit files are there, none enabled or running, no stage-0 unit
+# runs, and every count in Sortie's database, opened read-only, is as
+# before. Sortie's /readyz, the workbench and the worker's check-in are
+# deploy.sh ENV --start's checks. A rollback of such a migration starts and
+# enables nothing either: it names the stage-0 units that ran before.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 say() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'migrate-stage0.sh: %s\n' "$*" >&2; exit 1; }
-usage() { echo "usage: $0 ENV [--commit SHA] [--check | --rollback | --finish] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
+usage() { echo "usage: $0 ENV [--commit SHA] [--check | --rollback | --finish] [--no-start] [--rebuild-pack] [--update-sortie]" >&2; exit 2; }
 [[ $# -gt 0 && $1 != -* ]] || usage
 ENV_NAME=$1
 shift
-MODE=migrate COMMIT='' PASS=()
+MODE=migrate COMMIT='' NO_START='' PASS=()
 while (( $# )); do
   case $1 in
     --check) MODE=check ;;
@@ -48,6 +60,7 @@ while (( $# )); do
     --finish) MODE=finish ;;
     --commit) [[ $# -gt 1 ]] || usage; COMMIT=$2; shift ;;
     --rebuild-pack | --update-sortie) PASS+=("$1") ;;
+    --no-start) NO_START=1 PASS+=("$1") ;;
     *) usage ;;
   esac
   shift
@@ -84,8 +97,6 @@ WORKER_HOST_FILES=(cp-worker.crt cp-worker.key cp-ca.crt egress-ca.crt control-p
 MOVED_SETTINGS=(SORTIE_PORT=SORTIE_PORT WORKBENCH_PORT=WORKBENCH_PORT NONO_PORT=NONO_PORT
   NONO_LIVE_PROOF_PORT=NONO_LIVE_PROOF_PORT EGRESS_GATE_PORT=EGRESS_GATE_PORT PREVIEW_FIRST_PORT=PREVIEW_FIRST_PORT
   HULY_URL=TRACKER_URL HULY_WORKSPACE=TRACKER_WORKSPACE HULY_PROJECT=TRACKER_PROJECT WORKBENCH_LOCAL_NAME=WORKBENCH_LOCAL_NAME)
-# The tables only appended to: an install may add rows, never remove one.
-APPEND_ONLY=(run_history supervisor_actions platform_faults)
 py() { python3 "$KIT/migrate-stage0.py" "$@"; }
 rec() { py record "$RECORD" "$@"; }
 jstr() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
@@ -167,12 +178,13 @@ checks() {
 rollback() {
   set +e
   trap - ERR
-  local bad=() f db from to rel commit back enabled active
+  local bad=() f db from to rel commit back enabled active no_start
   [[ -s $RECORD ]] || { echo "migrate-stage0.sh: no migration record at $RECORD" >&2; return 1; }
   say "Rolling $THIS_HOST back to its stage-0 names ($FROM)"
   commit=$(rec get stage0_commit)
   mapfile -t enabled < <(rec lines units_enabled)
   mapfile -t active < <(rec lines units_active)
+  no_start=$(rec get no_start)
   # ENV's units, stopped and removed.
   systemctl --user stop "$MIGRATE_TO_UNIT_PREFIX*" 2> /dev/null
   for f in "$UNITS/$MIGRATE_TO_UNIT_PREFIX"*; do
@@ -221,6 +233,16 @@ rollback() {
   repair_worktrees "$FROM"
   [[ -z $commit || ! -e $FROM/kit ]] || git -C "$FROM/kit" checkout -q --force --detach "$commit" || bad+=("the live kit at $commit")
   systemctl --user daemon-reload
+  if [[ $no_start == true ]]; then
+    if (( ${#bad[@]} )); then
+      printf 'migrate-stage0.sh: the rollback did not restore: %s\n' "${bad[*]}" >&2
+      return 1
+    fi
+    say "$THIS_HOST is back on its stage-0 names at ${commit:0:12}, every unit stopped and disabled (the migration ran with --no-start); the record is in $FROM/$back"
+    [[ -z ${enabled[*]} ]] || say "Enabled before the migration: ${enabled[*]}"
+    [[ -z ${active[*]} ]] || say "Running before the migration: ${active[*]}"
+    return 0
+  fi
   for f in "${enabled[@]}"; do
     [[ -n $f ]] && ! deploy_unit "$f" "$MIGRATE_FROM_UNIT_PREFIX" && systemctl --user enable -q "$f"
   done
@@ -300,6 +322,7 @@ rec set stage0_commit "$(jstr "$stage0_commit")"
 rec set commit "$(jstr "$COMMIT")"
 rec set started_at "$(jstr "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
 rec set status '"moving"'
+[[ -z $NO_START ]] || rec set no_start true
 rec set units_files "$(jlist "${unit_files[@]}")"
 rec set units_enabled "$(jlist "${units_enabled[@]}")"
 rec set units_active "$(jlist "${units_active[@]}")"
@@ -387,6 +410,31 @@ wait
 rm -f "$log"
 # shellcheck disable=SC2153 # set by env_file_load
 want_runs=$ORTUS_NOVA_ENV_HOST_RUNS
+if [[ -n $NO_START ]]; then
+  # Files only: nothing runs to answer, and nothing may start.
+  want_parts=(worker.service)
+  [[ " $want_runs " == *" control "* ]] && want_parts+=(sortie.service workbench.service)
+  for part in "${want_parts[@]}"; do
+    [[ -e $UNITS/$MIGRATE_TO_UNIT_PREFIX$part ]] || fail_back "the install wrote no $MIGRATE_TO_UNIT_PREFIX$part in $UNITS"
+  done
+  for f in "$UNITS/$MIGRATE_TO_UNIT_PREFIX"*; do
+    [[ -e $f ]] || continue
+    state=$(systemctl --user is-enabled "${f##*/}" 2> /dev/null || true)
+    [[ $state != enabled* ]] || fail_back "${f##*/} is $state after an install with --no-start"
+  done
+  running=$(systemctl --user list-units --plain --no-legend --state=active "$MIGRATE_TO_UNIT_PREFIX*" "$MIGRATE_FROM_UNIT_PREFIX*" 2> /dev/null | awk '{print $1}' | paste -sd' ' -)
+  [[ -z $running ]] || fail_back "these run after an install with --no-start: $running"
+  counts_installed=$(all_counts "$TO" "${dbs[@]}")
+  rec set counts_installed "$counts_installed"
+  if ! differ=$(py diff-counts "$counts_before" "$counts_installed"); then
+    fail_back "the counts in Sortie's database differ after the install with --no-start ($differ): something wrote to it"
+  fi
+  trap - ERR
+  rec set status '"installed"'
+  rec set installed_at "$(jstr "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  say "Migrated $THIS_HOST to $ENV_NAME's names at ${COMMIT:0:12}, nothing started: every $MIGRATE_TO_UNIT_PREFIX* unit is disabled and stopped; the record is $RECORD. deploy/deploy.sh $ENV_NAME --start on $ORTUS_NOVA_ENV_CONTROL_HOST starts the environment; $TO/kit/deploy/migrate-stage0.sh $ENV_NAME --rollback returns this host"
+  exit 0
+fi
 systemctl --user is-active -q "${MIGRATE_TO_UNIT_PREFIX}worker.service" || fail_back "${MIGRATE_TO_UNIT_PREFIX}worker.service does not run after the install"
 if [[ " $want_runs " == *" control "* ]]; then
   for part in sortie.service workbench.service; do
@@ -405,7 +453,7 @@ if [[ " $want_runs " == *" control "* ]]; then
 fi
 counts_installed=$(all_counts "$TO" "${dbs[@]}")
 rec set counts_installed "$counts_installed"
-if ! lost=$(py diff-counts "$counts_before" "$counts_installed" "${APPEND_ONLY[@]}"); then
+if ! lost=$(py lost "$counts_before" "$counts_installed"); then
   fail_back "rows are missing after the install: $lost"
 fi
 trap - ERR

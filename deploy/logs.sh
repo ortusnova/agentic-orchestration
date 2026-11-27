@@ -7,6 +7,8 @@
 #                       UNITS, enable them, start the rotation's timer, and
 #                       (re)start the follower only when what it runs changed
 #                       or it is not running: a second run changes nothing
+#   logs_render UNITS   render those units into UNITS only: nothing is
+#                       enabled or started (deploy.sh --no-start)
 #
 # ortus-nova-<env>-logs.service (logs-follow.sh) copies each ortus-nova-<env>-* unit's
 # journal lines into $ORTUS_NOVA_LOG_DIR/<unit>.log (names.sh);
@@ -14,7 +16,7 @@
 
 LOGS_UNITS=(logs.service logs-rotate.service logs-rotate.timer)
 
-logs_install() {
+logs_render() {
   local units=$1 part new changed=''
   mkdir -p "$units"
   for part in "${LOGS_UNITS[@]}"; do
@@ -25,6 +27,11 @@ logs_install() {
     fi
   done
   [[ -z $changed ]] || systemctl --user daemon-reload
+}
+
+logs_install() {
+  local units=$1
+  logs_render "$units"
   systemctl --user is-enabled -q "$(unit logs.service)" || systemctl --user enable -q "$(unit logs.service)"
   systemctl --user is-enabled -q "$(unit logs-rotate.timer)" || systemctl --user enable -q "$(unit logs-rotate.timer)"
   systemctl --user is-active -q "$(unit logs-rotate.timer)" || systemctl --user start "$(unit logs-rotate.timer)"

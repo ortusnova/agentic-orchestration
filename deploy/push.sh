@@ -19,6 +19,16 @@
 # its worker must check in at this host's Sortie, or the host is rolled
 # back (migrate-stage0.sh --rollback) and the push stops (design D7).
 #
+# With --no-start, each host's step installs and starts nothing, so no
+# worker checks in: the push checks none, and a migrated host stays
+# migrated, every unit of the environment disabled and stopped. With
+# PUSH_START=1 (deploy.sh ENV --start), each host's step starts what it
+# installs, as without either; then the push checks, host by host, that
+# its worker checks in at this host's Sortie and, on this host, that Sortie
+# answers /readyz, the workbench answers and no row of an append-only table
+# the migration record counted is gone (push_started). A failed check
+# stops the push; nothing is rolled back.
+#
 # Each host's step is bootstrap.sh, run here for this host and over
 # `ssh -o BatchMode=yes DEST bash -s` for another, DEST its destination in
 # the environment file. The push holds the environment's push lock here,
@@ -123,6 +133,35 @@ sys.exit(0 if any(w.get("id") == host and at(w.get("last_check_in", "")) >= sinc
   return 1
 }
 
+# push_wait URL: URL answers within ORTUS_NOVA_START_WAIT seconds (60).
+push_wait() {
+  local i
+  for (( i = 0; i < ${ORTUS_NOVA_START_WAIT:-60}; i++ )); do
+    curl -sf -o /dev/null "$1" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# push_started HOST SINCE: the checks of a started host, after its step
+# began at SINCE (epoch seconds); prints why one failed.
+push_started() {
+  local rec lost
+  if [[ $1 == "$THIS_HOST" ]]; then
+    push_wait "http://127.0.0.1:$ORTUS_NOVA_ENV_SORTIE_PORT/readyz" \
+      || { echo "Sortie does not answer /readyz on 127.0.0.1:$ORTUS_NOVA_ENV_SORTIE_PORT"; return 1; }
+    push_wait "http://127.0.0.1:$ORTUS_NOVA_ENV_WORKBENCH_PORT/api/auth/mode" \
+      || { echo "the workbench does not answer on 127.0.0.1:$ORTUS_NOVA_ENV_WORKBENCH_PORT"; return 1; }
+    rec=$ORTUS_NOVA_HOME/migration.json
+    if [[ -s $rec ]]; then
+      lost=$(python3 "$KIT/migrate-stage0.py" lost "$(python3 "$KIT/migrate-stage0.py" record "$rec" get counts_before)" \
+        "$(python3 "$KIT/migrate-stage0.py" record-counts "$rec" "$ORTUS_NOVA_HOME")") \
+        || { echo "rows the migration counted are gone ($rec): ${lost:-the counts could not be read}"; return 1; }
+    fi
+  fi
+  push_checked_in "$1" "$2" || { echo "its worker did not check in at $THIS_HOST's Sortie"; return 1; }
+}
+
 # push_rollback HOST: HOST back on its stage-0 names, by the
 # migrate-stage0.sh of its live kit under the environment's names.
 push_rollback() {
@@ -155,9 +194,10 @@ push_names() {
 }
 
 push_deploy() {
-  local commit=$1 origin host rc outcome state stopped='' out=() failed=0 migrating='' was_stage0 since why
+  local commit=$1 origin host rc outcome state stopped='' out=() failed=0 migrating='' no_start='' was_stage0 since why
   shift
   [[ " $* " == *" --migrate-stage0 "* ]] && migrating=1
+  [[ " $* " == *" --no-start "* ]] && no_start=1
   origin=$(push_origin)
   mkdir -p "$ORTUS_NOVA_HOME"
   exec 8> "$ORTUS_NOVA_HOME/push.lock"
@@ -179,15 +219,20 @@ push_deploy() {
         < "$KIT/bootstrap.sh" 8>&- || rc=$?
     fi
     [[ -z $migrating || $host != "$THIS_HOST" ]] || push_names
-    if (( rc == 0 )) && [[ -n $was_stage0 ]] && ! push_checked_in "$host" "$since"; then
+    if (( rc == 0 )) && [[ -n $was_stage0 && -z $no_start ]] && ! push_checked_in "$host" "$since"; then
       why="its worker did not check in at $THIS_HOST's Sortie after its migration"
       rc=1
       if push_rollback "$host"; then why+="; rolled back to its stage-0 names"; else why+="; and its rollback failed: run deploy/migrate-stage0.sh $ENV_NAME --rollback on $host"; fi
       [[ $host != "$THIS_HOST" ]] || push_names
     fi
+    if (( rc == 0 )) && [[ ${PUSH_START:-} == 1 ]] && ! why=$(push_started "$host" "$since"); then
+      rc=1
+    fi
     state=''
     push_keep_state "$host" > "$ORTUS_NOVA_HOME/.push-state" 2> /dev/null && state=$(cat "$ORTUS_NOVA_HOME/.push-state")
-    if (( rc == 0 )); then
+    if (( rc == 0 )) && [[ -n $no_start ]]; then
+      outcome="$host: installed at ${commit:0:12}, nothing started"
+    elif (( rc == 0 )); then
       outcome="$host: succeeded at ${commit:0:12}"
     else
       outcome="$host: failed: $(deploy_state_field <(printf '%s\n' "$state") error)"
@@ -217,7 +262,10 @@ push_check() {
     status=$(deploy_state_field <(printf '%s\n' "$state") status)
     names=''
     push_stage0 "$host" && names=', under its stage-0 names'
-    if [[ $running == "$commit" && $status == succeeded ]]; then
+    if [[ $running == "$commit" && $status == succeeded && $(deploy_state_field <(printf '%s\n' "$state") started) == no ]]; then
+      echo "$host: at ${commit:0:12}, installed, nothing started$names (deploy/deploy.sh $ENV_NAME --start starts it)"
+      differs=1
+    elif [[ $running == "$commit" && $status == succeeded ]]; then
       echo "$host: at ${commit:0:12}, $status$names"
     else
       echo "$host: at ${running:0:12}, $status$names (target ${commit:0:12})"
