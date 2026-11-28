@@ -257,8 +257,9 @@ instead of the tunnel's loopback end.
 ## GitHub tokens per attempt: what nono can do
 
 Spec store `job-scoped-github-tokens`, story `egress-replaces-forge-tokens`,
-measured first, on p1, 2026-11-20, with the pinned nono 0.81.0
-(`deploy/nono-version.sh`). The upstreams were two local HTTPS echo
+measured first, on p1, 2026-11-20, with the pinned nono 0.81.0,
+and again on 2026-11-28 with 0.82.0 (`deploy/nono-version.sh`), with the
+same results. The upstreams were two local HTTPS echo
 servers that record each request's path and `Authorization` header:
 `localhost:9443` in place of `api.github.com` (header mode, `Bearer {}`) and
 `localhost:9444` in place of `github.com` (`basic_auth` mode). A test CA
