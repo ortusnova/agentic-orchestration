@@ -17,7 +17,7 @@ lint: licenses no-placeholder specs ## Lint every component, check the license c
 	@set -e; for c in $(COMPONENTS); do echo "== $$c: lint"; $(MAKE) -s -C $$c lint; done
 	@echo "== deploy: lint"; $(MAKE) -s -C deploy lint
 
-check-forge-rules: ## Fail naming any repository a forge_ceiling grants write on whose default branch GitHub's rules do not bound (deploy, GitHub API, read only)
+check-forge-rules: ## Report, for each repository a forge_ceiling grants write on, whether GitHub's rules bound its default branch (recommended, not required); fail only on a ruleset the App bypasses (deploy, GitHub API, read only)
 	@$(MAKE) -s -C deploy check-forge-rules
 
 check-latest: ## Fail when a Go component's dependency, or the control plane's Pomerium or nono, is behind its latest stable release (network)

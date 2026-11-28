@@ -25,7 +25,7 @@ check-environments: ## Check every environments/<env>.yml against the schema, an
 test-live: ## On the control host: the egress scenarios against the pinned nono, api.anthropic.com and mcp.firecrawl.dev, and an attempt's GitHub egress
 	./test-egress-live.sh
 
-check-forge-rules: ## Read the rulesets of each repository a forge_ceiling grants write on, and fail naming any that does not bound a minted token (GitHub API, read only)
+check-forge-rules: ## Read the rulesets of each repository a forge_ceiling grants write on, and report those that do not bound a minted token, as recommended; fail only on a ruleset the App bypasses (GitHub API, read only)
 	./check-forge-rules.py
 
 lint: ## Lint the loader, live-proofs and the workflow's tests, and shellcheck the kit's scripts
