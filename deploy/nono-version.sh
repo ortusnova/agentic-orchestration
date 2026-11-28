@@ -5,14 +5,14 @@
 # To move to a new release, change NONO_VERSION and both sums together;
 # `make -C deploy check-latest` says when a newer one is out.
 # Sourced by deploy.sh.
-NONO_VERSION=0.81.0
+NONO_VERSION=0.82.0
 NONO_RELEASES=${NONO_RELEASES:-https://github.com/nolabs-ai/nono/releases/download}
 
 # nono_sha256 ARCH: the pinned sum of the archive for ARCH (uname -m).
 nono_sha256() {
   case $1 in
-    x86_64) echo 7ecc33ff9c349bdfa84b4496e7a7555f67bcc33f1e125c7df9efb653c6c4e569 ;;
-    aarch64) echo a4d87ddb0917ef96224bcc41a2587318d7d0e92441e7ff454696e5980c9f7924 ;;
+    x86_64) echo 81d7a5616622dcf68ca0ed2b7e6b3af08c1216fb0c42dc6d7ecfbd2bbf2d3f50 ;;
+    aarch64) echo de16b663f1941b4ff8500f75f34d10a497ef1d1934281573888fb9e808dab53e ;;
     *) return 1 ;;
   esac
 }
