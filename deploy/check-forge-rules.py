@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Check the GitHub rules that bound every minted token (spec store
+"""Report the GitHub rules that would bound every minted token (spec store
 job-scoped-github-tokens, design D7; make check-forge-rules).
 
 For each repository some forge_ceiling of WORKFLOW.md grants write on, read
-its rulesets through GitHub's API and fail, naming the repository, unless an
-active ruleset on its default branch requires a pull request, blocks force
-pushes and blocks deletion, with the App out of its bypass list. A
-repository on a plan that refuses rulesets (GitHub Free, private) fails with
-that refusal: only the operator can change the plan.
+its rulesets through GitHub's API and say whether an active ruleset on its
+default branch requires a pull request, blocks force pushes and blocks
+deletion. Such a ruleset is a recommendation, not a requirement (operator,
+2026-11-28: the organization stays on GitHub Free, which refuses rulesets on
+a private repository): a repository without one is reported as
+`recommended:`, and the check passes. It fails only when it cannot read a
+repository, or when a ruleset lists the App as a bypass actor, which would
+undo the ruleset for every minted token.
 
 It only reads (GET). The credential is FORGE_RULES_TOKEN, a read-only token,
 else the operator's `gh auth token`, used for GET requests only.
@@ -75,17 +78,18 @@ def on_default_branch(ruleset, default):
 
 
 def check(repo, tok):
-    """The problems of repo's default branch, empty when it is bounded."""
+    """The problems of repo's default branch, which fail the check, and the
+    rules it lacks, which are recommended."""
     status, info = get(f"/repos/{repo}", tok)
     if status != 200:
-        return [f"cannot read the repository (HTTP {status})"]
+        return [f"cannot read the repository (HTTP {status})"], []
     default = info["default_branch"]
     status, rulesets = get(f"/repos/{repo}/rulesets?includes_parents=true", tok)
     if status == 403 and "Upgrade to GitHub Pro" in str((rulesets or {}).get("message", "")):
-        return [f"GitHub refuses rulesets on this {'private ' if info.get('private') else ''}repository on its plan "
-                f"(HTTP 403: {rulesets['message']}); only the operator can change the plan or the visibility"]
+        return [], [f"no ruleset: GitHub refuses rulesets on this {'private ' if info.get('private') else ''}repository "
+                    f"on its plan (HTTP 403: {rulesets['message']})"]
     if status != 200:
-        return [f"cannot read its rulesets (HTTP {status})"]
+        return [f"cannot read its rulesets (HTTP {status})"], []
     have, bypassed = set(), False
     for summary in rulesets:
         status, rs = get(f"/repos/{repo}/rulesets/{summary['id']}", tok)
@@ -97,10 +101,9 @@ def check(repo, tok):
             bypassed = True
             continue
         have |= {r["type"] for r in rs.get("rules", [])}
-    problems = [f"{default}: no active ruleset that {what}" for rule, what in NEEDED.items() if rule not in have]
-    if bypassed:
-        problems.append(f"{default}: a ruleset lists the App (ID {APP_ID}) as a bypass actor")
-    return problems
+    missing = [f"{default}: no active ruleset that {what}" for rule, what in NEEDED.items() if rule not in have]
+    problems = [f"{default}: a ruleset lists the App (ID {APP_ID}) as a bypass actor"] if bypassed else []
+    return problems, missing
 
 
 def main():
@@ -112,12 +115,13 @@ def main():
     tok = token()
     failed = False
     for repo in repos:
-        problems = check(repo, tok)
-        if problems:
+        problems, missing = check(repo, tok)
+        for p in problems:
             failed = True
-            for p in problems:
-                print(f"FAIL: {repo}: {p}")
-        else:
+            print(f"FAIL: {repo}: {p}")
+        for m in missing:
+            print(f"recommended: {repo}: {m}")
+        if not problems and not missing:
             print(f"ok: {repo}: its default branch requires a pull request and blocks force pushes and deletion, with no bypass for the App")
     return 1 if failed else 0
 

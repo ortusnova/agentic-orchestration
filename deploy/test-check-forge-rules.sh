@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015,SC2329 # ok and fail always succeed; cleanup runs on EXIT
 # Checks check-forge-rules.py against a fake GitHub API: a bounded default
-# branch passes; a missing rule, the App as a bypass actor, a ruleset on
-# another branch, and GitHub Free's refusal each fail, naming the
-# repository; it reads only the repositories a ceiling grants write on,
-# and sends only GET requests. No network.
+# branch is ok; a missing rule, a ruleset on another branch, and GitHub
+# Free's refusal are each reported as recommended, naming the repository,
+# and pass (rulesets are a recommendation, operator 2026-11-28); the App as
+# a bypass actor fails. It reads only the repositories a ceiling grants
+# write on, and sends only GET requests. No network.
 set -euo pipefail
 
 KIT=$(cd "$(dirname "$0")" && pwd)
@@ -79,17 +80,25 @@ for _ in $(seq 100); do [[ -s $tmp/port ]] && break; sleep 0.05; done
 rc=0
 out=$(FORGE_RULES_API="http://127.0.0.1:$(cat "$tmp/port")" FORGE_RULES_TOKEN=read-only-token \
   "$KIT/check-forge-rules.py" "$tmp/WORKFLOW.md") || rc=$?
-[[ $rc == 1 ]] && ok "it fails when a repository is not bounded" || fail "exit $rc"
+[[ $rc == 1 ]] && ok "it fails when a ruleset lets the App bypass it" || fail "exit $rc"
 grep -qx 'ok: o/good: .*' <<< "$out" && ok "a bounded default branch passes" || fail "o/good: $out"
-grep -q '^FAIL: o/norules: main: no active ruleset that require a pull request$' <<< "$out" \
-  && grep -q '^FAIL: o/norules: main: no active ruleset that block force pushes$' <<< "$out" \
-  && ok "each missing rule is named" || fail "o/norules: $out"
+grep -q '^recommended: o/norules: main: no active ruleset that require a pull request$' <<< "$out" \
+  && grep -q '^recommended: o/norules: main: no active ruleset that block force pushes$' <<< "$out" \
+  && ok "each missing rule is named as recommended" || fail "o/norules: $out"
 grep -q '^FAIL: o/bypass: main: a ruleset lists the App (ID 5857256) as a bypass actor$' <<< "$out" && ok "the App as a bypass actor fails" || fail "o/bypass: $out"
-grep -q '^FAIL: o/otherbranch: main: no active ruleset that require a pull request$' <<< "$out" && ok "a ruleset on another branch does not count" || fail "o/otherbranch: $out"
-grep -q '^FAIL: o/free: GitHub refuses rulesets on this private repository on its plan (HTTP 403: Upgrade to GitHub Pro' <<< "$out" \
-  && ok "GitHub Free's refusal fails, naming the repository" || fail "o/free: $out"
+grep -q '^recommended: o/otherbranch: main: no active ruleset that require a pull request$' <<< "$out" && ok "a ruleset on another branch does not count" || fail "o/otherbranch: $out"
+grep -q '^recommended: o/free: no ruleset: GitHub refuses rulesets on this private repository on its plan (HTTP 403: Upgrade to GitHub Pro' <<< "$out" \
+  && ! grep -q '^FAIL: o/\(free\|norules\|otherbranch\)' <<< "$out" \
+  && ok "GitHub Free's refusal is a recommendation, naming the repository, not a failure" || fail "o/free: $out"
 ! grep -q 'o/readonly' "$tmp/requests" && ok "a repository granted only read is not read" || fail "it read o/readonly"
 ! grep -q '^POST' "$tmp/requests" && ! grep -qv 'Bearer read-only-token$' "$tmp/requests" \
   && ok "it sends only GET requests, with the read-only token" || fail "requests: $(cat "$tmp/requests")"
 grep -q '^check-forge-rules: ## ' "$KIT/Makefile" && ok "make check-forge-rules runs it" || fail "no make target"
+
+# Without the bypass, the unbounded repositories alone pass the check.
+sed -i '/o\/bypass/,+1d' "$tmp/WORKFLOW.md"
+rc=0
+FORGE_RULES_API="http://127.0.0.1:$(cat "$tmp/port")" FORGE_RULES_TOKEN=read-only-token \
+  "$KIT/check-forge-rules.py" "$tmp/WORKFLOW.md" > /dev/null || rc=$?
+[[ $rc == 0 ]] && ok "repositories without the recommended ruleset pass" || fail "exit $rc without the bypass"
 exit $failed
